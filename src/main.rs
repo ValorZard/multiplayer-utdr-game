@@ -1,6 +1,6 @@
+use futures_util::{SinkExt, StreamExt};
 use include_dir::{Dir, include_dir};
 use kiss3d::prelude::*;
-use futures_util::{SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
 use ws_stream_wasm::{WsMessage, WsMeta};
 
