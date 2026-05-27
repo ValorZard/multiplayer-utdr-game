@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
+use include_dir::{Dir, include_dir};
 use kiss3d::prelude::*;
-use include_dir::{include_dir, Dir};
 
 static ASSET_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR\\assets");
 
@@ -10,14 +12,21 @@ async fn main() {
     let mut scene = SceneNode2d::empty();
 
     let image_buffer = ASSET_DIR.get_file("background_concept_2.png").unwrap();
-
-    let image_texture = image::load_from_memory(image_buffer.contents()).unwrap();
+    let mut texture_manager = TextureManager::new();
+    let image_texture =
+        texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
 
     let mut rect = scene
-        .add_rectangle(image_texture.width() as f32 * 0.5, image_texture.height() as f32 * 0.5)
+        .add_rectangle(
+            image_texture.size.0 as f32 * 0.5,
+            image_texture.size.1 as f32 * 0.5,
+        )
         .set_lines_width(10.0, false)
         .set_lines_color(Some(WHITE))
-        .set_texture_from_memory(image_buffer.contents(), "background_concept_2.png");
+        .set_texture(image_texture);
+    rect.read_uvs(&mut |uv_vec| {
+        println!("{:?}", uv_vec);
+    });
     let mut circ = scene
         .add_circle(50.0)
         .translate(Vec2::new(200.0, 0.0))
