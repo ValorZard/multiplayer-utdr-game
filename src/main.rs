@@ -1,6 +1,7 @@
-use futures_util::{SinkExt, StreamExt};
 use include_dir::{Dir, include_dir};
 use kiss3d::prelude::*;
+use futures_util::{SinkExt, StreamExt};
+#[cfg(target_arch = "wasm32")]
 use ws_stream_wasm::{WsMessage, WsMeta};
 
 static ASSET_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR\\assets");
@@ -26,21 +27,37 @@ async fn main() {
     let image_texture =
         texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
 
-    #[cfg(target_arch = "wasm32")]
-    {
-        let (ws, mut wsio) = WsMeta::connect("wss://echo.websocket.org", None)
-            .await
-            .expect("websocket connection should succeed");
+    cfg_select! {
+        target_arch = "wasm32" => {
+            let (ws, mut wsio) = WsMeta::connect("wss://echo.websocket.org", None)
+                .await
+                .expect("websocket connection should succeed");
 
-        wsio.send(WsMessage::Text("hello from kiss3d".to_string()))
-            .await
-            .expect("send should succeed");
+            wsio.send(WsMessage::Text("hello from kiss3d".to_string()))
+                .await
+                .expect("send should succeed");
 
-        if let Some(reply) = wsio.next().await {
-            log!("WebSocket reply: {:?}", reply);
+            if let Some(reply) = wsio.next().await {
+                log!("WebSocket reply: {:?}", reply);
+            }
+
+            ws.close().await.expect("close should succeed");
         }
+        _ => {
+            use tungstenite::{connect, Message};
+            let (mut socket, response) = connect("wss://echo.websocket.org").expect("Can't connect");
 
-        ws.close().await.expect("close should succeed");
+            println!("Connected to the server");
+            println!("Response HTTP code: {}", response.status());
+            println!("Response contains the following headers:");
+            for (header, _value) in response.headers() {
+                println!("* {header}");
+            }
+
+            socket.send(Message::Text("Hello WebSocket".into())).unwrap();
+            let msg = socket.read().expect("Error reading message");
+            println!("Received: {msg}");
+        }
     }
 
     let mut rect = scene

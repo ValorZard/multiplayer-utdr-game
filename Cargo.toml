@@ -7,5 +7,10 @@ edition = "2024"
 futures-util = "0.3"
 include_dir = "0.7.4"
 kiss3d = "0.42.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tungstenite = { version = "0.29.0", features = ["native-tls-vendored"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = "0.3.99"
 ws_stream_wasm = "0.7.5"
