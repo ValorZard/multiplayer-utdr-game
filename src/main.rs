@@ -1,9 +1,19 @@
-use std::sync::Arc;
-
+use futures_util::{SinkExt, StreamExt};
 use include_dir::{Dir, include_dir};
 use kiss3d::prelude::*;
+use ws_stream_wasm::{WsMessage, WsMeta};
 
 static ASSET_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR\\assets");
+
+#[macro_export]
+macro_rules! log {
+    ($($arg:tt)*) => {
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&format!($($arg)*).into());
+        #[cfg(not(target_arch = "wasm32"))]
+        println!($($arg)*);
+    };
+}
 
 #[kiss3d::main]
 async fn main() {
@@ -15,6 +25,23 @@ async fn main() {
     let mut texture_manager = TextureManager::new();
     let image_texture =
         texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let (ws, mut wsio) = WsMeta::connect("wss://echo.websocket.org", None)
+            .await
+            .expect("websocket connection should succeed");
+
+        wsio.send(WsMessage::Text("hello from kiss3d".to_string()))
+            .await
+            .expect("send should succeed");
+
+        if let Some(reply) = wsio.next().await {
+            log!("WebSocket reply: {:?}", reply);
+        }
+
+        ws.close().await.expect("close should succeed");
+    }
 
     let mut rect = scene
         .add_rectangle(
