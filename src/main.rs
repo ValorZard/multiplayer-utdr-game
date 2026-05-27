@@ -1,20 +1,13 @@
-use futures_util::{SinkExt, StreamExt};
 use include_dir::{Dir, include_dir};
 use kiss3d::prelude::*;
 #[cfg(target_arch = "wasm32")]
-use ws_stream_wasm::{WsMessage, WsMeta};
+use kiss3d::wasm_bindgen_futures::spawn_local;
+#[cfg(not(target_arch = "wasm32"))]
+use std::thread;
+
+mod connection;
 
 static ASSET_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR\\assets");
-
-#[macro_export]
-macro_rules! log {
-    ($($arg:tt)*) => {
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&format!($($arg)*).into());
-        #[cfg(not(target_arch = "wasm32"))]
-        println!($($arg)*);
-    };
-}
 
 #[kiss3d::main]
 async fn main() {
@@ -27,38 +20,14 @@ async fn main() {
     let image_texture =
         texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
 
-    cfg_select! {
-        target_arch = "wasm32" => {
-            let (ws, mut wsio) = WsMeta::connect("wss://echo.websocket.org", None)
-                .await
-                .expect("websocket connection should succeed");
+    #[cfg(target_arch = "wasm32")]
+    spawn_local(async {
+        crate::connection::connect_to_websocket_server_wasm().await;
+    });
 
-            wsio.send(WsMessage::Text("hello from kiss3d".to_string()))
-                .await
-                .expect("send should succeed");
-
-            if let Some(reply) = wsio.next().await {
-                log!("WebSocket reply: {:?}", reply);
-            }
-
-            ws.close().await.expect("close should succeed");
-        }
-        _ => {
-            use tungstenite::{connect, Message};
-            let (mut socket, response) = connect("wss://echo.websocket.org").expect("Can't connect");
-
-            println!("Connected to the server");
-            println!("Response HTTP code: {}", response.status());
-            println!("Response contains the following headers:");
-            for (header, _value) in response.headers() {
-                println!("* {header}");
-            }
-
-            socket.send(Message::Text("Hello WebSocket".into())).unwrap();
-            let msg = socket.read().expect("Error reading message");
-            println!("Received: {msg}");
-        }
-    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let connection_thread_handle =
+        thread::spawn(crate::connection::connect_to_websocket_server_native);
 
     let mut rect = scene
         .add_rectangle(
@@ -85,4 +54,7 @@ async fn main() {
         rect.append_rotation(rot_rect);
         circ.append_rotation(rot_circ);
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = connection_thread_handle.join();
 }

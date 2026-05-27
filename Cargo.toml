@@ -12,5 +12,5 @@ kiss3d = "0.42.0"
 tungstenite = { version = "0.29.0", features = ["native-tls-vendored"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = "0.3.99"
+web-sys = "0.3"
 ws_stream_wasm = "0.7.5"
