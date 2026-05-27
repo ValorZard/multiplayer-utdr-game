@@ -1,7 +1,10 @@
+use std::time::Duration;
 #[cfg(target_arch = "wasm32")]
 use futures_util::{SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
 use ws_stream_wasm::{WsMessage, WsMeta};
+#[cfg(target_arch = "wasm32")]
+use gloo_timers::future::TimeoutFuture;
 
 const SERVER_ADDRESS: &str = "wss://echo.websocket.org";
 
@@ -21,12 +24,17 @@ pub async fn connect_to_websocket_server_wasm() {
         .await
         .expect("websocket connection should succeed");
 
-    wsio.send(WsMessage::Text("hello from kiss3d".to_string()))
-        .await
-        .expect("send should succeed");
+    let mut i = 0;
+    loop {
+        wsio.send(WsMessage::Text(format!("Hello WebSocket {i}").to_string()))
+            .await
+            .expect("send should succeed");
 
-    if let Some(reply) = wsio.next().await {
-        log!("WebSocket reply: {:?}", reply);
+        if let Some(reply) = wsio.next().await {
+            log!("WebSocket reply: {:?}", reply);
+        }
+        i += 1;
+        TimeoutFuture::new(1_000).await;
     }
 
     ws.close().await.expect("close should succeed");
@@ -44,9 +52,15 @@ pub fn connect_to_websocket_server_native() {
         println!("* {header}");
     }
 
-    socket
-        .send(Message::Text("Hello WebSocket".into()))
-        .unwrap();
-    let msg = socket.read().expect("Error reading message");
-    println!("Received: {msg}");
+    let mut i = 0;
+
+    loop {
+        socket
+            .send(Message::Text(format!("Hello WebSocket {i}").into()))
+            .unwrap();
+        let msg = socket.read().expect("Error reading message");
+        println!("Received: {msg}");
+        i += 1;
+        std::thread::sleep(Duration::from_millis(1000));
+    }
 }
