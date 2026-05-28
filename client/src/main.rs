@@ -51,6 +51,23 @@ async fn main() {
     let rot_circ = -0.014;
 
     while window.render_2d(&mut scene, &mut camera).await {
+        for event in window.events().iter() {
+            match event.value {
+                WindowEvent::Key(Key::Space, Action::Press, _) => {
+                    log!("Space pressed");
+                }
+                WindowEvent::MouseButton(MouseButton::Button1, Action::Press, _) => {
+                    log!("Left click");
+                }
+                WindowEvent::CursorPos(x, y, _) => {
+                    log!("Mouse moved: {x}, {y}");
+                }
+                WindowEvent::Char(c) => {
+                    log!("Typed char: {c}");
+                }
+                _ => {}
+            }
+        }
         rect.append_rotation(rot_rect);
         circ.append_rotation(rot_circ);
     }
