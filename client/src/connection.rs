@@ -1,10 +1,10 @@
-use std::time::Duration;
 #[cfg(target_arch = "wasm32")]
 use futures_util::{SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
-use ws_stream_wasm::{WsMessage, WsMeta};
-#[cfg(target_arch = "wasm32")]
 use gloo_timers::future::TimeoutFuture;
+use std::time::Duration;
+#[cfg(target_arch = "wasm32")]
+use ws_stream_wasm::{WsMessage, WsMeta};
 
 const SERVER_ADDRESS: &str = "ws://127.0.0.1:12345/";
 
@@ -26,9 +26,11 @@ pub async fn connect_to_websocket_server_wasm() {
 
     let mut i = 0;
     loop {
-        wsio.send(WsMessage::Text(format!("Hello WebSocket WASM {i}").to_string()))
-            .await
-            .expect("send should succeed");
+        wsio.send(WsMessage::Text(
+            format!("Hello WebSocket WASM {i}").to_string(),
+        ))
+        .await
+        .expect("send should succeed");
 
         if let Some(reply) = wsio.next().await {
             log!("WebSocket reply: {:?}", reply);
