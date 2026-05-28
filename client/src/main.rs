@@ -21,8 +21,10 @@ async fn main() {
         texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
 
     #[cfg(target_arch = "wasm32")]
-    spawn_local(async {
-        crate::connection::connect_to_websocket_server_wasm().await;
+    wasm_safe_thread::spawn(|| {
+        spawn_local(async {
+            crate::connection::connect_to_websocket_server_wasm().await;
+        })
     });
 
     #[cfg(not(target_arch = "wasm32"))]
