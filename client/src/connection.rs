@@ -6,7 +6,7 @@ use ws_stream_wasm::{WsMessage, WsMeta};
 #[cfg(target_arch = "wasm32")]
 use gloo_timers::future::TimeoutFuture;
 
-const SERVER_ADDRESS: &str = "wss://echo.websocket.org";
+const SERVER_ADDRESS: &str = "ws://127.0.0.1:12345/";
 
 #[macro_export]
 macro_rules! log {
@@ -26,7 +26,7 @@ pub async fn connect_to_websocket_server_wasm() {
 
     let mut i = 0;
     loop {
-        wsio.send(WsMessage::Text(format!("Hello WebSocket {i}").to_string()))
+        wsio.send(WsMessage::Text(format!("Hello WebSocket WASM {i}").to_string()))
             .await
             .expect("send should succeed");
 
@@ -56,7 +56,7 @@ pub fn connect_to_websocket_server_native() {
 
     loop {
         socket
-            .send(Message::Text(format!("Hello WebSocket {i}").into()))
+            .send(Message::Text(format!("Hello WebSocket Native {i}").into()))
             .unwrap();
         let msg = socket.read().expect("Error reading message");
         println!("Received: {msg}");
