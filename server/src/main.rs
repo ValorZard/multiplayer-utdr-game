@@ -31,11 +31,28 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
     let (outgoing, incoming) = ws_stream.split();
 
     let broadcast_incoming = incoming.try_for_each(|msg| {
-        println!(
-            "Received a message from {}: {}",
-            addr,
-            msg.to_text().unwrap()
-        );
+        match &msg {
+            Message::Binary(bytes) => {
+                match rkyv::from_bytes::<rpc::Message, rkyv::rancor::Error>(bytes.as_ref()) {
+                    Ok(decoded) => {
+                        println!("Received a binary message from {}: {:?}", addr, decoded)
+                    }
+                    Err(err) => {
+                        println!("Failed to decode binary message from {}: {:?}", addr, err)
+                    }
+                }
+            }
+            Message::Text(text) => {
+                println!("Received a text message from {}: {}", addr, text);
+            }
+            other => {
+                println!(
+                    "Received a websocket control frame from {}: {:?}",
+                    addr, other
+                );
+            }
+        }
+
         let peers = peer_map.lock().unwrap();
 
         // We want to broadcast the message to everyone except ourselves.

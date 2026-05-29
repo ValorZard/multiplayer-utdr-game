@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+rpc = {path = "../rpc"}
 futures-channel = "0.3.32"
 futures-util = "0.3.32"
 tokio = {version = "1.52.3", features = ["full"] }
 tokio-tungstenite = { version = "0.29.0", features = ["native-tls-vendored"] }
+rkyv = {workspace = true}

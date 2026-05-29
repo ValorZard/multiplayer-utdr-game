@@ -8,6 +8,12 @@ use ws_stream_wasm::{WsMessage, WsMeta};
 
 const SERVER_ADDRESS: &str = "ws://127.0.0.1:12345/";
 
+fn decode_message(bytes: &[u8]) -> Result<rpc::Message, rkyv::rancor::Error> {
+    let mut aligned: rkyv::util::AlignedVec = rkyv::util::AlignedVec::new();
+    aligned.extend_from_slice(bytes);
+    rkyv::from_bytes::<rpc::Message, rkyv::rancor::Error>(aligned.as_ref())
+}
+
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => {
@@ -26,14 +32,25 @@ pub async fn connect_to_websocket_server_wasm() {
 
     let mut i = 0;
     loop {
-        wsio.send(WsMessage::Text(
-            format!("Hello WebSocket WASM {i}").to_string(),
-        ))
-        .await
-        .expect("send should succeed");
+        let message_to_send = rpc::Message::Text(format!("Hello WebSocket WASM {i}").to_string());
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
+        wsio.send(WsMessage::Binary(bytes.to_vec()))
+            .await
+            .expect("send should succeed");
 
         if let Some(reply) = wsio.next().await {
-            log!("WebSocket reply: {:?}", reply);
+            match reply {
+                WsMessage::Text(msg) => {
+                    log!("Received text: {:?}", msg);
+                }
+                WsMessage::Binary(msg) => {
+                    let deserialized = decode_message(msg.as_ref()).unwrap();
+                    log!("Received binary: {:?}", deserialized);
+                }
+                _ => {
+                    log!("Unexpected message: {:?}", reply);
+                }
+            }
         }
         i += 1;
         TimeoutFuture::new(1_000).await;
@@ -57,11 +74,22 @@ pub fn connect_to_websocket_server_native() {
     let mut i = 0;
 
     loop {
-        socket
-            .send(Message::Text(format!("Hello WebSocket Native {i}").into()))
-            .unwrap();
+        let message_to_send = rpc::Message::Text(format!("Hello WebSocket WASM {i}").to_string());
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
+        socket.send(Message::Binary(bytes.to_vec().into())).unwrap();
         let msg = socket.read().expect("Error reading message");
-        println!("Received: {msg}");
+        match msg {
+            Message::Text(msg) => {
+                println!("Received text: {:?}", msg);
+            }
+            Message::Binary(msg) => {
+                let deserialized = decode_message(msg.as_ref()).unwrap();
+                println!("Received binary: {:?}", deserialized);
+            }
+            _ => {
+                println!("Unexpected message: {:?}", msg);
+            }
+        }
         i += 1;
         std::thread::sleep(Duration::from_millis(1000));
     }
