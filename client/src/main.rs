@@ -1,7 +1,7 @@
 use include_dir::{Dir, include_dir};
-use kiss3d::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
+use kiss3d::{egui, prelude::*};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
@@ -43,12 +43,15 @@ async fn main() {
     let mut circ = scene
         .add_circle(50.0)
         .translate(Vec2::new(200.0, 0.0))
-        .set_color(BLUE)
-        .set_lines_width(5.0, false)
-        .set_lines_color(Some(MAGENTA));
+        .set_color(BLUE);
 
     let rot_rect = 0.014;
     let rot_circ = -0.014;
+
+    // UI state
+    let mut rotation_speed = 0.014;
+    let mut opacity = 1.0;
+    let mut circle_color = [1.0, 0.0, 0.0];
 
     while window.render_2d(&mut scene, &mut camera).await {
         for event in window.events().iter() {
@@ -70,6 +73,38 @@ async fn main() {
         }
         rect.append_rotation(rot_rect);
         circ.append_rotation(rot_circ);
+
+        // set circle color
+        circ.set_color(Color::new(
+            circle_color[0],
+            circle_color[1],
+            circle_color[2],
+            opacity,
+        ));
+
+        // Draw UI
+        window.draw_ui(|ctx| {
+            egui::Window::new("Kiss3d egui Example")
+                .default_width(300.0)
+                .show(ctx, |ui| {
+                    // Rotation control
+                    ui.label("Rotation Speed:");
+                    ui.add(egui::Slider::new(&mut rotation_speed, 0.0..=0.1));
+
+                    ui.separator();
+
+                    // Opacity control
+                    ui.label("Opacity:");
+                    ui.add(egui::Slider::new(&mut opacity, 0.0..=1.0));
+
+                    // Color picker
+                    ui.label("Cube Color:");
+
+                    ui.horizontal(|ui| {
+                        ui.color_edit_button_rgb(&mut circle_color);
+                    });
+                });
+        });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
