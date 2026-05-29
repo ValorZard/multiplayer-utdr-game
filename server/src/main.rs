@@ -1,25 +1,5 @@
-//! A chat server that broadcasts a message to all connections.
-//!
-//! This is a simple line-based server which accepts WebSocket connections,
-//! reads lines from those connections, and broadcasts the lines to all other
-//! connected clients.
-//!
-//! You can test this out by running:
-//!
-//!     cargo run --example server 127.0.0.1:12345
-//!
-//! And then in another window run:
-//!
-//!     cargo run --example client ws://127.0.0.1:12345/
-//!
-//! You can run the second command in multiple windows and then chat between the
-//! two, seeing the messages from the other client as they're received. For all
-//! connected clients they'll all join the same room and see everyone else's
-//! messages.
-
 use std::{
     collections::HashMap,
-    env,
     io::Error as IoError,
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -30,6 +10,8 @@ use futures_util::{StreamExt, future, pin_mut, stream::TryStreamExt};
 
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::protocol::Message;
+
+const SERVER_HOSTING_ADDRESS: &str = "0.0.0.0:12345";
 
 type Tx = UnboundedSender<Message>;
 type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
@@ -80,16 +62,12 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
 
 #[tokio::main]
 async fn main() -> Result<(), IoError> {
-    let addr = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:12345".to_string());
-
     let state = PeerMap::new(Mutex::new(HashMap::new()));
 
     // Create the event loop and TCP listener we'll accept connections on.
-    let try_socket = TcpListener::bind(&addr).await;
+    let try_socket = TcpListener::bind(SERVER_HOSTING_ADDRESS).await;
     let listener = try_socket.expect("Failed to bind");
-    println!("Listening on: {}", addr);
+    println!("Listening on: {}", SERVER_HOSTING_ADDRESS);
 
     // Let's spawn the handling of each connection in a separate task.
     while let Ok((stream, addr)) = listener.accept().await {
