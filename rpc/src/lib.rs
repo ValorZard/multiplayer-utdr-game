@@ -10,4 +10,7 @@ use rkyv::{Archive, Deserialize, Serialize};
 )]
 pub enum Message {
     Text(String),
+    Rock,
+    Paper,
+    Scissors,
 }
