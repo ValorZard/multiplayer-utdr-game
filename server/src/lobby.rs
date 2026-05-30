@@ -10,20 +10,23 @@ pub struct Lobby {
 pub enum LobbyState {
     Empty,
     Waiting,
-    Full
+    Full,
 }
 
 #[derive(Debug)]
 pub enum LobbyError {
     SameAddr,
     AlreadyFull,
-    NeverExisted
+    NeverExisted,
 }
 
 impl std::fmt::Display for LobbyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LobbyError::SameAddr => write!(f, "Error! We can't have two players who come from the same addr"),
+            LobbyError::SameAddr => write!(
+                f,
+                "Error! We can't have two players who come from the same addr"
+            ),
             LobbyError::AlreadyFull => write!(f, "Error! This lobby is already full!"),
             LobbyError::NeverExisted => write!(f, "Error! This player never existed here!"),
         }
@@ -73,21 +76,25 @@ impl Lobby {
     }
 
     pub fn remove_player(&mut self, leaving_player: SocketAddr) -> Result<LobbyState, LobbyError> {
-        if let Some(addr) = self.left_side && addr == leaving_player {
+        if let Some(addr) = self.left_side
+            && addr == leaving_player
+        {
             let _ = self.left_side.take();
             if self.right_side.is_some() {
                 return Ok(LobbyState::Waiting);
             } else {
-                 return Ok(LobbyState::Empty);
+                return Ok(LobbyState::Empty);
             }
-        } else if let Some(addr) = self.right_side && addr == leaving_player {
+        } else if let Some(addr) = self.right_side
+            && addr == leaving_player
+        {
             let _ = self.right_side.take();
             if self.left_side.is_some() {
                 return Ok(LobbyState::Waiting);
             } else {
                 return Ok(LobbyState::Empty);
             }
-        } 
+        }
         Err(LobbyError::NeverExisted)
     }
 
