@@ -3,7 +3,7 @@ use std::{collections::HashMap, net::SocketAddr};
 use rpc::RpcMessage;
 use tokio::{
     sync::{
-        mpsc::{self, UnboundedSender},
+        mpsc::{self, UnboundedReceiver, UnboundedSender},
         oneshot,
     },
     task,
@@ -11,27 +11,35 @@ use tokio::{
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
 
-use crate::lobby::{LobbyData, LobbyError, LobbyMessage, LobbyState};
+use crate::lobby::{LobbyData, LobbyError, LobbyState};
 
 type LobbyId = Uuid;
 
 type UserSender = UnboundedSender<WsMessage>;
+type LobbyDBSender = UnboundedSender<LobbyDBMessage>;
+type LobbyDBReceiver = UnboundedReceiver<LobbyDBMessage>;
+
+type LobbyRPCSender = mpsc::UnboundedSender<UserRPCMessage>;
+type LobbyRPCReceiver = mpsc::UnboundedReceiver<UserRPCMessage>;
 
 struct LobbySession {
     lobby_data: LobbyData,
     lobby_actor: task::JoinHandle<()>,
     // use this to send messages to the actor
-    lobby_rpc_sender: mpsc::UnboundedSender<UserRPCMessage>,
+    lobby_rpc_sender: LobbyRPCSender,
 }
 
 async fn run_lobby_actor(
-    mut lobby_rpc_receiver: mpsc::UnboundedReceiver<UserRPCMessage>,
-    lobby_db_sender: mpsc::UnboundedSender<LobbyDBMessage>,
+    lobby_id: LobbyId,
+    mut lobby_rpc_receiver: LobbyRPCReceiver,
+    lobby_db_sender: LobbyDBSender,
 ) {
     while let Some(rpc_message) = lobby_rpc_receiver.recv().await {
         println!("{rpc_message:?}");
-        if let Err(e) = lobby_db_sender.send(LobbyDBMessage::LobbyMessage(LobbyMessage::Heartbeat))
-        {
+        if let Err(e) = lobby_db_sender.send(LobbyDBMessage::LobbyMessage(
+            lobby_id,
+            LobbyMessage::Heartbeat,
+        )) {
             println!("Failed to send lobby message to DB actor: {e}");
             break;
         }
@@ -40,11 +48,16 @@ async fn run_lobby_actor(
 
 impl LobbySession {
     pub fn new(
+        lobby_id: LobbyId,
         left_side: SocketAddr,
         lobby_db_sender: mpsc::UnboundedSender<LobbyDBMessage>,
     ) -> Self {
         let (lobby_rpc_sender, lobby_rpc_receiver) = mpsc::unbounded_channel();
-        let lobby_actor = tokio::spawn(run_lobby_actor(lobby_rpc_receiver, lobby_db_sender));
+        let lobby_actor = tokio::spawn(run_lobby_actor(
+            lobby_id,
+            lobby_rpc_receiver,
+            lobby_db_sender,
+        ));
         Self {
             lobby_data: LobbyData::new(left_side),
             lobby_actor,
@@ -78,11 +91,11 @@ struct LobbyDB {
     // lobbys that are waiting on another player to continue
     waiting_lobby_list: HashMap<LobbyId, LobbySession>,
     // sender we clone to give to lobbies when they are created
-    lobby_db_sender: mpsc::UnboundedSender<LobbyDBMessage>,
+    lobby_db_sender: LobbyDBSender,
 }
 
 impl LobbyDB {
-    pub fn new(lobby_db_sender: mpsc::UnboundedSender<LobbyDBMessage>) -> Self {
+    pub fn new(lobby_db_sender: LobbyDBSender) -> Self {
         Self {
             user_list: HashMap::new(),
             running_lobby_list: HashMap::new(),
@@ -111,7 +124,7 @@ impl LobbyDB {
                 } else {
                     // if there is no waiting lobby, then create a new one
                     let lobby_id = Uuid::new_v4();
-                    let new_lobby = LobbySession::new(addr, self.lobby_db_sender.clone());
+                    let new_lobby = LobbySession::new(lobby_id, addr, self.lobby_db_sender.clone());
                     let lobby_state = new_lobby.get_current_state();
                     println!("Lobby {lobby_id} should now be waiting: {lobby_state:?}");
                     assert_eq!(lobby_state, LobbyState::Waiting);
@@ -165,7 +178,7 @@ impl LobbyDB {
     }
 
     pub fn send_message_to_lobby_users(&self, lobby_message: LobbyMessage) {
-        println!("Sending message to lobby {lobby_message:?}");
+        println!("Sending message to lobby users {lobby_message:?}");
         // send message
         let rpc_message = RpcMessage::Text(format!("{lobby_message:?}"));
         // broadcast message to everyone
@@ -184,10 +197,17 @@ pub struct UserRPCMessage {
     pub message: RpcMessage,
     pub send_addr: SocketAddr,
 }
+
+#[derive(Debug)]
+pub enum LobbyMessage {
+    Heartbeat,
+    Text(String),
+}
+
 pub enum LobbyDBMessage {
     NewUser(SocketAddr, oneshot::Sender<LobbyId>, UserSender),
     UserRPCMessage(UserRPCMessage),
-    LobbyMessage(LobbyMessage),
+    LobbyMessage(LobbyId, LobbyMessage),
     RemoveUser(SocketAddr),
 }
 
@@ -211,8 +231,8 @@ pub async fn run_lobby_db_actor(
             LobbyDBMessage::RemoveUser(socket_addr) => {
                 lobby_db.remove_user(socket_addr);
             }
-            LobbyDBMessage::LobbyMessage(lobby_message) => {
-                println!("Lobby DB received message from Lobby");
+            LobbyDBMessage::LobbyMessage(lobby_id, lobby_message) => {
+                println!("Lobby DB received message from Lobby {lobby_id}");
                 lobby_db.send_message_to_lobby_users(lobby_message);
             }
         }

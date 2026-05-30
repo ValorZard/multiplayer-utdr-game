@@ -108,9 +108,3 @@ impl LobbyData {
         }
     }
 }
-
-#[derive(Debug)]
-pub enum LobbyMessage {
-    Heartbeat,
-    Text(String),
-}
