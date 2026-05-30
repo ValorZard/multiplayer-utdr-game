@@ -1,8 +1,8 @@
 use std::{cell::OnceCell, io::Error as IoError, net::SocketAddr};
 
 pub struct LobbyData {
-    left_side: Option<SocketAddr>,
-    right_side: Option<SocketAddr>,
+    pub left_side: Option<SocketAddr>,
+    pub right_side: Option<SocketAddr>,
     winner: Option<SocketAddr>,
 }
 

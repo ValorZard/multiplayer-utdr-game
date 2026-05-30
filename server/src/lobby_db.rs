@@ -73,6 +73,14 @@ impl LobbySession {
         self.lobby_data.remove_player(leaving_player)
     }
 
+    pub fn get_left(&self) -> Option<SocketAddr> {
+        self.lobby_data.left_side
+    }
+
+    pub fn get_right(&self) -> Option<SocketAddr> {
+        self.lobby_data.right_side
+    }
+
     pub fn get_current_state(&self) -> LobbyState {
         self.lobby_data.get_current_state()
     }
@@ -177,17 +185,46 @@ impl LobbyDB {
         }
     }
 
-    pub fn send_message_to_lobby_users(&self, lobby_message: LobbyMessage) {
+    pub fn send_message_to_lobby_users(&self, lobby_id: LobbyId, lobby_message: LobbyMessage) {
         println!("Sending message to lobby users {lobby_message:?}");
         // send message
         let rpc_message = RpcMessage::Text(format!("{lobby_message:?}"));
         // broadcast message to everyone
         let encoded = rpc::encode_message(&rpc_message).unwrap().to_vec();
-        for (_, user_data) in &self.user_list {
-            // if this returns an error, that means that the connection has dropped, and we don't need to do anything
-            let _ = user_data
-                .sender
-                .send(WsMessage::Binary(encoded.clone().into()));
+        if let Some(lobby) = self.running_lobby_list.get(&lobby_id) {
+            if let Some(addr) = lobby.get_left() {
+                let _ = self
+                    .user_list
+                    .get(&addr)
+                    .unwrap()
+                    .sender
+                    .send(WsMessage::Binary(encoded.clone().into()));
+            }
+            if let Some(addr) = lobby.get_right() {
+                let _ = self
+                    .user_list
+                    .get(&addr)
+                    .unwrap()
+                    .sender
+                    .send(WsMessage::Binary(encoded.clone().into()));
+            }
+        } else if let Some(lobby) = self.waiting_lobby_list.get(&lobby_id) {
+            if let Some(addr) = lobby.get_left() {
+                let _ = self
+                    .user_list
+                    .get(&addr)
+                    .unwrap()
+                    .sender
+                    .send(WsMessage::Binary(encoded.clone().into()));
+            }
+            if let Some(addr) = lobby.get_right() {
+                let _ = self
+                    .user_list
+                    .get(&addr)
+                    .unwrap()
+                    .sender
+                    .send(WsMessage::Binary(encoded.clone().into()));
+            }
         }
     }
 }
@@ -212,8 +249,8 @@ pub enum LobbyDBMessage {
 }
 
 pub async fn run_lobby_db_actor(
-    lobby_db_sender: mpsc::UnboundedSender<LobbyDBMessage>,
-    mut lobby_db_receiver: mpsc::UnboundedReceiver<LobbyDBMessage>,
+    lobby_db_sender: LobbyDBSender,
+    mut lobby_db_receiver: LobbyDBReceiver,
 ) {
     let mut lobby_db = LobbyDB::new(lobby_db_sender);
     while let Some(message) = lobby_db_receiver.recv().await {
@@ -233,7 +270,7 @@ pub async fn run_lobby_db_actor(
             }
             LobbyDBMessage::LobbyMessage(lobby_id, lobby_message) => {
                 println!("Lobby DB received message from Lobby {lobby_id}");
-                lobby_db.send_message_to_lobby_users(lobby_message);
+                lobby_db.send_message_to_lobby_users(lobby_id, lobby_message);
             }
         }
     }
