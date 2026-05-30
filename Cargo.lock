@@ -435,7 +435,9 @@ dependencies = [
  "kiss3d",
  "rkyv",
  "rpc",
- "tungstenite",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite",
  "web-sys",
  "ws_stream_wasm",
 ]
