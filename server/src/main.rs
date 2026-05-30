@@ -20,7 +20,7 @@ use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 
 use uuid::Uuid;
 
-use crate::lobby::Lobby;
+use crate::lobby::{Lobby, LobbyState};
 
 const SERVER_HOSTING_ADDRESS: &str = "0.0.0.0:12345";
 
@@ -62,13 +62,20 @@ impl LobbyDB {
                     && let Some(mut lobby) = self.waiting_lobby_list.remove(&lobby_id)
                 {
                     lobby
-                        .start_game(addr)
+                        .insert_player(addr)
                         .expect("Should be successful in starting game");
+                    let lobby_state = lobby.get_current_state();
+                    println!("Lobby {lobby_id} should be now running: {lobby_state:?}");
+                    assert_eq!(lobby_state, LobbyState::Full);
                     self.running_lobby_list.insert(lobby_id, lobby);
                     lobby_id
                 } else {
                     // if there is no waiting lobby, then create a new one
                     let lobby_id = Uuid::new_v4();
+                    let new_lobby = Lobby::new(addr);
+                    let lobby_state = new_lobby.get_current_state();
+                    println!("Lobby {lobby_id} should now be waiting: {lobby_state:?}");
+                    assert_eq!(lobby_state, LobbyState::Waiting);
                     self.waiting_lobby_list.insert(lobby_id, Lobby::new(addr));
                     lobby_id
                 };
@@ -76,6 +83,29 @@ impl LobbyDB {
                 UserData { lobby_id, sender }
             })
             .lobby_id
+    }
+
+    pub fn remove_user(&mut self, addr: SocketAddr) {
+        if let Some(user_data) = self.user_list.get(&addr) {
+            if self.running_lobby_list.contains_key(&user_data.lobby_id) {
+                if let Some(mut lobby) = self.running_lobby_list.remove(&user_data.lobby_id) {
+                    let state = lobby.remove_player(addr).unwrap();
+                    // this should NEVER be empty, if you remove one player from a running lobby, this should always be half full
+                    assert_eq!(LobbyState::Waiting, state);
+                    // Because this lobby is now waiting for a new player, put this in the waiting queue
+                    self.waiting_lobby_list.insert(user_data.lobby_id, lobby);
+                    println!("Removed player {addr} from running lobby {}, moving lobby to waiting", user_data.lobby_id);
+                }
+            } else if self.waiting_lobby_list.contains_key(&user_data.lobby_id) {
+                // because we're removing the lobby from the waiting lobby, this will automatically destroy the lobby
+                if let Some(mut lobby) = self.waiting_lobby_list.remove(&user_data.lobby_id) {
+                    let state = lobby.remove_player(addr).unwrap();
+                    // this should ALWAYS be empty, if you remove one player from a waiting lobby, there should be no one in there
+                    assert_eq!(LobbyState::Empty, state);
+                    println!("Removed player {addr} from waiting lobby {}, lobby should now be deleted", user_data.lobby_id);
+                }
+            } 
+        }
     }
 }
 
@@ -85,6 +115,7 @@ enum LobbyDBMessage {
         message: RpcMessage,
         send_addr: SocketAddr,
     },
+    RemoveUser(SocketAddr),
 }
 
 async fn run_lobby_db_actor(mut lobby_receiver: mpsc::UnboundedReceiver<LobbyDBMessage>) {
@@ -108,6 +139,9 @@ async fn run_lobby_db_actor(mut lobby_receiver: mpsc::UnboundedReceiver<LobbyDBM
                             .expect("Message should be sent");
                     }
                 }
+            }
+            LobbyDBMessage::RemoveUser(socket_addr) => {
+                lobby_db.remove_user(socket_addr);
             }
         }
     }
@@ -176,6 +210,7 @@ async fn handle_connection(
     future::select(broadcast_incoming, receive_from_others).await;
 
     println!("{} disconnected", &addr);
+    lobby_sender.send(LobbyDBMessage::RemoveUser(addr)).expect("This message is really important since it delete the user");
 }
 
 #[tokio::main]
