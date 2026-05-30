@@ -33,7 +33,7 @@ mod lobby_db;
 async fn handle_connection(
     raw_stream: TcpStream,
     addr: SocketAddr,
-    lobby_sender: mpsc::UnboundedSender<LobbyDBMessage>,
+    lobby_db_sender: mpsc::UnboundedSender<LobbyDBMessage>,
 ) {
     println!("Incoming TCP connection from: {}", addr);
 
@@ -47,7 +47,7 @@ async fn handle_connection(
 
     // assign this peer to a lobby
     let (id_sender, id_receiver) = oneshot::channel();
-    lobby_sender
+    lobby_db_sender
         .send(LobbyDBMessage::NewUser(addr, id_sender, user_sender))
         .expect("initial lobby message should be sent");
     // get our lobby id
@@ -63,7 +63,7 @@ async fn handle_connection(
                 Ok(decoded) => {
                     println!("Received a binary message from {}: {:?}", addr, decoded);
                     // We want to broadcast the message to everyone except ourselves.
-                    let _ = lobby_sender.send(LobbyDBMessage::RPCMessage {
+                    let _ = lobby_db_sender.send(LobbyDBMessage::RPCMessage {
                         message: decoded,
                         send_addr: addr,
                     });
@@ -95,7 +95,7 @@ async fn handle_connection(
     future::select(broadcast_incoming, receive_from_others).await;
 
     println!("{} disconnected", &addr);
-    lobby_sender
+    lobby_db_sender
         .send(LobbyDBMessage::RemoveUser(addr))
         .expect("This message is really important since it delete the user");
 }
@@ -108,12 +108,12 @@ async fn main() -> Result<(), IoError> {
     println!("Listening on: {}", SERVER_HOSTING_ADDRESS);
 
     // spawn lobby actor
-    let (lobby_sender, lobby_receiver) = mpsc::unbounded_channel();
-    tokio::spawn(run_lobby_db_actor(lobby_receiver));
+    let (lobby_db_sender, lobby_db_receiver) = mpsc::unbounded_channel();
+    tokio::spawn(run_lobby_db_actor(lobby_db_receiver));
 
     // Let's spawn the handling of each connection in a separate task.
     while let Ok((stream, addr)) = listener.accept().await {
-        tokio::spawn(handle_connection(stream, addr, lobby_sender.clone()));
+        tokio::spawn(handle_connection(stream, addr, lobby_db_sender.clone()));
     }
 
     Ok(())

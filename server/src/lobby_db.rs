@@ -109,9 +109,9 @@ pub enum LobbyDBMessage {
     RemoveUser(SocketAddr),
 }
 
-pub async fn run_lobby_db_actor(mut lobby_receiver: mpsc::UnboundedReceiver<LobbyDBMessage>) {
+pub async fn run_lobby_db_actor(mut lobby_db_receiver: mpsc::UnboundedReceiver<LobbyDBMessage>) {
     let mut lobby_db = LobbyDB::new();
-    while let Some(message) = lobby_receiver.recv().await {
+    while let Some(message) = lobby_db_receiver.recv().await {
         match message {
             LobbyDBMessage::NewUser(socket_addr, lobby_id_sender, user_sender) => {
                 let lobby_id = lobby_db.insert_user(socket_addr, user_sender);
