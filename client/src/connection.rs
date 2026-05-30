@@ -8,13 +8,6 @@ use ws_stream_wasm::{WsMessage, WsMeta};
 
 const SERVER_ADDRESS: &str = "ws://127.0.0.1:12345/";
 
-// messages sent from a websocket stream might not be aligned to what rkyv wants
-fn decode_message(bytes: &[u8]) -> Result<rpc::Message, rkyv::rancor::Error> {
-    let mut aligned: rkyv::util::AlignedVec = rkyv::util::AlignedVec::new();
-    aligned.extend_from_slice(bytes);
-    rkyv::from_bytes::<rpc::Message, rkyv::rancor::Error>(aligned.as_ref())
-}
-
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => {
@@ -84,7 +77,7 @@ pub fn connect_to_websocket_server_native() {
                 println!("Received text: {:?}", msg);
             }
             Message::Binary(msg) => {
-                let deserialized = decode_message(msg.as_ref()).unwrap();
+                let deserialized = rpc::decode_message(msg.as_ref()).unwrap();
                 println!("Received binary: {:?}", deserialized);
             }
             _ => {

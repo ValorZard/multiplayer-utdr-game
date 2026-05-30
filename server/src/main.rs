@@ -119,16 +119,14 @@ async fn handle_connection(
 
     let broadcast_incoming = incoming.try_for_each(|msg| {
         match &msg {
-            Message::Binary(bytes) => {
-                match rkyv::from_bytes::<rpc::Message, rkyv::rancor::Error>(bytes.as_ref()) {
-                    Ok(decoded) => {
-                        println!("Received a binary message from {}: {:?}", addr, decoded)
-                    }
-                    Err(err) => {
-                        println!("Failed to decode binary message from {}: {:?}", addr, err)
-                    }
+            Message::Binary(bytes) => match rpc::decode_message(bytes) {
+                Ok(decoded) => {
+                    println!("Received a binary message from {}: {:?}", addr, decoded)
                 }
-            }
+                Err(err) => {
+                    println!("Failed to decode binary message from {}: {:?}", addr, err)
+                }
+            },
             Message::Text(text) => {
                 println!("Received a text message from {}: {}", addr, text);
             }
