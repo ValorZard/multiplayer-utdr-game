@@ -20,8 +20,6 @@ type UserSender = UnboundedSender<WsMessage>;
 struct LobbySession {
     lobby_data: LobbyData,
     lobby_actor: task::JoinHandle<()>,
-    // poll this for messages from the lobby
-    lobby_message_receiver: mpsc::UnboundedReceiver<LobbyDBMessage>,
     // use this to send messages to the actor
     lobby_rpc_sender: mpsc::UnboundedSender<UserRPCMessage>,
 }
@@ -32,19 +30,24 @@ async fn run_lobby_actor(
 ) {
     while let Some(rpc_message) = lobby_rpc_receiver.recv().await {
         println!("{rpc_message:?}");
-        lobby_db_sender.send(LobbyDBMessage::LobbyMessage(LobbyMessage::Heartbeat));
+        if let Err(e) = lobby_db_sender.send(LobbyDBMessage::LobbyMessage(LobbyMessage::Heartbeat))
+        {
+            println!("Failed to send lobby message to DB actor: {e}");
+            break;
+        }
     }
 }
 
 impl LobbySession {
-    pub fn new(left_side: SocketAddr) -> Self {
+    pub fn new(
+        left_side: SocketAddr,
+        lobby_db_sender: mpsc::UnboundedSender<LobbyDBMessage>,
+    ) -> Self {
         let (lobby_rpc_sender, lobby_rpc_receiver) = mpsc::unbounded_channel();
-        let (lobby_message_sender, lobby_message_receiver) = mpsc::unbounded_channel();
-        let lobby_actor = tokio::spawn(run_lobby_actor(lobby_rpc_receiver, lobby_message_sender));
+        let lobby_actor = tokio::spawn(run_lobby_actor(lobby_rpc_receiver, lobby_db_sender));
         Self {
             lobby_data: LobbyData::new(left_side),
             lobby_actor,
-            lobby_message_receiver,
             lobby_rpc_sender,
         }
     }
@@ -108,7 +111,7 @@ impl LobbyDB {
                 } else {
                     // if there is no waiting lobby, then create a new one
                     let lobby_id = Uuid::new_v4();
-                    let new_lobby = LobbySession::new(addr);
+                    let new_lobby = LobbySession::new(addr, self.lobby_db_sender.clone());
                     let lobby_state = new_lobby.get_current_state();
                     println!("Lobby {lobby_id} should now be waiting: {lobby_state:?}");
                     assert_eq!(lobby_state, LobbyState::Waiting);
@@ -162,6 +165,7 @@ impl LobbyDB {
     }
 
     pub fn send_message_to_lobby_users(&self, lobby_message: LobbyMessage) {
+        println!("Sending message to lobby {lobby_message:?}");
         // send message
         let rpc_message = RpcMessage::Text(format!("{lobby_message:?}"));
         // broadcast message to everyone
@@ -208,6 +212,7 @@ pub async fn run_lobby_db_actor(
                 lobby_db.remove_user(socket_addr);
             }
             LobbyDBMessage::LobbyMessage(lobby_message) => {
+                println!("Lobby DB received message from Lobby");
                 lobby_db.send_message_to_lobby_users(lobby_message);
             }
         }
