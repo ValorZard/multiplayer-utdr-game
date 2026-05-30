@@ -72,9 +72,7 @@ pub fn connect_to_websocket_server_native() {
         .build()
         .unwrap()
         .block_on(async {
-            let (socket, response) = connect_async(SERVER_ADDRESS)
-                .await
-                .expect("Can't connect");
+            let (socket, response) = connect_async(SERVER_ADDRESS).await.expect("Can't connect");
 
             println!("Connected to the server");
             println!("Response HTTP code: {}", response.status());
@@ -91,7 +89,10 @@ pub fn connect_to_websocket_server_native() {
                     let message_to_send =
                         rpc::RpcMessage::Text(format!("Hello WebSocket Native {i}").to_string());
                     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
-                    if let Err(e) = send_stream.send(Message::Binary(bytes.to_vec().into())).await {
+                    if let Err(e) = send_stream
+                        .send(Message::Binary(bytes.to_vec().into()))
+                        .await
+                    {
                         println!("Error! Breaking send loop: {e}");
                         break;
                     }
