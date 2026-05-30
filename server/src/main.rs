@@ -19,11 +19,8 @@ use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 
 use uuid::Uuid;
 
-use crate::lobby_db::LobbyDBMessage;
-use crate::{
-    lobby::{Lobby, LobbyState},
-    lobby_db::run_lobby_db_actor,
-};
+use crate::lobby_db::run_lobby_db_actor;
+use crate::lobby_db::{LobbyDBMessage, UserRPCMessage};
 
 const SERVER_HOSTING_ADDRESS: &str = "0.0.0.0:12345";
 
@@ -63,10 +60,10 @@ async fn handle_connection(
                 Ok(decoded) => {
                     println!("Received a binary message from {}: {:?}", addr, decoded);
                     // We want to broadcast the message to everyone except ourselves.
-                    let _ = lobby_db_sender.send(LobbyDBMessage::RPCMessage {
+                    let _ = lobby_db_sender.send(LobbyDBMessage::UserRPCMessage(UserRPCMessage {
                         message: decoded,
                         send_addr: addr,
-                    });
+                    }));
                 }
                 Err(err) => {
                     println!("Failed to decode binary message from {}: {:?}", addr, err)
@@ -109,7 +106,10 @@ async fn main() -> Result<(), IoError> {
 
     // spawn lobby actor
     let (lobby_db_sender, lobby_db_receiver) = mpsc::unbounded_channel();
-    tokio::spawn(run_lobby_db_actor(lobby_db_receiver));
+    tokio::spawn(run_lobby_db_actor(
+        lobby_db_sender.clone(),
+        lobby_db_receiver,
+    ));
 
     // Let's spawn the handling of each connection in a separate task.
     while let Ok((stream, addr)) = listener.accept().await {
