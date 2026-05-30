@@ -2,6 +2,8 @@
 use futures_util::{SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
 use gloo_timers::future::TimeoutFuture;
+#[cfg(target_arch = "wasm32")]
+use kiss3d::wasm_bindgen_futures::spawn_local;
 use std::time::Duration;
 #[cfg(target_arch = "wasm32")]
 use ws_stream_wasm::{WsMessage, WsMeta};
@@ -24,16 +26,23 @@ pub async fn connect_to_websocket_server_wasm() {
         .await
         .expect("websocket connection should succeed");
 
-    let mut i = 0;
-    loop {
-        let message_to_send =
-            rpc::RpcMessage::Text(format!("Hello WebSocket WASM {i}").to_string());
-        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
-        wsio.send(WsMessage::Binary(bytes.to_vec()))
-            .await
-            .expect("send should succeed");
+    let (mut send_stream, mut recv_stream) = wsio.split();
 
-        if let Some(reply) = wsio.next().await {
+    spawn_local(async move {
+        let mut i = 0;
+        loop {
+            let message_to_send =
+                rpc::RpcMessage::Text(format!("Hello WebSocket WASM {i}").to_string());
+            let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
+            if let Err(e) = send_stream.send(WsMessage::Binary(bytes.to_vec())).await {
+                break;
+            }
+            i += 1;
+            TimeoutFuture::new(1000).await;
+        }
+    });
+    loop {
+        if let Some(reply) = recv_stream.next().await {
             match reply {
                 WsMessage::Text(msg) => {
                     log!("Received text: {:?}", msg);
@@ -46,9 +55,10 @@ pub async fn connect_to_websocket_server_wasm() {
                     log!("Unexpected message: {:?}", reply);
                 }
             }
+        } else {
+            // error, break
+            break;
         }
-        i += 1;
-        TimeoutFuture::new(1_000).await;
     }
 
     ws.close().await.expect("close should succeed");
@@ -56,8 +66,9 @@ pub async fn connect_to_websocket_server_wasm() {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn connect_to_websocket_server_native() {
+    use std::sync::{Arc, Mutex};
     use tungstenite::{Message, connect};
-    let (mut socket, response) = connect(SERVER_ADDRESS).expect("Can't connect");
+    let (socket, response) = connect(SERVER_ADDRESS).expect("Can't connect");
 
     println!("Connected to the server");
     println!("Response HTTP code: {}", response.status());
@@ -66,27 +77,62 @@ pub fn connect_to_websocket_server_native() {
         println!("* {header}");
     }
 
-    let mut i = 0;
+    let socket = Arc::new(Mutex::new(socket));
+    let send_socket = Arc::clone(&socket);
+
+    let send_loop = std::thread::spawn(move || {
+        let mut i = 0;
+        loop {
+            let message_to_send =
+                rpc::RpcMessage::Text(format!("Hello WebSocket Native {i}").to_string());
+            let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
+            let mut socket = match send_socket.lock() {
+                Ok(socket) => socket,
+                Err(e) => {
+                    println!("Error! Breaking send loop (mutex poisoned): {e}");
+                    break;
+                }
+            };
+
+            if let Err(e) = socket.send(Message::Binary(bytes.to_vec().into())) {
+                println!("Error! Breaking send loop: {e}");
+                break;
+            }
+
+            drop(socket);
+            i += 1;
+            std::thread::sleep(Duration::from_millis(1000));
+        }
+    });
 
     loop {
-        let message_to_send =
-            rpc::RpcMessage::Text(format!("Hello WebSocket Native {i}").to_string());
-        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
-        socket.send(Message::Binary(bytes.to_vec().into())).unwrap();
-        let msg = socket.read().expect("Error reading message");
+        let msg = {
+            match socket.lock() {
+                Ok(mut socket) => socket.read(),
+                Err(e) => {
+                    println!("Error! Breaking receive loop (mutex poisoned): {e}");
+                    break;
+                }
+            }
+        };
+
         match msg {
-            Message::Text(msg) => {
+            Ok(Message::Text(msg)) => {
                 println!("Received text: {:?}", msg);
             }
-            Message::Binary(msg) => {
+            Ok(Message::Binary(msg)) => {
                 let deserialized = rpc::decode_message(msg.as_ref()).unwrap();
                 println!("Received binary: {:?}", deserialized);
             }
-            _ => {
+            Ok(msg) => {
                 println!("Unexpected message: {:?}", msg);
             }
+            Err(e) => {
+                println!("Error! Breaking receive loop: {e}");
+                break;
+            }
         }
-        i += 1;
-        std::thread::sleep(Duration::from_millis(1000));
     }
+
+    let _ = send_loop.join();
 }

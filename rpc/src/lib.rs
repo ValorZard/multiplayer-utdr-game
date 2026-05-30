@@ -1,6 +1,6 @@
 use rkyv::{Archive, Deserialize, Serialize, util::AlignedVec};
 
-#[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
     // This will generate a PartialEq impl between our unarchived
     // and archived types

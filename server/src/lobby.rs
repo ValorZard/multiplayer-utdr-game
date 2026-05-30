@@ -1,6 +1,6 @@
 use std::{cell::OnceCell, io::Error as IoError, net::SocketAddr};
 
-pub struct Lobby {
+pub struct LobbyData {
     left_side: Option<SocketAddr>,
     right_side: Option<SocketAddr>,
     winner: Option<SocketAddr>,
@@ -43,7 +43,7 @@ impl std::error::Error for LobbyError {
     }
 }
 
-impl Lobby {
+impl LobbyData {
     // we initialize with the left side first, but the left side can leave the match, which can be annoying
     pub fn new(left_side: SocketAddr) -> Self {
         Self {
@@ -109,8 +109,8 @@ impl Lobby {
     }
 }
 
-enum LobbyMessage {
+#[derive(Debug)]
+pub enum LobbyMessage {
     Heartbeat,
+    Text(String),
 }
-
-pub fn run_lobby_actor() {}
