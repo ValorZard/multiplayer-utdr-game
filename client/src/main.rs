@@ -62,9 +62,6 @@ async fn main() {
                 WindowEvent::MouseButton(MouseButton::Button1, Action::Press, _) => {
                     log!("Left click");
                 }
-                WindowEvent::CursorPos(x, y, _) => {
-                    log!("Mouse moved: {x}, {y}");
-                }
                 WindowEvent::Char(c) => {
                     log!("Typed char: {c}");
                 }

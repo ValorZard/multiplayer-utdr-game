@@ -1,4 +1,4 @@
-use rkyv::{Archive, Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize, util::AlignedVec};
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
 #[rkyv(
@@ -8,7 +8,7 @@ use rkyv::{Archive, Deserialize, Serialize};
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
-pub enum Message {
+pub enum RpcMessage {
     Text(String),
     Rock,
     Paper,
@@ -16,8 +16,12 @@ pub enum Message {
 }
 
 // messages sent from a websocket stream might not be aligned to what rkyv wants
-pub fn decode_message(bytes: &[u8]) -> Result<Message, rkyv::rancor::Error> {
+pub fn decode_message(bytes: &[u8]) -> Result<RpcMessage, rkyv::rancor::Error> {
     let mut aligned: rkyv::util::AlignedVec = rkyv::util::AlignedVec::new();
     aligned.extend_from_slice(bytes);
-    rkyv::from_bytes::<Message, rkyv::rancor::Error>(aligned.as_ref())
+    rkyv::from_bytes::<RpcMessage, rkyv::rancor::Error>(aligned.as_ref())
+}
+
+pub fn encode_message(message: &RpcMessage) -> Result<AlignedVec, rkyv::rancor::Error> {
+    rkyv::to_bytes::<rkyv::rancor::Error>(message)
 }

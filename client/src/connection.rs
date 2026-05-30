@@ -26,7 +26,8 @@ pub async fn connect_to_websocket_server_wasm() {
 
     let mut i = 0;
     loop {
-        let message_to_send = rpc::Message::Text(format!("Hello WebSocket WASM {i}").to_string());
+        let message_to_send =
+            rpc::RpcMessage::Text(format!("Hello WebSocket WASM {i}").to_string());
         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
         wsio.send(WsMessage::Binary(bytes.to_vec()))
             .await
@@ -38,7 +39,7 @@ pub async fn connect_to_websocket_server_wasm() {
                     log!("Received text: {:?}", msg);
                 }
                 WsMessage::Binary(msg) => {
-                    let deserialized = decode_message(msg.as_ref()).unwrap();
+                    let deserialized = rpc::decode_message(msg.as_ref()).unwrap();
                     log!("Received binary: {:?}", deserialized);
                 }
                 _ => {
@@ -68,7 +69,8 @@ pub fn connect_to_websocket_server_native() {
     let mut i = 0;
 
     loop {
-        let message_to_send = rpc::Message::Text(format!("Hello WebSocket Native {i}").to_string());
+        let message_to_send =
+            rpc::RpcMessage::Text(format!("Hello WebSocket Native {i}").to_string());
         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
         socket.send(Message::Binary(bytes.to_vec().into())).unwrap();
         let msg = socket.read().expect("Error reading message");

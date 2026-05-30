@@ -27,3 +27,9 @@ impl Lobby {
         Ok(())
     }
 }
+
+enum LobbyMessage {
+    Heartbeat,
+}
+
+pub fn run_lobby_actor() {}
