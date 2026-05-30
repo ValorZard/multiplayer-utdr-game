@@ -188,7 +188,7 @@ impl LobbyDB {
     pub fn send_message_to_lobby_users(&self, lobby_id: LobbyId, lobby_message: LobbyMessage) {
         println!("Sending message to lobby users {lobby_message:?}");
         // send message
-        let rpc_message = RpcMessage::Text(format!("{lobby_message:?}"));
+        let rpc_message = RpcMessage::Text(format!("{lobby_id} : {lobby_message:?}"));
         // broadcast message to everyone
         let encoded = rpc::encode_message(&rpc_message).unwrap().to_vec();
         if let Some(lobby) = self.running_lobby_list.get(&lobby_id) {
