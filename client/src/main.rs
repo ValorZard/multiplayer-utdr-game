@@ -2,6 +2,7 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
+use rpc::GameInput;
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
@@ -20,14 +21,23 @@ async fn main() {
     let image_texture =
         texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
 
+    let (input_sender, input_receiver, state_sender, mut state_receiver) =
+        connection::make_channels();
+
     #[cfg(target_arch = "wasm32")]
-    spawn_local(async {
-        crate::connection::connect_to_websocket_server_wasm().await;
-    });
+    {
+        spawn_local(async move {
+            crate::connection::connect_to_websocket_server_wasm(input_receiver, state_sender)
+                .await;
+        });
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
-    let connection_thread_handle =
-        thread::spawn(crate::connection::connect_to_websocket_server_native);
+    {
+        thread::spawn(move || {
+            crate::connection::connect_to_websocket_server_native(input_receiver, state_sender)
+        });
+    }
 
     let mut rect = scene
         .add_rectangle(
@@ -54,6 +64,10 @@ async fn main() {
     let mut circle_color = [1.0, 0.0, 0.0];
 
     while window.render_2d(&mut scene, &mut camera).await {
+        while let Some(state) = connection::try_recv_state(&mut state_receiver) {
+            log!("Latest game state: {state:?}");
+        }
+
         for event in window.events().iter() {
             match event.value {
                 WindowEvent::Key(Key::Space, Action::Press, _) => {
@@ -90,6 +104,16 @@ async fn main() {
 
                     ui.separator();
 
+                    if ui.button("Rock").clicked() {
+                        connection::send_input(&input_sender, GameInput::Rock);
+                    }
+                    if ui.button("Paper").clicked() {
+                        connection::send_input(&input_sender, GameInput::Paper);
+                    }
+                    if ui.button("Scissors").clicked() {
+                        connection::send_input(&input_sender, GameInput::Scissors);
+                    }
+
                     // Opacity control
                     ui.label("Opacity:");
                     ui.add(egui::Slider::new(&mut opacity, 0.0..=1.0));
@@ -103,7 +127,4 @@ async fn main() {
                 });
         });
     }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = connection_thread_handle.join();
 }

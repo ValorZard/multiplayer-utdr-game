@@ -10,6 +10,7 @@ include_dir = "0.7.4"
 kiss3d = { version = "0.42.0", features = ["egui"]}
 rkyv = {workspace = true}
 bytes = {workspace = true}
+wasm_safe_mutex = "0.2.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = {workspace = true}

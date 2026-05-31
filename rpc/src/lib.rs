@@ -10,9 +10,41 @@ use rkyv::{Archive, Deserialize, Serialize, util::AlignedVec};
 )]
 pub enum RpcMessage {
     Text(String),
+    GameInput(GameInput),
+    // TODO: make sending RPS game state server only
+    GameState(RPSGameState),
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum GameInput {
     Rock,
     Paper,
     Scissors,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum RPSGameState {
+    // waiting on inputs from both players here
+    StartRound,
+    WaitingForLeftInput,
+    WaitingForRightInput,
+    LeftWin,
+    RightWin,
+    Tie,
 }
 
 // messages sent from a websocket stream might not be aligned to what rkyv wants
