@@ -26,6 +26,7 @@ const SERVER_HOSTING_ADDRESS: &str = "0.0.0.0:12345";
 
 mod lobby;
 mod lobby_db;
+mod rps;
 
 async fn handle_connection(
     raw_stream: TcpStream,
@@ -59,10 +60,10 @@ async fn handle_connection(
             WsMessage::Binary(bytes) => match rpc::decode_message(bytes) {
                 Ok(decoded) => {
                     println!("Received a binary message from {}: {:?}", addr, decoded);
-                    // We want to broadcast the message to everyone except ourselves.
                     let _ = lobby_db_sender.send(LobbyDBMessage::UserRPCMessage(UserRPCMessage {
                         message: decoded,
                         send_addr: addr,
+                        player_side: None,
                     }));
                 }
                 Err(err) => {
