@@ -429,6 +429,7 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "futures-channel",
  "futures-util",
  "gloo-timers",
  "include_dir",
@@ -438,7 +439,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tungstenite",
- "wasm_safe_mutex",
  "web-sys",
  "ws_stream_wasm",
 ]
@@ -486,17 +486,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
-]
-
-[[package]]
-name = "continue"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0f015c8a689633523d8df1e8bfdd7911d958042cc5f15fe1ff7d13542a64451"
-dependencies = [
- "atomic-waker",
- "thiserror 2.0.18",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -3623,31 +3612,6 @@ dependencies = [
  "indexmap",
  "wasm-encoder",
  "wasmparser",
-]
-
-[[package]]
-name = "wasm_safe_mutex"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e97cacdc547284492c7a04e10ac2c628e6236554373f2ba1d1d73cd819f5f1d6"
-dependencies = [
- "continue",
- "wasm-bindgen",
- "wasm_safe_thread",
- "web-time",
-]
-
-[[package]]
-name = "wasm_safe_thread"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cbd0fac61fdac75f6413e236f521802c4d5deea057b0c85c4cea98a856bfb04"
-dependencies = [
- "continue",
- "js-sys",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-time",
 ]
 
 [[package]]
