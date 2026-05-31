@@ -429,6 +429,7 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "futures-channel",
  "futures-util",
  "gloo-timers",
  "include_dir",

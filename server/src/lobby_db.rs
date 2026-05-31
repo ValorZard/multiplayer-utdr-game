@@ -3,7 +3,7 @@ use std::{collections::HashMap, net::SocketAddr};
 use rpc::RpcMessage;
 use tokio::{
     sync::{
-        mpsc::{self, UnboundedReceiver, UnboundedSender},
+        mpsc::{self, UnboundedReceiver, UnboundedSender, error::SendError},
         oneshot,
     },
     task,
@@ -11,7 +11,10 @@ use tokio::{
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
 
-use crate::lobby::{LobbyData, LobbyError, LobbyState};
+use crate::{
+    lobby::{LobbyData, LobbyError, LobbyState},
+    rps::GameSession,
+};
 
 type LobbyId = Uuid;
 
@@ -34,8 +37,29 @@ async fn run_lobby_actor(
     mut lobby_rpc_receiver: LobbyRPCReceiver,
     lobby_db_sender: LobbyDBSender,
 ) {
+    let mut current_round = GameSession::new();
     while let Some(rpc_message) = lobby_rpc_receiver.recv().await {
         println!("{rpc_message:?}");
+        if let RpcMessage::GameInput(input) = rpc_message.message {
+            if let Some(player_side) = rpc_message.player_side {
+                match player_side {
+                    PlayerSide::Left => {
+                        let _ = current_round.set_left_input(input);
+                    }
+                    PlayerSide::Right => {
+                        let _ = current_round.set_right_input(input);
+                    }
+                }
+                println!(
+                    "{lobby_id}: Current game state: {:?}",
+                    current_round.compute_state()
+                );
+            } else {
+                unreachable!(
+                    "This should not be possible, do NOT send a RPC into a lobby from a user that's not inside."
+                );
+            }
+        }
         if let Err(e) = lobby_db_sender.send(LobbyDBMessage::LobbyMessage(
             lobby_id,
             LobbyMessage::Heartbeat,
@@ -83,6 +107,16 @@ impl LobbySession {
 
     pub fn get_current_state(&self) -> LobbyState {
         self.lobby_data.get_current_state()
+    }
+
+    pub fn get_player_side(&self, addr: SocketAddr) -> Option<PlayerSide> {
+        if self.get_left() == Some(addr) {
+            Some(PlayerSide::Left)
+        } else if self.get_right() == Some(addr) {
+            Some(PlayerSide::Right)
+        } else {
+            None
+        }
     }
 }
 
@@ -177,11 +211,22 @@ impl LobbyDB {
     pub fn send_message_from_user(&self, user_rpc_message: &UserRPCMessage) {
         // send messages into lobby actor (can only send into running lobby)
         if let Some(user_data) = self.user_list.get(&user_rpc_message.send_addr) {
+            let mut routed_message = user_rpc_message.clone();
             if let Some(lobby) = self.running_lobby_list.get(&user_data.lobby_id) {
-                lobby.lobby_rpc_sender.send(user_rpc_message.clone());
+                routed_message.player_side = lobby.get_player_side(user_rpc_message.send_addr);
+                let _ = lobby.lobby_rpc_sender.send(routed_message);
             } else if let Some(lobby) = self.waiting_lobby_list.get(&user_data.lobby_id) {
-                lobby.lobby_rpc_sender.send(user_rpc_message.clone());
+                routed_message.player_side = lobby.get_player_side(user_rpc_message.send_addr);
+                let _ = lobby.lobby_rpc_sender.send(routed_message);
+            } else {
+                unreachable!(
+                    "If a user is in the user list, it should also be in either waiting or running lobby list."
+                );
             }
+        } else {
+            unreachable!(
+                "If a user is able to send an RPC, that means they should be in the user list and assigned a lobby"
+            );
         }
     }
 
@@ -233,6 +278,13 @@ impl LobbyDB {
 pub struct UserRPCMessage {
     pub message: RpcMessage,
     pub send_addr: SocketAddr,
+    pub player_side: Option<PlayerSide>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerSide {
+    Left,
+    Right,
 }
 
 #[derive(Debug)]
