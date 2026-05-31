@@ -1,11 +1,30 @@
+use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use futures_util::FutureExt;
 use futures_util::{SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
-use gloo_timers::future::TimeoutFuture;
-#[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
-use std::time::Duration;
+use rpc::{GameInput, RPSGameState, RpcMessage};
 #[cfg(target_arch = "wasm32")]
 use ws_stream_wasm::{WsMessage, WsMeta};
+
+pub type InputSender = UnboundedSender<GameInput>;
+pub type InputReceiver = UnboundedReceiver<GameInput>;
+pub type StateSender = UnboundedSender<RPSGameState>;
+pub type StateReceiver = UnboundedReceiver<RPSGameState>;
+
+pub fn make_channels() -> (InputSender, InputReceiver, StateSender, StateReceiver) {
+    let (input_sender, input_receiver) = unbounded();
+    let (state_sender, state_receiver) = unbounded();
+    (input_sender, input_receiver, state_sender, state_receiver)
+}
+
+pub fn send_input(sender: &InputSender, input: GameInput) {
+    let _ = sender.unbounded_send(input);
+}
+
+pub fn try_recv_state(receiver: &mut StateReceiver) -> Option<RPSGameState> {
+    receiver.next().now_or_never().flatten()
+}
 
 const SERVER_ADDRESS: &str = "ws://127.0.0.1:12345/";
 
@@ -20,24 +39,33 @@ macro_rules! log {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub async fn connect_to_websocket_server_wasm() {
-    let (ws, mut wsio) = WsMeta::connect(SERVER_ADDRESS, None)
+pub async fn connect_to_websocket_server_wasm(
+    input_receiver: InputReceiver,
+    state_sender: StateSender,
+) {
+    let (ws, wsio) = WsMeta::connect(SERVER_ADDRESS, None)
         .await
         .expect("websocket connection should succeed");
 
     let (mut send_stream, mut recv_stream) = wsio.split();
 
     spawn_local(async move {
-        let mut i = 0;
+        let mut input_receiver = input_receiver;
         loop {
-            let message_to_send =
-                rpc::RpcMessage::Text(format!("Hello WebSocket WASM {i}").to_string());
-            let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
-            if let Err(e) = send_stream.send(WsMessage::Binary(bytes.to_vec())).await {
-                break;
+            match input_receiver.next().await {
+                Some(input) => {
+                    let message_to_send = RpcMessage::GameInput(input);
+                    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
+                    if let Err(e) = send_stream
+                        .send(WsMessage::Binary(bytes.to_vec().into()))
+                        .await
+                    {
+                        println!("Error! Breaking send loop: {e}");
+                        break;
+                    }
+                }
+                None => break,
             }
-            i += 1;
-            TimeoutFuture::new(1000).await;
         }
     });
     loop {
@@ -49,9 +77,9 @@ pub async fn connect_to_websocket_server_wasm() {
                 WsMessage::Binary(msg) => {
                     let deserialized = rpc::decode_message(msg.as_ref()).unwrap();
                     log!("Received binary: {:?}", deserialized);
-                }
-                _ => {
-                    log!("Unexpected message: {:?}", reply);
+                    if let RpcMessage::GameState(state) = deserialized {
+                        let _ = state_sender.unbounded_send(state);
+                    }
                 }
             }
         } else {
@@ -64,7 +92,10 @@ pub async fn connect_to_websocket_server_wasm() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn connect_to_websocket_server_native() {
+pub fn connect_to_websocket_server_native(
+    mut input_receiver: InputReceiver,
+    state_sender: StateSender,
+) {
     use tokio_tungstenite::{connect_async, tungstenite::Message};
 
     tokio::runtime::Builder::new_multi_thread()
@@ -84,10 +115,8 @@ pub fn connect_to_websocket_server_native() {
             let (mut send_stream, mut recv_stream) = socket.split();
 
             let send_loop = tokio::spawn(async move {
-                let mut i = 0;
-                loop {
-                    let message_to_send =
-                        rpc::RpcMessage::Text(format!("Hello WebSocket Native {i}").to_string());
+                while let Some(input) = input_receiver.next().await {
+                    let message_to_send = rpc::RpcMessage::GameInput(input);
                     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
                     if let Err(e) = send_stream
                         .send(Message::Binary(bytes.to_vec().into()))
@@ -96,8 +125,6 @@ pub fn connect_to_websocket_server_native() {
                         println!("Error! Breaking send loop: {e}");
                         break;
                     }
-                    i += 1;
-                    tokio::time::sleep(Duration::from_millis(1000)).await;
                 }
             });
 
@@ -110,6 +137,9 @@ pub fn connect_to_websocket_server_native() {
                         Ok(Message::Binary(msg)) => {
                             let deserialized = rpc::decode_message(msg.as_ref()).unwrap();
                             println!("Received binary: {:?}", deserialized);
+                            if let RpcMessage::GameState(state) = deserialized {
+                                let _ = state_sender.unbounded_send(state);
+                            }
                         }
                         Ok(msg) => {
                             println!("Unexpected message: {:?}", msg);
