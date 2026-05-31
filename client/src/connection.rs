@@ -1,64 +1,27 @@
+use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use futures_util::FutureExt;
 use futures_util::{SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use rpc::{GameInput, RPSGameState, RpcMessage};
-#[cfg(not(target_arch = "wasm32"))]
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-#[cfg(target_arch = "wasm32")]
-use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-#[cfg(target_arch = "wasm32")]
-use futures_util::FutureExt;
 #[cfg(target_arch = "wasm32")]
 use ws_stream_wasm::{WsMessage, WsMeta};
 
-#[cfg(not(target_arch = "wasm32"))]
 pub type InputSender = UnboundedSender<GameInput>;
-#[cfg(not(target_arch = "wasm32"))]
 pub type InputReceiver = UnboundedReceiver<GameInput>;
-#[cfg(not(target_arch = "wasm32"))]
 pub type StateSender = UnboundedSender<RPSGameState>;
-#[cfg(not(target_arch = "wasm32"))]
 pub type StateReceiver = UnboundedReceiver<RPSGameState>;
 
-#[cfg(target_arch = "wasm32")]
-pub type InputSender = UnboundedSender<GameInput>;
-#[cfg(target_arch = "wasm32")]
-pub type InputReceiver = UnboundedReceiver<GameInput>;
-#[cfg(target_arch = "wasm32")]
-pub type StateSender = UnboundedSender<RPSGameState>;
-#[cfg(target_arch = "wasm32")]
-pub type StateReceiver = UnboundedReceiver<RPSGameState>;
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn make_channels() -> (InputSender, InputReceiver, StateSender, StateReceiver) {
-    let (input_sender, input_receiver) = unbounded_channel();
-    let (state_sender, state_receiver) = unbounded_channel();
-    (input_sender, input_receiver, state_sender, state_receiver)
-}
-
-#[cfg(target_arch = "wasm32")]
 pub fn make_channels() -> (InputSender, InputReceiver, StateSender, StateReceiver) {
     let (input_sender, input_receiver) = unbounded();
     let (state_sender, state_receiver) = unbounded();
     (input_sender, input_receiver, state_sender, state_receiver)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub fn send_input(sender: &InputSender, input: GameInput) {
-    let _ = sender.send(input);
-}
-
-#[cfg(target_arch = "wasm32")]
 pub fn send_input(sender: &InputSender, input: GameInput) {
     let _ = sender.unbounded_send(input);
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub fn try_recv_state(receiver: &mut StateReceiver) -> Option<RPSGameState> {
-    receiver.try_recv().ok()
-}
-
-#[cfg(target_arch = "wasm32")]
 pub fn try_recv_state(receiver: &mut StateReceiver) -> Option<RPSGameState> {
     receiver.next().now_or_never().flatten()
 }
@@ -76,7 +39,10 @@ macro_rules! log {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub async fn connect_to_websocket_server_wasm(input_receiver: InputReceiver, state_sender: StateSender) {
+pub async fn connect_to_websocket_server_wasm(
+    input_receiver: InputReceiver,
+    state_sender: StateSender,
+) {
     let (ws, wsio) = WsMeta::connect(SERVER_ADDRESS, None)
         .await
         .expect("websocket connection should succeed");
@@ -90,7 +56,9 @@ pub async fn connect_to_websocket_server_wasm(input_receiver: InputReceiver, sta
                 Some(input) => {
                     let message_to_send = RpcMessage::GameInput(input);
                     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
-                    if let Err(e) = send_stream.send(WsMessage::Binary(bytes.to_vec().into())).await
+                    if let Err(e) = send_stream
+                        .send(WsMessage::Binary(bytes.to_vec().into()))
+                        .await
                     {
                         println!("Error! Breaking send loop: {e}");
                         break;
@@ -147,7 +115,7 @@ pub fn connect_to_websocket_server_native(
             let (mut send_stream, mut recv_stream) = socket.split();
 
             let send_loop = tokio::spawn(async move {
-                while let Some(input) = input_receiver.recv().await {
+                while let Some(input) = input_receiver.next().await {
                     let message_to_send = rpc::RpcMessage::GameInput(input);
                     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
                     if let Err(e) = send_stream
@@ -170,7 +138,7 @@ pub fn connect_to_websocket_server_native(
                             let deserialized = rpc::decode_message(msg.as_ref()).unwrap();
                             println!("Received binary: {:?}", deserialized);
                             if let RpcMessage::GameState(state) = deserialized {
-                                let _ = state_sender.send(state);
+                                let _ = state_sender.unbounded_send(state);
                             }
                         }
                         Ok(msg) => {

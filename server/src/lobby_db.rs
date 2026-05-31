@@ -50,7 +50,10 @@ async fn run_lobby_actor(
                         let _ = current_round.set_right_input(input);
                     }
                 }
-                println!("{lobby_id}: Current game state: {:?}", current_round.compute_state());
+                println!(
+                    "{lobby_id}: Current game state: {:?}",
+                    current_round.compute_state()
+                );
             } else {
                 unreachable!(
                     "This should not be possible, do NOT send a RPC into a lobby from a user that's not inside."

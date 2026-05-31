@@ -27,14 +27,13 @@ async fn main() {
     #[cfg(target_arch = "wasm32")]
     {
         spawn_local(async move {
-            crate::connection::connect_to_websocket_server_wasm(input_receiver, state_sender)
-                .await;
+            crate::connection::connect_to_websocket_server_wasm(input_receiver, state_sender).await;
         });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        thread::spawn(move || {
+        let _connection_handle = thread::spawn(move || {
             crate::connection::connect_to_websocket_server_native(input_receiver, state_sender)
         });
     }
