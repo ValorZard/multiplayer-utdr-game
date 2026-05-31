@@ -5,9 +5,11 @@ use rpc::{GameInput, RPSGameState, RpcMessage};
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 #[cfg(target_arch = "wasm32")]
-use ws_stream_wasm::{WsMessage, WsMeta};
+use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 #[cfg(target_arch = "wasm32")]
-use wasm_safe_mutex::mpsc::{Receiver, Sender, channel};
+use futures_util::FutureExt;
+#[cfg(target_arch = "wasm32")]
+use ws_stream_wasm::{WsMessage, WsMeta};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub type InputSender = UnboundedSender<GameInput>;
@@ -19,13 +21,13 @@ pub type StateSender = UnboundedSender<RPSGameState>;
 pub type StateReceiver = UnboundedReceiver<RPSGameState>;
 
 #[cfg(target_arch = "wasm32")]
-pub type InputSender = Sender<GameInput>;
+pub type InputSender = UnboundedSender<GameInput>;
 #[cfg(target_arch = "wasm32")]
-pub type InputReceiver = Receiver<GameInput>;
+pub type InputReceiver = UnboundedReceiver<GameInput>;
 #[cfg(target_arch = "wasm32")]
-pub type StateSender = Sender<RPSGameState>;
+pub type StateSender = UnboundedSender<RPSGameState>;
 #[cfg(target_arch = "wasm32")]
-pub type StateReceiver = Receiver<RPSGameState>;
+pub type StateReceiver = UnboundedReceiver<RPSGameState>;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn make_channels() -> (InputSender, InputReceiver, StateSender, StateReceiver) {
@@ -36,8 +38,8 @@ pub fn make_channels() -> (InputSender, InputReceiver, StateSender, StateReceive
 
 #[cfg(target_arch = "wasm32")]
 pub fn make_channels() -> (InputSender, InputReceiver, StateSender, StateReceiver) {
-    let (input_sender, input_receiver) = channel();
-    let (state_sender, state_receiver) = channel();
+    let (input_sender, input_receiver) = unbounded();
+    let (state_sender, state_receiver) = unbounded();
     (input_sender, input_receiver, state_sender, state_receiver)
 }
 
@@ -48,7 +50,7 @@ pub fn send_input(sender: &InputSender, input: GameInput) {
 
 #[cfg(target_arch = "wasm32")]
 pub fn send_input(sender: &InputSender, input: GameInput) {
-    let _ = sender.send_sync(input);
+    let _ = sender.unbounded_send(input);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -58,7 +60,7 @@ pub fn try_recv_state(receiver: &mut StateReceiver) -> Option<RPSGameState> {
 
 #[cfg(target_arch = "wasm32")]
 pub fn try_recv_state(receiver: &mut StateReceiver) -> Option<RPSGameState> {
-    receiver.try_recv().ok()
+    receiver.next().now_or_never().flatten()
 }
 
 const SERVER_ADDRESS: &str = "ws://127.0.0.1:12345/";
@@ -82,9 +84,10 @@ pub async fn connect_to_websocket_server_wasm(input_receiver: InputReceiver, sta
     let (mut send_stream, mut recv_stream) = wsio.split();
 
     spawn_local(async move {
+        let mut input_receiver = input_receiver;
         loop {
-            match input_receiver.recv_async().await {
-                Ok(input) => {
+            match input_receiver.next().await {
+                Some(input) => {
                     let message_to_send = RpcMessage::GameInput(input);
                     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
                     if let Err(e) = send_stream.send(WsMessage::Binary(bytes.to_vec().into())).await
@@ -93,7 +96,7 @@ pub async fn connect_to_websocket_server_wasm(input_receiver: InputReceiver, sta
                         break;
                     }
                 }
-                Err(_) => break,
+                None => break,
             }
         }
     });
@@ -107,7 +110,7 @@ pub async fn connect_to_websocket_server_wasm(input_receiver: InputReceiver, sta
                     let deserialized = rpc::decode_message(msg.as_ref()).unwrap();
                     log!("Received binary: {:?}", deserialized);
                     if let RpcMessage::GameState(state) = deserialized {
-                        let _ = state_sender.send_sync(state);
+                        let _ = state_sender.unbounded_send(state);
                     }
                 }
             }
