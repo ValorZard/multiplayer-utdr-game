@@ -329,6 +329,7 @@ dependencies = [
  "ptr_meta",
  "rancor",
  "simdutf8",
+ "uuid",
 ]
 
 [[package]]
@@ -2748,6 +2749,7 @@ name = "rpc"
 version = "0.1.0"
 dependencies = [
  "rkyv",
+ "uuid",
 ]
 
 [[package]]
@@ -3451,7 +3453,17 @@ checksum = "d258b83ceec21034727ecee8c382cfa6c3e133699b0742c64571814fb420c9f7"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
+ "uuid-rng-internal",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "uuid-rng-internal"
+version = "1.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58e332a80046a2cf8832852d3e747b6eb83d8f168c250044a9d3563ab8ae81d4"
+dependencies = [
+ "getrandom 0.4.2",
 ]
 
 [[package]]

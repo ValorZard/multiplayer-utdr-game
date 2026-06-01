@@ -65,7 +65,11 @@ async fn handle_connection(
 
     println!("Player assigned to lobby {lobby_id}");
 
-    let (outgoing, incoming) = ws_stream.split();
+    let (mut outgoing, incoming) = ws_stream.split();
+
+    // send our lobby id first
+    let bytes = encode_server_message(&RpcServerMessage::Lobby(lobby_id)).expect("Error serializing LobbyMessage");
+    outgoing.send(WsMessage::Binary(bytes.to_vec().into())).await.expect("initial lobby message should be sent");
 
     let broadcast_incoming = incoming.try_for_each(|msg| {
         match &msg {
