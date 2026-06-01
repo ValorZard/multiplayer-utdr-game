@@ -1,4 +1,5 @@
 use rkyv::{Archive, Deserialize, Serialize, util::AlignedVec};
+use uuid::Uuid;
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
@@ -13,6 +14,8 @@ pub enum RpcClientMessage {
     GameInput(GameInput),
 }
 
+pub type LobbyId = Uuid;
+
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
     // This will generate a PartialEq impl between our unarchived
@@ -23,6 +26,7 @@ pub enum RpcClientMessage {
 )]
 pub enum RpcServerMessage {
     GameState(RPSGameState),
+    Lobby(LobbyId),
     Text(String),
 }
 

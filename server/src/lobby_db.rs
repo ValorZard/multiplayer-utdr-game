@@ -1,6 +1,6 @@
 use std::{collections::HashMap, net::SocketAddr};
 
-use rpc::{RPSGameState, RpcClientMessage, RpcServerMessage};
+use rpc::{LobbyId, RPSGameState, RpcClientMessage, RpcServerMessage};
 use tokio::{
     sync::{
         mpsc::{self, UnboundedReceiver, UnboundedSender, error::SendError},
@@ -16,8 +16,6 @@ use crate::{
     lobby::{LobbyData, LobbyError, LobbyState},
     rps::GameSession,
 };
-
-type LobbyId = Uuid;
 
 type UserSender = UnboundedSender<WsMessage>;
 type LobbyDBSender = UnboundedSender<LobbyDBMessage>;

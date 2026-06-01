@@ -10,4 +10,4 @@ tokio = {workspace = true}
 tokio-tungstenite = {workspace = true}
 tokio-stream = {workspace = true}
 rkyv = {workspace = true}
-uuid = {version = "1.23.2", features = ["v4"] }
+uuid = {workspace = true }
