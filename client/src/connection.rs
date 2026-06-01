@@ -18,14 +18,6 @@ pub fn make_channels() -> (InputSender, InputReceiver, StateSender, StateReceive
     (input_sender, input_receiver, state_sender, state_receiver)
 }
 
-pub fn send_input(sender: &InputSender, input: GameInput) {
-    let _ = sender.unbounded_send(input);
-}
-
-pub fn try_recv_state(receiver: &mut StateReceiver) -> Option<RPSGameState> {
-    receiver.next().now_or_never().flatten()
-}
-
 const SERVER_ADDRESS: &str = "ws://127.0.0.1:12345/";
 
 #[macro_export]
