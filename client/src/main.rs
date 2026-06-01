@@ -28,14 +28,21 @@ async fn main() {
     #[cfg(target_arch = "wasm32")]
     {
         spawn_local(async move {
-            crate::connection::connect_to_websocket_server_wasm(client_rpc_receiver, server_rpc_sender).await;
+            crate::connection::connect_to_websocket_server_wasm(
+                client_rpc_receiver,
+                server_rpc_sender,
+            )
+            .await;
         });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _connection_handle = thread::spawn(move || {
-            crate::connection::connect_to_websocket_server_native(client_rpc_receiver, server_rpc_sender)
+            crate::connection::connect_to_websocket_server_native(
+                client_rpc_receiver,
+                server_rpc_sender,
+            )
         });
     }
 
@@ -114,13 +121,16 @@ async fn main() {
                     ui.separator();
 
                     if ui.button("Rock").clicked() {
-                        let _ = client_rpc_sender.unbounded_send(RpcClientMessage::GameInput(GameInput::Rock));
+                        let _ = client_rpc_sender
+                            .unbounded_send(RpcClientMessage::GameInput(GameInput::Rock));
                     }
                     if ui.button("Paper").clicked() {
-                        let _ = client_rpc_sender.unbounded_send(RpcClientMessage::GameInput(GameInput::Paper));
+                        let _ = client_rpc_sender
+                            .unbounded_send(RpcClientMessage::GameInput(GameInput::Paper));
                     }
                     if ui.button("Scissors").clicked() {
-                        let _ = client_rpc_sender.unbounded_send(RpcClientMessage::GameInput(GameInput::Scissors));
+                        let _ = client_rpc_sender
+                            .unbounded_send(RpcClientMessage::GameInput(GameInput::Scissors));
                     }
 
                     // Opacity control
