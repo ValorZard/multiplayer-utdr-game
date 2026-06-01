@@ -1,3 +1,4 @@
+use futures_util::{FutureExt, StreamExt};
 use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
@@ -5,7 +6,6 @@ use kiss3d::{egui, prelude::*};
 use rpc::{GameInput, RPSGameState};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
-use futures_util::{FutureExt, StreamExt};
 
 mod connection;
 
@@ -63,7 +63,7 @@ async fn main() {
     let mut opacity = 1.0;
     let mut circle_color = [1.0, 0.0, 0.0];
 
-    let mut current_game_state : Option<RPSGameState> = None;
+    let mut current_game_state: Option<RPSGameState> = None;
     while window.render_2d(&mut scene, &mut camera).await {
         // immediately pool the receiver even if there isn't a value there.
         while let Some(state) = state_receiver.next().now_or_never().flatten() {

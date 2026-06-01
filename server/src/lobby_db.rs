@@ -51,9 +51,7 @@ async fn run_lobby_actor(
                     }
                 }
                 let current_state = current_round.compute_state();
-                println!(
-                    "{lobby_id}: Current game state: {current_state:?}"
-                );
+                println!("{lobby_id}: Current game state: {current_state:?}");
                 if let Err(e) = lobby_db_sender.send(LobbyDBMessage::LobbyMessage(
                     lobby_id,
                     LobbyMessage::GameState(current_state),
@@ -302,7 +300,7 @@ pub enum PlayerSide {
 pub enum LobbyMessage {
     Heartbeat,
     Text(String),
-    GameState(RPSGameState)
+    GameState(RPSGameState),
 }
 
 pub enum LobbyDBMessage {
