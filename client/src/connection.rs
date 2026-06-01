@@ -13,10 +13,20 @@ pub type ClientRpcReceiver = UnboundedReceiver<RpcClientMessage>;
 pub type ServerRpcSender = UnboundedSender<RpcServerMessage>;
 pub type ServerRpcReceiver = UnboundedReceiver<RpcServerMessage>;
 
-pub fn make_channels() -> (ClientRpcSender, ClientRpcReceiver, ServerRpcSender, ServerRpcReceiver) {
+pub fn make_channels() -> (
+    ClientRpcSender,
+    ClientRpcReceiver,
+    ServerRpcSender,
+    ServerRpcReceiver,
+) {
     let (client_rpc_sender, client_rpc_receiver) = unbounded();
     let (server_rpc_sender, server_rpc_receiver) = unbounded();
-    (client_rpc_sender, client_rpc_receiver, server_rpc_sender, server_rpc_receiver)
+    (
+        client_rpc_sender,
+        client_rpc_receiver,
+        server_rpc_sender,
+        server_rpc_receiver,
+    )
 }
 
 const SERVER_ADDRESS: &str = "ws://127.0.0.1:12345/";
@@ -56,9 +66,9 @@ pub async fn connect_to_websocket_server_wasm(
     let (mut send_stream, mut recv_stream) = wsio.split();
 
     spawn_local(async move {
-        let mut  client_rpc_receiver =  client_rpc_receiver;
+        let mut client_rpc_receiver = client_rpc_receiver;
         loop {
-            match  client_rpc_receiver.next().await {
+            match client_rpc_receiver.next().await {
                 Some(rpc_message) => {
                     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&rpc_message).unwrap();
                     if let Err(e) = send_stream
