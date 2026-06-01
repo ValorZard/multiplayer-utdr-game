@@ -11,7 +11,11 @@ use tokio::{
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
 
-use crate::{encode_server_message, lobby::{LobbyData, LobbyError, LobbyState}, rps::GameSession};
+use crate::{
+    encode_server_message,
+    lobby::{LobbyData, LobbyError, LobbyState},
+    rps::GameSession,
+};
 
 type LobbyId = Uuid;
 
