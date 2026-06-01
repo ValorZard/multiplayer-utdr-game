@@ -2,9 +2,10 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::GameInput;
+use rpc::{GameInput, RPSGameState};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
+use futures_util::{FutureExt, StreamExt};
 
 mod connection;
 
@@ -62,9 +63,12 @@ async fn main() {
     let mut opacity = 1.0;
     let mut circle_color = [1.0, 0.0, 0.0];
 
+    let mut current_game_state : Option<RPSGameState> = None;
     while window.render_2d(&mut scene, &mut camera).await {
-        while let Some(state) = connection::try_recv_state(&mut state_receiver) {
-            log!("Latest game state: {state:?}");
+        // immediately pool the receiver even if there isn't a value there.
+        while let Some(state) = state_receiver.next().now_or_never().flatten() {
+            log!("{state:?}");
+            current_game_state = Some(state);
         }
 
         for event in window.events().iter() {
@@ -98,19 +102,18 @@ async fn main() {
                 .default_width(300.0)
                 .show(ctx, |ui| {
                     // Rotation control
-                    ui.label("Rotation Speed:");
-                    ui.add(egui::Slider::new(&mut rotation_speed, 0.0..=0.1));
+                    ui.label(format!("{current_game_state:?}"));
 
                     ui.separator();
 
                     if ui.button("Rock").clicked() {
-                        connection::send_input(&input_sender, GameInput::Rock);
+                        let _ = input_sender.unbounded_send(GameInput::Rock);
                     }
                     if ui.button("Paper").clicked() {
-                        connection::send_input(&input_sender, GameInput::Paper);
+                        let _ = input_sender.unbounded_send(GameInput::Paper);
                     }
                     if ui.button("Scissors").clicked() {
-                        connection::send_input(&input_sender, GameInput::Scissors);
+                        let _ = input_sender.unbounded_send(GameInput::Scissors);
                     }
 
                     // Opacity control

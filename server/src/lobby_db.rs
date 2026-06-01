@@ -1,6 +1,6 @@
 use std::{collections::HashMap, net::SocketAddr};
 
-use rpc::RpcMessage;
+use rpc::{RPSGameState, RpcMessage};
 use tokio::{
     sync::{
         mpsc::{self, UnboundedReceiver, UnboundedSender, error::SendError},
@@ -50,10 +50,17 @@ async fn run_lobby_actor(
                         let _ = current_round.set_right_input(input);
                     }
                 }
+                let current_state = current_round.compute_state();
                 println!(
-                    "{lobby_id}: Current game state: {:?}",
-                    current_round.compute_state()
+                    "{lobby_id}: Current game state: {current_state:?}"
                 );
+                if let Err(e) = lobby_db_sender.send(LobbyDBMessage::LobbyMessage(
+                    lobby_id,
+                    LobbyMessage::GameState(current_state),
+                )) {
+                    println!("Failed to send lobby message to DB actor: {e}");
+                    break;
+                }
             } else {
                 unreachable!(
                     "This should not be possible, do NOT send a RPC into a lobby from a user that's not inside."
@@ -233,7 +240,11 @@ impl LobbyDB {
     pub fn send_message_to_lobby_users(&self, lobby_id: LobbyId, lobby_message: LobbyMessage) {
         println!("Sending message to lobby users {lobby_message:?}");
         // send message
-        let rpc_message = RpcMessage::Text(format!("{lobby_id} : {lobby_message:?}"));
+        let rpc_message = if let LobbyMessage::GameState(state) = lobby_message {
+            RpcMessage::GameState(state)
+        } else {
+            RpcMessage::Text(format!("{lobby_id} : {lobby_message:?}"))
+        };
         // broadcast message to everyone
         let encoded = rpc::encode_message(&rpc_message).unwrap().to_vec();
         if let Some(lobby) = self.running_lobby_list.get(&lobby_id) {
@@ -291,6 +302,7 @@ pub enum PlayerSide {
 pub enum LobbyMessage {
     Heartbeat,
     Text(String),
+    GameState(RPSGameState)
 }
 
 pub enum LobbyDBMessage {
