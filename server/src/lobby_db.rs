@@ -1,6 +1,6 @@
 use std::{collections::HashMap, net::SocketAddr};
 
-use rpc::{RPSGameState, RpcMessage};
+use rpc::{RPSGameState, RpcClientMessage, RpcServerMessage};
 use tokio::{
     sync::{
         mpsc::{self, UnboundedReceiver, UnboundedSender, error::SendError},
@@ -11,10 +11,7 @@ use tokio::{
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
 
-use crate::{
-    lobby::{LobbyData, LobbyError, LobbyState},
-    rps::GameSession,
-};
+use crate::{encode_server_message, lobby::{LobbyData, LobbyError, LobbyState}, rps::GameSession};
 
 type LobbyId = Uuid;
 
@@ -40,7 +37,7 @@ async fn run_lobby_actor(
     let mut current_round = GameSession::new();
     while let Some(rpc_message) = lobby_rpc_receiver.recv().await {
         println!("{rpc_message:?}");
-        if let RpcMessage::GameInput(input) = rpc_message.message {
+        if let RpcClientMessage::GameInput(input) = rpc_message.message {
             if let Some(player_side) = rpc_message.player_side {
                 match player_side {
                     PlayerSide::Left => {
@@ -239,12 +236,12 @@ impl LobbyDB {
         println!("Sending message to lobby users {lobby_message:?}");
         // send message
         let rpc_message = if let LobbyMessage::GameState(state) = lobby_message {
-            RpcMessage::GameState(state)
+            RpcServerMessage::GameState(state)
         } else {
-            RpcMessage::Text(format!("{lobby_id} : {lobby_message:?}"))
+            RpcServerMessage::Text(format!("{lobby_id} : {lobby_message:?}"))
         };
         // broadcast message to everyone
-        let encoded = rpc::encode_message(&rpc_message).unwrap().to_vec();
+        let encoded = encode_server_message(&rpc_message).unwrap().to_vec();
         if let Some(lobby) = self.running_lobby_list.get(&lobby_id) {
             if let Some(addr) = lobby.get_left() {
                 let _ = self
@@ -285,7 +282,7 @@ impl LobbyDB {
 
 #[derive(Debug, Clone)]
 pub struct UserRPCMessage {
-    pub message: RpcMessage,
+    pub message: RpcClientMessage,
     pub send_addr: SocketAddr,
     pub player_side: Option<PlayerSide>,
 }

@@ -3,7 +3,8 @@ use futures_util::FutureExt;
 use futures_util::{SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
-use rpc::{GameInput, RPSGameState, RpcMessage};
+use rkyv::util::AlignedVec;
+use rpc::{GameInput, RPSGameState, RpcClientMessage, RpcServerMessage};
 #[cfg(target_arch = "wasm32")]
 use ws_stream_wasm::{WsMessage, WsMeta};
 
@@ -30,6 +31,17 @@ macro_rules! log {
     };
 }
 
+// messages sent from a websocket stream might not be aligned to what rkyv wants
+pub fn decode_server_message(bytes: &[u8]) -> Result<RpcServerMessage, rkyv::rancor::Error> {
+    let mut aligned: rkyv::util::AlignedVec = rkyv::util::AlignedVec::new();
+    aligned.extend_from_slice(bytes);
+    rkyv::from_bytes::<RpcServerMessage, rkyv::rancor::Error>(aligned.as_ref())
+}
+
+pub fn encode_client_message(message: &RpcClientMessage) -> Result<AlignedVec, rkyv::rancor::Error> {
+    rkyv::to_bytes::<rkyv::rancor::Error>(message)
+}
+
 #[cfg(target_arch = "wasm32")]
 pub async fn connect_to_websocket_server_wasm(
     input_receiver: InputReceiver,
@@ -46,7 +58,7 @@ pub async fn connect_to_websocket_server_wasm(
         loop {
             match input_receiver.next().await {
                 Some(input) => {
-                    let message_to_send = RpcMessage::GameInput(input);
+                    let message_to_send = RpcClientMessage::GameInput(input);
                     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
                     if let Err(e) = send_stream
                         .send(WsMessage::Binary(bytes.to_vec().into()))
@@ -67,9 +79,9 @@ pub async fn connect_to_websocket_server_wasm(
                     log!("Received text: {:?}", msg);
                 }
                 WsMessage::Binary(msg) => {
-                    let deserialized = rpc::decode_message(msg.as_ref()).unwrap();
+                    let deserialized = decode_server_message(msg.as_ref()).unwrap();
                     log!("Received binary: {:?}", deserialized);
-                    if let RpcMessage::GameState(state) = deserialized {
+                    if let RpcServerMessage::GameState(state) = deserialized {
                         let _ = state_sender.unbounded_send(state);
                     }
                 }
@@ -108,7 +120,7 @@ pub fn connect_to_websocket_server_native(
 
             let send_loop = tokio::spawn(async move {
                 while let Some(input) = input_receiver.next().await {
-                    let message_to_send = rpc::RpcMessage::GameInput(input);
+                    let message_to_send = rpc::RpcClientMessage::GameInput(input);
                     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&message_to_send).unwrap();
                     if let Err(e) = send_stream
                         .send(Message::Binary(bytes.to_vec().into()))
@@ -127,9 +139,9 @@ pub fn connect_to_websocket_server_native(
                             println!("Received text: {:?}", msg);
                         }
                         Ok(Message::Binary(msg)) => {
-                            let deserialized = rpc::decode_message(msg.as_ref()).unwrap();
+                            let deserialized = decode_server_message(msg.as_ref()).unwrap();
                             println!("Received binary: {:?}", deserialized);
-                            if let RpcMessage::GameState(state) = deserialized {
+                            if let RpcServerMessage::GameState(state) = deserialized {
                                 let _ = state_sender.unbounded_send(state);
                             }
                         }
