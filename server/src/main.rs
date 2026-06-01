@@ -1,4 +1,7 @@
 use futures_util::{SinkExt, StreamExt, future, pin_mut, stream::TryStreamExt};
+use rkyv::rancor;
+use rkyv::util::AlignedVec;
+use rpc::{RpcClientMessage, RpcServerMessage};
 use std::{
     cell::{LazyCell, OnceCell},
     collections::HashMap,
@@ -7,9 +10,6 @@ use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
-use rkyv::rancor;
-use rkyv::util::AlignedVec;
-use rpc::{RpcClientMessage, RpcServerMessage};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{mpsc, oneshot},

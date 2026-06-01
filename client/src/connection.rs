@@ -38,7 +38,9 @@ pub fn decode_server_message(bytes: &[u8]) -> Result<RpcServerMessage, rkyv::ran
     rkyv::from_bytes::<RpcServerMessage, rkyv::rancor::Error>(aligned.as_ref())
 }
 
-pub fn encode_client_message(message: &RpcClientMessage) -> Result<AlignedVec, rkyv::rancor::Error> {
+pub fn encode_client_message(
+    message: &RpcClientMessage,
+) -> Result<AlignedVec, rkyv::rancor::Error> {
     rkyv::to_bytes::<rkyv::rancor::Error>(message)
 }
 
