@@ -7,8 +7,9 @@ use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
-
-use rpc::RpcMessage;
+use rkyv::rancor;
+use rkyv::util::AlignedVec;
+use rpc::{RpcClientMessage, RpcServerMessage};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{mpsc, oneshot},
@@ -27,6 +28,17 @@ const SERVER_HOSTING_ADDRESS: &str = "0.0.0.0:12345";
 mod lobby;
 mod lobby_db;
 mod rps;
+
+// messages sent from a websocket stream might not be aligned to what rkyv wants
+pub fn decode_client_message(bytes: &[u8]) -> Result<RpcClientMessage, rancor::Error> {
+    let mut aligned: rkyv::util::AlignedVec = rkyv::util::AlignedVec::new();
+    aligned.extend_from_slice(bytes);
+    rkyv::from_bytes::<RpcClientMessage, rancor::Error>(aligned.as_ref())
+}
+
+pub fn encode_server_message(message: &RpcServerMessage) -> Result<AlignedVec, rancor::Error> {
+    rkyv::to_bytes::<rancor::Error>(message)
+}
 
 async fn handle_connection(
     raw_stream: TcpStream,
@@ -57,7 +69,7 @@ async fn handle_connection(
 
     let broadcast_incoming = incoming.try_for_each(|msg| {
         match &msg {
-            WsMessage::Binary(bytes) => match rpc::decode_message(bytes) {
+            WsMessage::Binary(bytes) => match decode_client_message(bytes) {
                 Ok(decoded) => {
                     println!("Received a binary message from {}: {:?}", addr, decoded);
                     let _ = lobby_db_sender.send(LobbyDBMessage::UserRPCMessage(UserRPCMessage {
