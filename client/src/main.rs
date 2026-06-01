@@ -3,7 +3,7 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{GameInput, RPSGameState};
+use rpc::{GameInput, RPSGameState, RpcClientMessage, RpcServerMessage};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
@@ -22,20 +22,20 @@ async fn main() {
     let image_texture =
         texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
 
-    let (input_sender, input_receiver, state_sender, mut state_receiver) =
+    let (client_rpc_sender, client_rpc_receiver, server_rpc_sender, mut server_rpc_receiver) =
         connection::make_channels();
 
     #[cfg(target_arch = "wasm32")]
     {
         spawn_local(async move {
-            crate::connection::connect_to_websocket_server_wasm(input_receiver, state_sender).await;
+            crate::connection::connect_to_websocket_server_wasm(client_rpc_receiver, server_rpc_sender).await;
         });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _connection_handle = thread::spawn(move || {
-            crate::connection::connect_to_websocket_server_native(input_receiver, state_sender)
+            crate::connection::connect_to_websocket_server_native(client_rpc_receiver, server_rpc_sender)
         });
     }
 
@@ -66,9 +66,16 @@ async fn main() {
     let mut current_game_state: Option<RPSGameState> = None;
     while window.render_2d(&mut scene, &mut camera).await {
         // immediately pool the receiver even if there isn't a value there.
-        while let Some(state) = state_receiver.next().now_or_never().flatten() {
-            log!("{state:?}");
-            current_game_state = Some(state);
+        while let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten() {
+            log!("{rpc_message:?}");
+            match rpc_message {
+                RpcServerMessage::Text(text) => {
+                    // TODO: Do something here I guess
+                }
+                RpcServerMessage::GameState(game_state) => {
+                    current_game_state = Some(game_state);
+                }
+            }
         }
 
         for event in window.events().iter() {
@@ -107,13 +114,13 @@ async fn main() {
                     ui.separator();
 
                     if ui.button("Rock").clicked() {
-                        let _ = input_sender.unbounded_send(GameInput::Rock);
+                        let _ = client_rpc_sender.unbounded_send(RpcClientMessage::GameInput(GameInput::Rock));
                     }
                     if ui.button("Paper").clicked() {
-                        let _ = input_sender.unbounded_send(GameInput::Paper);
+                        let _ = client_rpc_sender.unbounded_send(RpcClientMessage::GameInput(GameInput::Paper));
                     }
                     if ui.button("Scissors").clicked() {
-                        let _ = input_sender.unbounded_send(GameInput::Scissors);
+                        let _ = client_rpc_sender.unbounded_send(RpcClientMessage::GameInput(GameInput::Scissors));
                     }
 
                     // Opacity control
