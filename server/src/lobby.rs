@@ -108,3 +108,23 @@ impl LobbyData {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+    #[test]
+    fn lobby_tests() {
+        // start with dummy left user
+        let dummy_left = SocketAddr::from_str("127.0.0.1:1234").unwrap();
+        let dummy_right = SocketAddr::from_str("127.0.0.1:12342").unwrap();
+        let mut lobby = LobbyData::new(dummy_left);
+        assert_eq!(lobby.get_current_state(), LobbyState::Waiting);
+        lobby.insert_player(dummy_right).unwrap();
+        assert_eq!(lobby.get_current_state(), LobbyState::Full);
+        lobby.remove_player(dummy_left).unwrap();
+        assert_eq!(lobby.get_current_state(), LobbyState::Waiting);
+        lobby.remove_player(dummy_right).unwrap();
+        assert_eq!(lobby.get_current_state(), LobbyState::Empty);
+    }
+}
