@@ -1,7 +1,9 @@
+use anyhow::Result;
 use futures_util::{SinkExt, StreamExt, future, pin_mut, stream::TryStreamExt};
 use rkyv::rancor;
 use rkyv::util::AlignedVec;
 use rpc::{RpcClientMessage, RpcServerMessage};
+use sqlx::postgres::PgPoolOptions;
 use std::{
     cell::{LazyCell, OnceCell},
     collections::HashMap,
@@ -17,7 +19,6 @@ use tokio::{
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
-
 use uuid::Uuid;
 
 use crate::lobby_db::run_lobby_db_actor;
@@ -119,11 +120,26 @@ async fn handle_connection(
 }
 
 #[tokio::main]
-async fn main() -> Result<(), IoError> {
+async fn main() -> Result<()> {
     // Create the event loop and TCP listener we'll accept connections on.
     let try_socket = TcpListener::bind(SERVER_HOSTING_ADDRESS).await;
     let listener = try_socket.expect("Failed to bind");
     println!("Listening on: {}", SERVER_HOSTING_ADDRESS);
+
+    // set up database
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect("postgres://postgres:password@localhost/test")
+        .await?;
+
+    // Make a simple query to return the given parameter (use a question mark `?` instead of `$1` for MySQL/MariaDB)
+    let row: (i64,) = sqlx::query_as("SELECT $1")
+        .bind(150_i64)
+        .fetch_one(&pool)
+        .await?;
+
+    assert_eq!(row.0, 150);
+    println!("Postgres result: {row:?}");
 
     // spawn lobby actor
     let (lobby_db_sender, lobby_db_receiver) = mpsc::unbounded_channel();
