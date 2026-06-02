@@ -13,6 +13,7 @@ use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
+use ipnet::IpNet;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{mpsc, oneshot},
@@ -146,16 +147,18 @@ async fn main() -> Result<()> {
     // Let's spawn the handling of each connection in a separate task.
     while let Ok((stream, addr)) = listener.accept().await {
         // insert user into table
-        let ip = addr.ip();
-        let rec = sqlx::query(
+        let ip: IpNet = addr.ip().into();
+        let user_id = sqlx::query!(
             r#"
 INSERT INTO users ( ip )
 VALUES ( $1 )
 RETURNING id
         "#,
-        ).bind(ip)
+            ip
+        )
         .fetch_one(&pool)
         .await?;
+        println!("New user {user_id:?}");
         tokio::spawn(handle_connection(stream, addr, lobby_db_sender.clone()));
     }
 
