@@ -7,6 +7,7 @@ use sqlx::postgres::PgPoolOptions;
 use std::{
     cell::{LazyCell, OnceCell},
     collections::HashMap,
+    env,
     hash::Hash,
     io::Error as IoError,
     net::SocketAddr,
@@ -121,6 +122,7 @@ async fn handle_connection(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
     // Create the event loop and TCP listener we'll accept connections on.
     let try_socket = TcpListener::bind(SERVER_HOSTING_ADDRESS).await;
     let listener = try_socket.expect("Failed to bind");
@@ -129,17 +131,10 @@ async fn main() -> Result<()> {
     // set up database
     let pool = PgPoolOptions::new()
         .max_connections(5)
-        .connect("postgres://postgres:password@localhost/test")
+        .connect(&env::var("DATABASE_URL")?)
         .await?;
 
-    // Make a simple query to return the given parameter (use a question mark `?` instead of `$1` for MySQL/MariaDB)
-    let row: (i64,) = sqlx::query_as("SELECT $1")
-        .bind(150_i64)
-        .fetch_one(&pool)
-        .await?;
-
-    assert_eq!(row.0, 150);
-    println!("Postgres result: {row:?}");
+    // create table for users if not exists
 
     // spawn lobby actor
     let (lobby_db_sender, lobby_db_receiver) = mpsc::unbounded_channel();
@@ -150,6 +145,17 @@ async fn main() -> Result<()> {
 
     // Let's spawn the handling of each connection in a separate task.
     while let Ok((stream, addr)) = listener.accept().await {
+        // insert user into table
+        let ip = addr.ip();
+        let rec = sqlx::query(
+            r#"
+INSERT INTO users ( ip )
+VALUES ( $1 )
+RETURNING id
+        "#,
+        ).bind(ip)
+        .fetch_one(&pool)
+        .await?;
         tokio::spawn(handle_connection(stream, addr, lobby_db_sender.clone()));
     }
 
