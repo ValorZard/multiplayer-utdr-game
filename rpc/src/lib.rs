@@ -14,7 +14,7 @@ pub enum RpcClientMessage {
     GameInput(GameInput),
 }
 
-pub type LobbyId = Uuid;
+pub type LobbyId = i64;
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(

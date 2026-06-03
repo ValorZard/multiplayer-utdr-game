@@ -1,9 +1,12 @@
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt, future, pin_mut, stream::TryStreamExt};
+use ipnet::IpNet;
 use rkyv::rancor;
 use rkyv::util::AlignedVec;
 use rpc::{RpcClientMessage, RpcServerMessage};
+use sqlx::pool::PoolConnection;
 use sqlx::postgres::PgPoolOptions;
+use sqlx::{Connection, PgPool, Postgres};
 use std::{
     cell::{LazyCell, OnceCell},
     collections::HashMap,
@@ -13,7 +16,6 @@ use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
-use ipnet::IpNet;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{mpsc, oneshot},
@@ -23,13 +25,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 use uuid::Uuid;
 
-use crate::lobby_db::run_lobby_db_actor;
-use crate::lobby_db::{LobbyDBMessage, UserRPCMessage};
-
 const SERVER_HOSTING_ADDRESS: &str = "0.0.0.0:12345";
-
-mod lobby;
-mod lobby_db;
 mod rps;
 
 // messages sent from a websocket stream might not be aligned to what rkyv wants
@@ -46,8 +42,8 @@ pub fn encode_server_message(message: &RpcServerMessage) -> Result<AlignedVec, r
 async fn handle_connection(
     raw_stream: TcpStream,
     addr: SocketAddr,
-    lobby_db_sender: mpsc::UnboundedSender<LobbyDBMessage>,
-) {
+    mut db_executor: PgPool,
+) -> Result<()> {
     println!("Incoming TCP connection from: {}", addr);
 
     let ws_stream = tokio_tungstenite::accept_async(raw_stream)
@@ -55,23 +51,42 @@ async fn handle_connection(
         .expect("Error during the websocket handshake occurred");
     println!("WebSocket connection established: {}", addr);
 
+    // insert user into table
+    let ip: IpNet = addr.ip().into();
+    let user_id = sqlx::query!(
+        r#"
+INSERT INTO users ( ip )
+VALUES ( $1 )
+RETURNING id
+        "#,
+        ip
+    )
+    .fetch_one(&db_executor)
+    .await?;
+    println!("New user {user_id:?}");
+
     // Insert the write part of this peer to the peer map.
     let (user_sender, user_receiver) = mpsc::unbounded_channel();
 
     // assign this peer to a lobby
-    let (id_sender, id_receiver) = oneshot::channel();
-    lobby_db_sender
-        .send(LobbyDBMessage::NewUser(addr, id_sender, user_sender))
-        .expect("initial lobby message should be sent");
-    // get our lobby id
-    let lobby_id = id_receiver.await.expect("We should be assigned a LobbyId");
+    let lobby_id = sqlx::query!(
+        r#"
+INSERT INTO lobbies ( left_player, right_player )
+VALUES ( $1, $2 )
+RETURNING id
+        "#,
+        user_id.id,
+        None::<i64>
+    )
+        .fetch_one(&db_executor)
+        .await?;
 
-    println!("Player assigned to lobby {lobby_id}");
+    println!("Player assigned to lobby {lobby_id:?}");
 
     let (mut outgoing, incoming) = ws_stream.split();
 
     // send our lobby id first
-    let bytes = encode_server_message(&RpcServerMessage::Lobby(lobby_id))
+    let bytes = encode_server_message(&RpcServerMessage::Lobby(lobby_id.id))
         .expect("Error serializing LobbyMessage");
     outgoing
         .send(WsMessage::Binary(bytes.to_vec().into()))
@@ -83,11 +98,6 @@ async fn handle_connection(
             WsMessage::Binary(bytes) => match decode_client_message(bytes) {
                 Ok(decoded) => {
                     println!("Received a binary message from {}: {:?}", addr, decoded);
-                    let _ = lobby_db_sender.send(LobbyDBMessage::UserRPCMessage(UserRPCMessage {
-                        message: decoded,
-                        send_addr: addr,
-                        player_side: None,
-                    }));
                 }
                 Err(err) => {
                     println!("Failed to decode binary message from {}: {:?}", addr, err)
@@ -116,10 +126,9 @@ async fn handle_connection(
     future::select(broadcast_incoming, receive_from_others).await;
 
     println!("{} disconnected", &addr);
-    lobby_db_sender
-        .send(LobbyDBMessage::RemoveUser(addr))
-        .expect("This message is really important since it delete the user");
+    Ok(())
 }
+
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -137,29 +146,14 @@ async fn main() -> Result<()> {
 
     // create table for users if not exists
 
-    // spawn lobby actor
-    let (lobby_db_sender, lobby_db_receiver) = mpsc::unbounded_channel();
-    tokio::spawn(run_lobby_db_actor(
-        lobby_db_sender.clone(),
-        lobby_db_receiver,
-    ));
-
     // Let's spawn the handling of each connection in a separate task.
     while let Ok((stream, addr)) = listener.accept().await {
-        // insert user into table
-        let ip: IpNet = addr.ip().into();
-        let user_id = sqlx::query!(
-            r#"
-INSERT INTO users ( ip )
-VALUES ( $1 )
-RETURNING id
-        "#,
-            ip
-        )
-        .fetch_one(&pool)
-        .await?;
-        println!("New user {user_id:?}");
-        tokio::spawn(handle_connection(stream, addr, lobby_db_sender.clone()));
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            if let Err(err) = handle_connection(stream, addr, pool).await {
+                eprintln!("connection handler error for {addr}: {err:#}");
+            }
+        });
     }
 
     Ok(())
