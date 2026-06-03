@@ -69,24 +69,84 @@ RETURNING id
     let (user_sender, user_receiver) = mpsc::unbounded_channel();
 
     // assign this peer to a lobby
-    let lobby_id = sqlx::query!(
+    // first check if we have a lobby waiting a player
+    let lobby_id;
+
+    // Try lobby with left occupied / right empty
+    if let Ok(row) = sqlx::query!(
         r#"
-INSERT INTO lobbies ( left_player, right_player )
-VALUES ( $1, $2 )
-RETURNING id
-        "#,
-        user_id.id,
-        None::<i64>
+SELECT id
+FROM lobbies
+WHERE left_player IS NOT NULL
+  AND right_player IS NULL
+FOR UPDATE SKIP LOCKED
+LIMIT 1
+    "#
     )
-        .fetch_one(&db_executor)
+    .fetch_one(&db_executor)
+    .await
+    {
+        sqlx::query!(
+            r#"
+UPDATE lobbies
+SET right_player = $1
+WHERE id = $2
+        "#,
+            user_id.id,
+            row.id
+        )
+        .execute(&db_executor)
         .await?;
+        lobby_id = row.id;
+    }
+    // Try lobby with right occupied / left empty
+    else if let Ok(row) = sqlx::query!(
+        r#"
+SELECT id
+FROM lobbies
+WHERE left_player IS NULL
+  AND right_player IS NOT NULL
+FOR UPDATE SKIP LOCKED
+LIMIT 1
+    "#
+    )
+    .fetch_one(&db_executor)
+    .await
+    {
+        sqlx::query!(
+            r#"
+UPDATE lobbies
+SET left_player = $1
+WHERE id = $2
+        "#,
+            user_id.id,
+            row.id
+        )
+        .execute(&db_executor)
+        .await?;
+
+        lobby_id = row.id;
+    } else {
+        // Otherwise create a new lobby and place player in left slot
+        lobby_id = sqlx::query!(
+            r#"
+INSERT INTO lobbies (left_player, right_player)
+VALUES ($1, NULL)
+RETURNING id
+    "#,
+            user_id.id
+        )
+        .fetch_one(&db_executor)
+        .await?
+        .id;
+    }
 
     println!("Player assigned to lobby {lobby_id:?}");
 
     let (mut outgoing, incoming) = ws_stream.split();
 
     // send our lobby id first
-    let bytes = encode_server_message(&RpcServerMessage::Lobby(lobby_id.id))
+    let bytes = encode_server_message(&RpcServerMessage::Lobby(lobby_id))
         .expect("Error serializing LobbyMessage");
     outgoing
         .send(WsMessage::Binary(bytes.to_vec().into()))
@@ -128,7 +188,6 @@ RETURNING id
     println!("{} disconnected", &addr);
     Ok(())
 }
-
 
 #[tokio::main]
 async fn main() -> Result<()> {
