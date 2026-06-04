@@ -1,7 +1,8 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
-
+use anyhow::bail;
 use rpc::{LobbyId, RPSGameState, RpcClientMessage, RpcServerMessage};
-use tokio::sync::{mpsc::UnboundedSender, Mutex};
+use std::error::Error;
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use tokio::sync::{Mutex, mpsc::UnboundedSender};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
 
@@ -12,7 +13,6 @@ use crate::{
 };
 
 type UserSender = UnboundedSender<WsMessage>;
-pub type SharedServerState = Arc<Mutex<ServerState>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerSide {
@@ -83,14 +83,14 @@ struct UserData {
     sender: UserSender,
 }
 
-pub struct ServerState {
+struct ServerStateInner {
     user_list: HashMap<SocketAddr, UserData>,
     running_lobby_list: HashMap<LobbyId, LobbySession>,
     waiting_lobby_list: HashMap<LobbyId, LobbySession>,
 }
 
-impl ServerState {
-    pub fn new() -> Self {
+impl ServerStateInner {
+    fn new() -> Self {
         Self {
             user_list: HashMap::new(),
             running_lobby_list: HashMap::new(),
@@ -98,7 +98,7 @@ impl ServerState {
         }
     }
 
-    pub fn insert_user(&mut self, addr: SocketAddr, sender: UserSender) -> LobbyId {
+    fn insert_user(&mut self, addr: SocketAddr, sender: UserSender) -> LobbyId {
         if let Some(existing) = self.user_list.get(&addr) {
             return existing.lobby_id;
         }
@@ -134,7 +134,7 @@ impl ServerState {
         lobby_id
     }
 
-    pub fn remove_user(&mut self, addr: SocketAddr) {
+    fn remove_user(&mut self, addr: SocketAddr) {
         let Some(user_data) = self.user_list.remove(&addr) else {
             return;
         };
@@ -170,12 +170,9 @@ impl ServerState {
         }
     }
 
-    pub fn handle_user_rpc(
-        &mut self,
-        user_rpc_message: UserRPCMessage,
-    ) -> Vec<(UserSender, WsMessage)> {
+    fn handle_user_rpc(&mut self, user_rpc_message: UserRPCMessage) -> anyhow::Result<()> {
         let Some(user_data) = self.user_list.get(&user_rpc_message.send_addr) else {
-            return vec![];
+            bail!("Expect user to be in user list");
         };
 
         let lobby_id = user_data.lobby_id;
@@ -211,12 +208,13 @@ impl ServerState {
                 let current_state = lobby.current_round.compute_state();
                 println!("{lobby_id}: Current game state: {current_state:?}");
 
-                self.collect_lobby_broadcast(
-                    lobby_id,
-                    LobbyMessage::GameState(current_state),
-                )
+                let outgoing_messages = self.collect_lobby_broadcast(lobby_id, LobbyMessage::GameState(current_state));
+                for (sender, msg) in outgoing_messages {
+                    sender.send(msg)?
+                }
+                Ok(())
             }
-            _ => vec![],
+            _ => Ok(()),
         }
     }
 
@@ -247,6 +245,7 @@ impl ServerState {
 
         let mut out = Vec::new();
 
+        // update both left and right side with new game state
         if let Some(addr) = lobby.get_left()
             && let Some(user) = self.user_list.get(&addr)
         {
@@ -260,5 +259,33 @@ impl ServerState {
         }
 
         out
+    }
+}
+
+#[derive(Clone)]
+pub struct ServerState {
+    server_state: Arc<Mutex<ServerStateInner>>,
+}
+
+impl ServerState {
+    pub fn new() -> ServerState {
+        Self {
+            server_state: Arc::new(Mutex::new(ServerStateInner::new())),
+        }
+    }
+
+    pub async fn insert_user(&self, addr: SocketAddr, sender: UserSender) -> LobbyId {
+        self.server_state.lock().await.insert_user(addr, sender)
+    }
+
+    pub async fn remove_user(&self, addr: SocketAddr) {
+        self.server_state.lock().await.remove_user(addr)
+    }
+
+    pub async fn handle_user_rpc(&self, user_rpc_message: UserRPCMessage) -> anyhow::Result<()> {
+        self.server_state
+            .lock()
+            .await
+            .handle_user_rpc(user_rpc_message)
     }
 }
