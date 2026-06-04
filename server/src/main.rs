@@ -55,11 +55,12 @@ async fn handle_connection(
     let ip: IpNet = addr.ip().into();
     let user_id = sqlx::query!(
         r#"
-INSERT INTO users ( ip )
-VALUES ( $1 )
+INSERT INTO users ( ip, port )
+VALUES ( $1, $2 )
 RETURNING id
         "#,
-        ip
+        ip,
+        addr.port() as i32
     )
     .fetch_one(&db_executor)
     .await?;
@@ -68,6 +69,7 @@ RETURNING id
     // Insert the write part of this peer to the peer map.
     let (user_sender, user_receiver) = mpsc::unbounded_channel();
 
+    // TODO: We can probably fit this into a single database call, gotta figure out how to do that.
     // assign this peer to a lobby
     // first check if we have a lobby waiting a player
     let lobby_id;
@@ -186,6 +188,16 @@ RETURNING id
     future::select(broadcast_incoming, receive_from_others).await;
 
     println!("{} disconnected", &addr);
+
+    // remove user from database and lobby
+    sqlx::query!("DELETE FROM users where id = $1", user_id.id).execute(&db_executor)
+        .await?;
+    sqlx::query!("UPDATE lobbies SET left_player = NULL where left_player = $1", user_id.id).execute(&db_executor)
+        .await?;
+    sqlx::query!("UPDATE lobbies SET right_player = NULL where right_player = $1", user_id.id).execute(&db_executor)
+        .await?;
+    sqlx::query!("DELETE FROM lobbies WHERE left_player IS NULL AND right_player IS NULL").execute(&db_executor)
+        .await?;
     Ok(())
 }
 

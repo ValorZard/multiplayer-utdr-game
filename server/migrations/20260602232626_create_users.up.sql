@@ -2,5 +2,6 @@
 CREATE TABLE IF NOT EXISTS users
 (
     id          BIGSERIAL PRIMARY KEY,
-    ip          INET    NOT NULL
+    ip          INET    NOT NULL,
+    port        INTEGER NOT NULL
 );
