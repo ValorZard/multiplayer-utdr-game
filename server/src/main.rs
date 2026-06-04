@@ -20,8 +20,8 @@ use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 
 use uuid::Uuid;
 
-use crate::lobby_db::run_lobby_db_actor;
-use crate::lobby_db::{LobbyDBMessage, UserRPCMessage};
+use crate::lobby_db::{ServerState};
+use crate::lobby_db::{UserRPCMessage};
 
 const SERVER_HOSTING_ADDRESS: &str = "0.0.0.0:12345";
 
@@ -43,7 +43,7 @@ pub fn encode_server_message(message: &RpcServerMessage) -> Result<AlignedVec, r
 async fn handle_connection(
     raw_stream: TcpStream,
     addr: SocketAddr,
-    lobby_db_sender: mpsc::UnboundedSender<LobbyDBMessage>,
+    server_state: Arc<Mutex<ServerState>>,
 ) {
     println!("Incoming TCP connection from: {}", addr);
 
@@ -56,12 +56,10 @@ async fn handle_connection(
     let (user_sender, user_receiver) = mpsc::unbounded_channel();
 
     // assign this peer to a lobby
-    let (id_sender, id_receiver) = oneshot::channel();
-    lobby_db_sender
-        .send(LobbyDBMessage::NewUser(addr, id_sender, user_sender))
-        .expect("initial lobby message should be sent");
-    // get our lobby id
-    let lobby_id = id_receiver.await.expect("We should be assigned a LobbyId");
+    let lobby_id = {
+        let mut server_state = server_state.lock().unwrap();
+        server_state.insert_user(addr, user_sender)
+    };
 
     println!("Player assigned to lobby {lobby_id}");
 
@@ -80,11 +78,21 @@ async fn handle_connection(
             WsMessage::Binary(bytes) => match decode_client_message(bytes) {
                 Ok(decoded) => {
                     println!("Received a binary message from {}: {:?}", addr, decoded);
-                    let _ = lobby_db_sender.send(LobbyDBMessage::UserRPCMessage(UserRPCMessage {
+
+                    let user_rpc_message = UserRPCMessage {
                         message: decoded,
                         send_addr: addr,
                         player_side: None,
-                    }));
+                    };
+
+                    let outgoing_messages = {
+                        let mut server_state = server_state.lock().unwrap();
+                        server_state.handle_user_rpc(user_rpc_message)
+                    };
+
+                    for (sender, msg) in outgoing_messages {
+                        let _ = sender.send(msg);
+                    }
                 }
                 Err(err) => {
                     println!("Failed to decode binary message from {}: {:?}", addr, err)
@@ -113,9 +121,9 @@ async fn handle_connection(
     future::select(broadcast_incoming, receive_from_others).await;
 
     println!("{} disconnected", &addr);
-    lobby_db_sender
-        .send(LobbyDBMessage::RemoveUser(addr))
-        .expect("This message is really important since it delete the user");
+    {
+        server_state.lock().unwrap().remove_user(addr);
+    }
 }
 
 #[tokio::main]
@@ -126,15 +134,11 @@ async fn main() -> Result<(), IoError> {
     println!("Listening on: {}", SERVER_HOSTING_ADDRESS);
 
     // spawn lobby actor
-    let (lobby_db_sender, lobby_db_receiver) = mpsc::unbounded_channel();
-    tokio::spawn(run_lobby_db_actor(
-        lobby_db_sender.clone(),
-        lobby_db_receiver,
-    ));
+    let server_state = Arc::new(Mutex::new(ServerState::new()));
 
     // Let's spawn the handling of each connection in a separate task.
     while let Ok((stream, addr)) = listener.accept().await {
-        tokio::spawn(handle_connection(stream, addr, lobby_db_sender.clone()));
+        tokio::spawn(handle_connection(stream, addr, server_state.clone()));
     }
 
     Ok(())
