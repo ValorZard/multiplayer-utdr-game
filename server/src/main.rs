@@ -20,8 +20,8 @@ use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 
 use uuid::Uuid;
 
-use crate::lobby_db::{ServerState};
-use crate::lobby_db::{UserRPCMessage};
+use crate::lobby_db::ServerState;
+use crate::lobby_db::UserRPCMessage;
 
 const SERVER_HOSTING_ADDRESS: &str = "0.0.0.0:12345";
 
@@ -40,11 +40,7 @@ pub fn encode_server_message(message: &RpcServerMessage) -> Result<AlignedVec, r
     rkyv::to_bytes::<rancor::Error>(message)
 }
 
-async fn handle_connection(
-    raw_stream: TcpStream,
-    addr: SocketAddr,
-    server_state: Arc<Mutex<ServerState>>,
-) {
+async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr, server_state: ServerState) {
     println!("Incoming TCP connection from: {}", addr);
 
     let ws_stream = tokio_tungstenite::accept_async(raw_stream)
@@ -56,10 +52,7 @@ async fn handle_connection(
     let (user_sender, user_receiver) = mpsc::unbounded_channel();
 
     // assign this peer to a lobby
-    let lobby_id = {
-        let mut server_state = server_state.lock().unwrap();
-        server_state.insert_user(addr, user_sender)
-    };
+    let lobby_id = server_state.insert_user(addr, user_sender).await;
 
     println!("Player assigned to lobby {lobby_id}");
 
@@ -74,42 +67,42 @@ async fn handle_connection(
         .expect("initial lobby message should be sent");
 
     let broadcast_incoming = incoming.try_for_each(|msg| {
-        match &msg {
-            WsMessage::Binary(bytes) => match decode_client_message(bytes) {
-                Ok(decoded) => {
-                    println!("Received a binary message from {}: {:?}", addr, decoded);
+        let server_state = server_state.clone();
 
-                    let user_rpc_message = UserRPCMessage {
-                        message: decoded,
-                        send_addr: addr,
-                        player_side: None,
-                    };
+        async move {
+            match &msg {
+                WsMessage::Binary(bytes) => match decode_client_message(bytes) {
+                    Ok(decoded) => {
+                        println!("Received a binary message from {}: {:?}", addr, decoded);
 
-                    let outgoing_messages = {
-                        let mut server_state = server_state.lock().unwrap();
-                        server_state.handle_user_rpc(user_rpc_message)
-                    };
+                        let user_rpc_message = UserRPCMessage {
+                            message: decoded,
+                            send_addr: addr,
+                            player_side: None,
+                        };
 
-                    for (sender, msg) in outgoing_messages {
-                        let _ = sender.send(msg);
+                        server_state
+                            .handle_user_rpc(user_rpc_message)
+                            .await
+                            .expect("Error handling user rpc");
                     }
+                    Err(err) => {
+                        println!("Failed to decode binary message from {}: {:?}", addr, err);
+                    }
+                },
+                WsMessage::Text(text) => {
+                    println!("Received a text message from {}: {}", addr, text);
                 }
-                Err(err) => {
-                    println!("Failed to decode binary message from {}: {:?}", addr, err)
+                other => {
+                    println!(
+                        "Received a websocket control frame from {}: {:?}",
+                        addr, other
+                    );
                 }
-            },
-            WsMessage::Text(text) => {
-                println!("Received a text message from {}: {}", addr, text);
             }
-            other => {
-                println!(
-                    "Received a websocket control frame from {}: {:?}",
-                    addr, other
-                );
-            }
-        }
 
-        future::ok(())
+            Ok(())
+        }
     });
 
     // forward the binary websocket messages from user receiver into the web socket stream itself
@@ -121,9 +114,7 @@ async fn handle_connection(
     future::select(broadcast_incoming, receive_from_others).await;
 
     println!("{} disconnected", &addr);
-    {
-        server_state.lock().unwrap().remove_user(addr);
-    }
+    server_state.remove_user(addr).await;
 }
 
 #[tokio::main]
@@ -134,7 +125,7 @@ async fn main() -> Result<(), IoError> {
     println!("Listening on: {}", SERVER_HOSTING_ADDRESS);
 
     // spawn lobby actor
-    let server_state = Arc::new(Mutex::new(ServerState::new()));
+    let server_state = ServerState::new();
 
     // Let's spawn the handling of each connection in a separate task.
     while let Ok((stream, addr)) = listener.accept().await {
