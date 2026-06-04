@@ -208,7 +208,8 @@ impl ServerStateInner {
                 let current_state = lobby.current_round.compute_state();
                 println!("{lobby_id}: Current game state: {current_state:?}");
 
-                let outgoing_messages = self.collect_lobby_broadcast(lobby_id, LobbyMessage::GameState(current_state));
+                let outgoing_messages =
+                    self.collect_lobby_broadcast(lobby_id, LobbyMessage::GameState(current_state));
                 for (sender, msg) in outgoing_messages {
                     sender.send(msg)?
                 }
