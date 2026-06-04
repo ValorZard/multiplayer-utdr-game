@@ -142,6 +142,8 @@ impl ServerStateInner {
         if let Some(mut lobby) = self.running_lobby_list.remove(&user_data.lobby_id) {
             let state = lobby.remove_player(addr).unwrap();
             assert_eq!(LobbyState::Waiting, state);
+            // reset game when player leaves
+            lobby.current_round = GameSession::new();
 
             self.waiting_lobby_list.insert(user_data.lobby_id, lobby);
             println!(
@@ -150,6 +152,8 @@ impl ServerStateInner {
             );
         } else if let Some(mut lobby) = self.waiting_lobby_list.remove(&user_data.lobby_id) {
             let state = lobby.remove_player(addr).unwrap();
+            // reset game when player leaves
+            lobby.current_round = GameSession::new();
 
             match state {
                 LobbyState::Empty => {
