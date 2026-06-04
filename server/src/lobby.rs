@@ -1,3 +1,4 @@
+use crate::lobby_db::PlayerSide;
 use std::net::SocketAddr;
 
 pub struct LobbyData {
@@ -66,24 +67,27 @@ impl LobbyData {
         }
     }
 
-    pub fn remove_player(&mut self, leaving_player: SocketAddr) -> Result<LobbyState, LobbyError> {
+    pub fn remove_player(
+        &mut self,
+        leaving_player: SocketAddr,
+    ) -> Result<(PlayerSide, LobbyState), LobbyError> {
         if let Some(addr) = self.left_side
             && addr == leaving_player
         {
             let _ = self.left_side.take();
             if self.right_side.is_some() {
-                return Ok(LobbyState::Waiting);
+                return Ok((PlayerSide::Left, LobbyState::Waiting));
             } else {
-                return Ok(LobbyState::Empty);
+                return Ok((PlayerSide::Left, LobbyState::Empty));
             }
         } else if let Some(addr) = self.right_side
             && addr == leaving_player
         {
             let _ = self.right_side.take();
             if self.left_side.is_some() {
-                return Ok(LobbyState::Waiting);
+                return Ok((PlayerSide::Right, LobbyState::Waiting));
             } else {
-                return Ok(LobbyState::Empty);
+                return Ok((PlayerSide::Right, LobbyState::Empty));
             }
         }
 
