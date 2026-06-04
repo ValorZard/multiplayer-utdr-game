@@ -51,7 +51,10 @@ impl LobbySession {
         self.lobby_data.insert_player(new_player)
     }
 
-    pub fn remove_player(&mut self, leaving_player: SocketAddr) -> Result<LobbyState, LobbyError> {
+    pub fn remove_player(
+        &mut self,
+        leaving_player: SocketAddr,
+    ) -> Result<(PlayerSide, LobbyState), LobbyError> {
         self.lobby_data.remove_player(leaving_player)
     }
 
@@ -140,10 +143,32 @@ impl ServerStateInner {
         };
 
         if let Some(mut lobby) = self.running_lobby_list.remove(&user_data.lobby_id) {
-            let state = lobby.remove_player(addr).unwrap();
+            let (player_side, state) = lobby.remove_player(addr).unwrap();
             assert_eq!(LobbyState::Waiting, state);
             // reset game when player leaves
             lobby.current_round = GameSession::new();
+            let current_game_state = lobby.current_round.compute_state();
+            // send player that's left the current state of the game
+            let bytes = encode_server_message(&RpcServerMessage::GameState(current_game_state))
+                .expect("Error serializing LobbyMessage");
+            match player_side {
+                PlayerSide::Left => {
+                    let _ = self
+                        .user_list
+                        .get(&lobby.get_right().unwrap())
+                        .unwrap()
+                        .sender
+                        .send(WsMessage::Binary(bytes.to_vec().into()));
+                }
+                PlayerSide::Right => {
+                    let _ = self
+                        .user_list
+                        .get(&lobby.get_left().unwrap())
+                        .unwrap()
+                        .sender
+                        .send(WsMessage::Binary(bytes.to_vec().into()));
+                }
+            }
 
             self.waiting_lobby_list.insert(user_data.lobby_id, lobby);
             println!(
@@ -151,10 +176,7 @@ impl ServerStateInner {
                 user_data.lobby_id
             );
         } else if let Some(mut lobby) = self.waiting_lobby_list.remove(&user_data.lobby_id) {
-            let state = lobby.remove_player(addr).unwrap();
-            // reset game when player leaves
-            lobby.current_round = GameSession::new();
-
+            let (side_that_left, state) = lobby.remove_player(addr).unwrap();
             match state {
                 LobbyState::Empty => {
                     println!(
@@ -163,11 +185,9 @@ impl ServerStateInner {
                     );
                 }
                 LobbyState::Waiting => {
-                    self.waiting_lobby_list.insert(user_data.lobby_id, lobby);
-                    println!(
-                        "Removed player {addr} from waiting lobby {}, lobby still waiting",
-                        user_data.lobby_id
-                    );
+                    unreachable!(
+                        "removing a player from a waiting lobby cannot leave a lobby waiting, there's only a max of 2 players"
+                    )
                 }
                 LobbyState::Full => unreachable!("removing a player cannot leave a lobby full"),
             }
