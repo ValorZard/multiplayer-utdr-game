@@ -155,18 +155,19 @@ impl ServerStateInner {
                     _ => None,
                 });
 
-        let (player_side, lobby_id, should_start_game) = if let Some(lobby_id) = waiting_lobby_id {
-            let lobby_entry = self.lobby_list.get_mut(&lobby_id).unwrap();
-            let LobbyEntry::Waiting(lobby) = lobby_entry else {
+        let (player_side, lobby_id) = if let Some(lobby_id) = waiting_lobby_id {
+            let lobby_entry = self.lobby_list.remove(&lobby_id).unwrap();
+            let LobbyEntry::Waiting(mut lobby) = lobby_entry else {
                 unreachable!(
                     "This should be waiting since we used find map to find something that matched what we want."
                 );
             };
             lobby.reset_lobby();
             let (player_side, state) = lobby.insert_player(addr)?;
+            self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
             println!("Lobby {lobby_id} should now be running: {state:?}");
             assert_eq!(state, LobbyState::Running);
-            (player_side, lobby_id, state == LobbyState::Running)
+            (player_side, lobby_id)
         } else {
             let lobby_id = Uuid::new_v4();
             let lobby = LobbySession::new(addr);
@@ -175,7 +176,8 @@ impl ServerStateInner {
                 lobby.get_current_lobby_state()
             );
             self.lobby_list.insert(lobby_id, LobbyEntry::Waiting(lobby));
-            (PlayerSide::Left, lobby_id, false)
+            // Left is default when creating a new lobby
+            (PlayerSide::Left, lobby_id)
         };
 
         // TODO: Right now this overrides state in server if player leaves and rejoins
@@ -189,20 +191,8 @@ impl ServerStateInner {
             },
         );
 
-        if should_start_game {
-            let lobby_entry = self.lobby_list.remove(&lobby_id).unwrap();
-            let LobbyEntry::Waiting(mut lobby) = lobby_entry else {
-                unreachable!();
-            };
-
-            lobby.reset_lobby();
-            self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
-
-            self.broadcast_lobby_state(lobby_id)?;
-            self.broadcast_game_state(lobby_id)?;
-        } else {
-            self.broadcast_lobby_state(lobby_id)?;
-        }
+        self.broadcast_lobby_state(lobby_id)?;
+        self.broadcast_game_state(lobby_id)?;
 
         Ok((player_side, lobby_id))
     }
@@ -225,6 +215,7 @@ impl ServerStateInner {
                 match state {
                     LobbyState::Empty => {
                         // delete lobby
+                        println!("Waiting Lobby {lobby_id} is now destroyed, lobby was empty");
                     }
                     _ => unreachable!(
                         "Since we only have two players in lobby {lobby_id:?}, if we remove a player from a waiting lobby, its empty and can be deleted."
@@ -243,6 +234,7 @@ impl ServerStateInner {
                     }
                     LobbyState::Empty => {
                         // delete lobby
+                        println!("Running Lobby {lobby_id} is now destroyed, lobby was empty");
                     }
                     _ => unreachable!(),
                 }
@@ -260,6 +252,7 @@ impl ServerStateInner {
                     }
                     LobbyState::Empty => {
                         // delete lobby
+                        println!("Lobby {lobby_id} is now destroyed, both players rejected continuing to play");
                     }
                     _ => unreachable!(
                         "If we remove a player, the lobby {lobby_id:?} can't be running"
