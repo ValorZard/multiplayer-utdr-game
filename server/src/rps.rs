@@ -47,7 +47,7 @@ impl GameSession {
 
     pub fn compute_state(&self) -> RPSGameState {
         match self.left_input {
-            None => match self.right_input.clone() {
+            None => match self.right_input {
                 None => RPSGameState::StartRound,
                 Some(right_input) => RPSGameState::WaitingForLeftInput { right_input },
             },
