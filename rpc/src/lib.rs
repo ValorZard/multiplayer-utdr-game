@@ -24,9 +24,22 @@ pub type LobbyId = Uuid;
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
+pub enum PlayerSide {
+    Left,
+    Right,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
 pub enum RpcServerMessage {
     GameState(RPSGameState),
-    Lobby(LobbyId),
+    Lobby(PlayerSide, LobbyId),
     Text(String),
 }
 
