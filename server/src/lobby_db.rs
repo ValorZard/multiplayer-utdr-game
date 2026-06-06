@@ -1,7 +1,5 @@
 use anyhow::{anyhow, bail};
-use rpc::{
-    LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, YesOrNo,
-};
+use rpc::{LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, YesOrNo};
 use std::error::Error;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::mpsc::error::SendError;
@@ -29,7 +27,7 @@ struct UserData {
     lobby_id: LobbyId,
     player_side: PlayerSide,
     sender: UserSender,
-    score: u32,
+    score: ScoreSize,
 }
 
 struct FinishedLobbySession {
@@ -63,14 +61,16 @@ impl LobbyEntry {
 }
 
 struct ServerStateInner {
-    user_list: HashMap<SocketAddr, UserData>,
+    disconnected_user_list: HashMap<SocketAddr, ScoreSize>,
+    connected_user_list: HashMap<SocketAddr, UserData>,
     lobby_list: HashMap<LobbyId, LobbyEntry>,
 }
 
 impl ServerStateInner {
     fn new() -> Self {
         Self {
-            user_list: HashMap::new(),
+            disconnected_user_list: HashMap::new(),
+            connected_user_list: HashMap::new(),
             lobby_list: HashMap::new(),
         }
     }
@@ -82,7 +82,7 @@ impl ServerStateInner {
     ) -> anyhow::Result<()> {
         let bytes = encode_server_message(message)?;
         let user = self
-            .user_list
+            .connected_user_list
             .get(user_addr)
             .ok_or_else(|| anyhow!("user {user_addr} not found"))?;
 
@@ -132,8 +132,18 @@ impl ServerStateInner {
             .get(&lobby_id)
             .ok_or_else(|| anyhow!("lobby {lobby_id} not found"))?;
 
-        let game_state = lobby.session().get_current_game_state();
-        self.send_message_to_lobby(&RpcServerMessage::GameState(game_state), &lobby_id)
+        let state = lobby.session().get_current_game_state();
+        let left_side_score = if let Some(left_addr) = lobby.session().get_left() {
+            self.connected_user_list.get(&left_addr).unwrap().score
+        } else {
+            0
+        };
+        let right_side_score = if let Some(right_addr) = lobby.session().get_right() {
+            self.connected_user_list.get(&right_addr).unwrap().score
+        } else {
+            0
+        };
+        self.send_message_to_lobby(&RpcServerMessage::GameState{state, left_side_score, right_side_score}, &lobby_id)
     }
 
     fn insert_user(
@@ -141,8 +151,7 @@ impl ServerStateInner {
         addr: SocketAddr,
         sender: UserSender,
     ) -> anyhow::Result<(PlayerSide, LobbyId)> {
-        // TODO: Cache user data somehow so that users can still get their data after leaving and reconnecting to server
-        if let Some(existing) = self.user_list.get(&addr) {
+        if let Some(existing) = self.connected_user_list.get(&addr) {
             return Ok((existing.player_side.clone(), existing.lobby_id));
         }
 
@@ -180,8 +189,10 @@ impl ServerStateInner {
             (PlayerSide::Left, lobby_id)
         };
 
-        // TODO: Right now this overrides state in server if player leaves and rejoins
-        self.user_list.insert(
+        // restore score if user has connected before
+        let user_score = self.disconnected_user_list.remove(&addr).unwrap_or_default();
+
+        self.connected_user_list.insert(
             addr,
             UserData {
                 lobby_id,
@@ -198,9 +209,14 @@ impl ServerStateInner {
     }
 
     fn remove_user(&mut self, addr: SocketAddr) -> anyhow::Result<()> {
-        let Some(user_data) = self.user_list.remove(&addr) else {
+        let Some(user_data) = self.connected_user_list.remove(&addr) else {
             return Ok(());
         };
+
+        // removed player lobby is now empty
+        let message = encode_server_message(&RpcServerMessage::LobbyState(LobbyState::Empty))?;
+        // this can fail if the player totally disconnected
+        let _ = user_data.sender.send(WsMessage::Binary(message.to_vec().into()));
 
         let lobby_id = user_data.lobby_id;
         // Pop lobby entry off, we can add it back in later
@@ -263,12 +279,15 @@ impl ServerStateInner {
             }
         }
 
+        // add disconnected user to list, store score
+        self.disconnected_user_list.insert(addr, user_data.score);
+
         Ok(())
     }
 
     fn handle_user_rpc(&mut self, user_rpc_message: UserRPCMessage) -> anyhow::Result<()> {
         let user = self
-            .user_list
+            .connected_user_list
             .get(&user_rpc_message.send_addr)
             .ok_or_else(|| anyhow!("user not found"))?;
 
@@ -300,14 +319,14 @@ impl ServerStateInner {
                         match state {
                             RPSWinState::Left => {
                                 if let Some(winner) = lobby.get_left() {
-                                    if let Some(user) = self.user_list.get_mut(&winner) {
+                                    if let Some(user) = self.connected_user_list.get_mut(&winner) {
                                         user.score += 1;
                                     }
                                 }
                             }
                             RPSWinState::Right => {
                                 if let Some(winner) = lobby.get_right() {
-                                    if let Some(user) = self.user_list.get_mut(&winner) {
+                                    if let Some(user) = self.connected_user_list.get_mut(&winner) {
                                         user.score += 1;
                                     }
                                 }
@@ -364,10 +383,7 @@ impl ServerStateInner {
 
                             (Some(YesOrNo::No), Some(YesOrNo::Yes)) => {
                                 let leaving = finished.lobby_session.get_left().unwrap();
-                                finished.lobby_session.remove_player(leaving)?;
-
-                                // TODO: Figure out way to cache users, for now, lets just delete them
-                                self.user_list.remove(&leaving);
+                                self.remove_user(leaving)?;
 
                                 self.lobby_list
                                     .insert(lobby_id, LobbyEntry::Waiting(finished.lobby_session));
@@ -375,10 +391,7 @@ impl ServerStateInner {
 
                             (Some(YesOrNo::Yes), Some(YesOrNo::No)) => {
                                 let leaving = finished.lobby_session.get_right().unwrap();
-                                finished.lobby_session.remove_player(leaving)?;
-
-                                // TODO: Figure out way to cache users, for now, lets just delete them
-                                self.user_list.remove(&leaving);
+                                self.remove_user(leaving)?;
 
                                 self.lobby_list
                                     .insert(lobby_id, LobbyEntry::Waiting(finished.lobby_session));
