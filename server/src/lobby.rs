@@ -1,8 +1,8 @@
-use rpc::{LobbyState, PlayerSide, RPSGameState, RPSWinState};
-use rpc::PlayerSideResolver;
-use std::net::SocketAddr;
-use anyhow::bail;
 use crate::rps::{GameError, GameSession};
+use anyhow::bail;
+use rpc::PlayerSideResolver;
+use rpc::{LobbyState, PlayerSide, RPSGameState, RPSWinState};
+use std::net::SocketAddr;
 
 pub struct LobbySession {
     left_side: Option<SocketAddr>,
@@ -61,7 +61,7 @@ impl LobbySession {
             Ok((PlayerSide::Right, self.get_current_lobby_state()))
         } else {
             Err(LobbyError::AlreadyFull)
-        }
+        };
     }
 
     pub fn remove_player(
@@ -97,7 +97,7 @@ impl LobbySession {
 
     pub fn set_left_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {
         let state = self.current_round.set_left_input(input)?;
-        if let RPSGameState::Win{state, ..} = state.clone() {
+        if let RPSGameState::Win { state, .. } = state.clone() {
             self.winner = Some(state);
         }
         Ok(state)
@@ -105,7 +105,7 @@ impl LobbySession {
 
     pub fn set_right_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {
         let state = self.current_round.set_right_input(input)?;
-        if let RPSGameState::Win{state, ..} = state.clone() {
+        if let RPSGameState::Win { state, .. } = state.clone() {
             self.winner = Some(state);
         }
         Ok(state)

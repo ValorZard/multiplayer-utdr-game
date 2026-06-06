@@ -9,7 +9,7 @@ use uuid::Uuid;
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
-pub enum YesOrNo{
+pub enum YesOrNo {
     Yes,
     No,
 }

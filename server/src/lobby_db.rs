@@ -1,5 +1,7 @@
 use anyhow::bail;
-use rpc::{LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, YesOrNo};
+use rpc::{
+    LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, YesOrNo,
+};
 use std::error::Error;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::mpsc::error::SendError;
@@ -9,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     encode_server_message,
-    lobby::{LobbySession, LobbyError},
+    lobby::{LobbyError, LobbySession},
     rps::GameSession,
 };
 
@@ -66,12 +68,18 @@ impl ServerStateInner {
             .send(WsMessage::Binary(bytes.to_vec().into()))
     }
 
-    fn send_message_to_lobby(&self, message: &RpcServerMessage, lobby_id: &LobbyId) -> anyhow::Result<()> {
+    fn send_message_to_lobby(
+        &self,
+        message: &RpcServerMessage,
+        lobby_id: &LobbyId,
+    ) -> anyhow::Result<()> {
         let lobby = if let Some(lobby_session) = self.running_lobby_list.get(lobby_id) {
             lobby_session
         } else if let Some(lobby_session) = self.waiting_lobby_list.get(lobby_id) {
             lobby_session
-        } else if let Some(FinishedLobbySession{lobby_session, ..}) = self.finished_lobby_list.get(lobby_id) {
+        } else if let Some(FinishedLobbySession { lobby_session, .. }) =
+            self.finished_lobby_list.get(lobby_id)
+        {
             lobby_session
         } else {
             anyhow::bail!("Lobby id {} not found", lobby_id);
@@ -184,7 +192,9 @@ impl ServerStateInner {
                         "removing a player from a waiting lobby cannot leave a lobby waiting, there's only a max of 2 players"
                     )
                 }
-                LobbyState::Running | LobbyState::Finished => unreachable!("removing a player cannot leave a lobby full"),
+                LobbyState::Running | LobbyState::Finished => {
+                    unreachable!("removing a player cannot leave a lobby full")
+                }
             }
         }
     }
@@ -208,19 +218,15 @@ impl ServerStateInner {
                     };
 
                     let current_state = match player_side {
-                        PlayerSide::Left => {
-                            lobby.set_left_input(input)
-                        }
-                        PlayerSide::Right => {
-                            lobby.set_right_input(input)
-                        }
+                        PlayerSide::Left => lobby.set_left_input(input),
+                        PlayerSide::Right => lobby.set_right_input(input),
                     }?;
                     println!("{lobby_id}: Current game state: {current_state:?}");
                     lobby_state = lobby.get_current_lobby_state();
                     println!("{lobby_id}: Lobby State: {lobby_state:?}");
 
                     // Special case: if a lobby is in a win state, pop it out and put it in finished list
-                    if let RPSGameState::Win { state, ..} = current_state.clone() {
+                    if let RPSGameState::Win { state, .. } = current_state.clone() {
                         match state {
                             RPSWinState::Left => {
                                 let winner = lobby.get_left().unwrap();
@@ -233,28 +239,34 @@ impl ServerStateInner {
                             RPSWinState::Tie => {}
                         }
                     }
-                    self.send_message_to_lobby(&RpcServerMessage::GameState(current_state), &lobby_id)?;
+                    self.send_message_to_lobby(
+                        &RpcServerMessage::GameState(current_state),
+                        &lobby_id,
+                    )?;
                 }
-                _ => {},
+                _ => {}
             }
         } else if let Some(mut lobby) = self.finished_lobby_list.remove(&lobby_id) {
-            let player_side = lobby.lobby_session.get_player_side(user_rpc_message.send_addr).expect("Should be assigned a player side at this point");
+            let player_side = lobby
+                .lobby_session
+                .get_player_side(user_rpc_message.send_addr)
+                .expect("Should be assigned a player side at this point");
             match user_rpc_message.message {
-                RpcClientMessage::ContinueRound(yes_or_no) => {
-                    match player_side {
-                        PlayerSide::Left => {
-                            lobby.left_side_continue = Some(yes_or_no);
-                        },
-                        PlayerSide::Right => {
-                            lobby.right_side_continue = Some(yes_or_no);
-                        }
+                RpcClientMessage::ContinueRound(yes_or_no) => match player_side {
+                    PlayerSide::Left => {
+                        lobby.left_side_continue = Some(yes_or_no);
                     }
-                }
+                    PlayerSide::Right => {
+                        lobby.right_side_continue = Some(yes_or_no);
+                    }
+                },
                 _ => {}
             }
 
             // check to see if we've decided on what we are going to do with this lobby yet
-            if let Some(left_yes_or_no) = lobby.left_side_continue.clone() && let Some(right_yes_or_no) = lobby.right_side_continue.clone() {
+            if let Some(left_yes_or_no) = lobby.left_side_continue.clone()
+                && let Some(right_yes_or_no) = lobby.right_side_continue.clone()
+            {
                 // no matter what happens, we should reset the game state
                 // TODO: Somehow notify the player that the lobby is either restarting or has gone back to waiting
                 // Honestly, we should be sending the players the current state of the Lobby as well as the game
@@ -263,13 +275,15 @@ impl ServerStateInner {
                         match right_yes_or_no {
                             YesOrNo::Yes => {
                                 // go right back to running
-                                self.running_lobby_list.insert(lobby_id, lobby.lobby_session);
+                                self.running_lobby_list
+                                    .insert(lobby_id, lobby.lobby_session);
                             }
                             YesOrNo::No => {
                                 println!("Right player is leaving lobby {lobby_id}");
                                 let leaving_player = lobby.lobby_session.get_right().unwrap();
                                 lobby.lobby_session.remove_player(leaving_player)?;
-                                self.waiting_lobby_list.insert(lobby_id, lobby.lobby_session);
+                                self.waiting_lobby_list
+                                    .insert(lobby_id, lobby.lobby_session);
                             }
                         }
                     }
@@ -279,11 +293,14 @@ impl ServerStateInner {
                                 println!("Left player is leaving lobby {lobby_id}");
                                 let leaving_player = lobby.lobby_session.get_left().unwrap();
                                 lobby.lobby_session.remove_player(leaving_player)?;
-                                self.waiting_lobby_list.insert(lobby_id, lobby.lobby_session);
+                                self.waiting_lobby_list
+                                    .insert(lobby_id, lobby.lobby_session);
                             }
                             YesOrNo::No => {
                                 // don't insert, we can just drop it
-                                println!("Both players chose not to continue player, {lobby_id} is destroyed");
+                                println!(
+                                    "Both players chose not to continue player, {lobby_id} is destroyed"
+                                );
                                 drop(lobby);
                             }
                         }
@@ -294,13 +311,21 @@ impl ServerStateInner {
                 println!("lobby {lobby_id} is currently finished");
                 self.finished_lobby_list.insert(lobby_id, lobby);
             }
-
         }
 
         if lobby_state == LobbyState::Finished {
-            println!("Popping out lobby {lobby_id} from running list, and putting it into finished lobby list");
+            println!(
+                "Popping out lobby {lobby_id} from running list, and putting it into finished lobby list"
+            );
             let lobby = self.running_lobby_list.remove(&lobby_id).unwrap();
-            self.finished_lobby_list.insert(lobby_id, FinishedLobbySession{lobby_session: lobby, left_side_continue: None, right_side_continue: None});
+            self.finished_lobby_list.insert(
+                lobby_id,
+                FinishedLobbySession {
+                    lobby_session: lobby,
+                    left_side_continue: None,
+                    right_side_continue: None,
+                },
+            );
         }
 
         // just send back current state of lobby to everyone
@@ -309,7 +334,6 @@ impl ServerStateInner {
         // TODO: Figure out a better way of handling this
         // for now, we can just return Ok and ignore messages unless the lobby is running
         return Ok(());
-
     }
 }
 

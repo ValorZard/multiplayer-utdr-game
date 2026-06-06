@@ -77,7 +77,7 @@ async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr, server_state
 
                         let user_rpc_message = UserRPCMessage {
                             message: decoded,
-                            send_addr: addr
+                            send_addr: addr,
                         };
 
                         server_state
