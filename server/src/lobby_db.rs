@@ -323,19 +323,8 @@ impl ServerStateInner {
                                 right_side_continue: None,
                             }),
                         );
-
-                        self.send_message_to_lobby(
-                            &RpcServerMessage::GameState(current_state),
-                            &lobby_id,
-                        )?;
-                        self.broadcast_lobby_state(lobby_id)?;
                     } else {
                         self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
-                        self.send_message_to_lobby(
-                            &RpcServerMessage::GameState(current_state),
-                            &lobby_id,
-                        )?;
-                        self.broadcast_lobby_state(lobby_id)?;
                     }
                 }
                 _ => {
@@ -364,12 +353,13 @@ impl ServerStateInner {
                                 finished.lobby_session.reset_lobby();
                                 self.lobby_list
                                     .insert(lobby_id, LobbyEntry::Running(finished.lobby_session));
-                                self.broadcast_lobby_state(lobby_id)?;
-                                self.broadcast_game_state(lobby_id)?;
                             }
 
                             (Some(YesOrNo::No), Some(YesOrNo::No)) => {
                                 // delete lobby entirely
+                                println!(
+                                    "Finished Lobby {lobby_id} is now destroyed, both players rejected continuing to play"
+                                );
                             }
 
                             (Some(YesOrNo::No), Some(YesOrNo::Yes)) => {
@@ -381,8 +371,6 @@ impl ServerStateInner {
 
                                 self.lobby_list
                                     .insert(lobby_id, LobbyEntry::Waiting(finished.lobby_session));
-                                self.broadcast_lobby_state(lobby_id)?;
-                                self.broadcast_game_state(lobby_id)?;
                             }
 
                             (Some(YesOrNo::Yes), Some(YesOrNo::No)) => {
@@ -394,14 +382,11 @@ impl ServerStateInner {
 
                                 self.lobby_list
                                     .insert(lobby_id, LobbyEntry::Waiting(finished.lobby_session));
-                                self.broadcast_lobby_state(lobby_id)?;
-                                self.broadcast_game_state(lobby_id)?;
                             }
 
                             _ => {
                                 self.lobby_list
                                     .insert(lobby_id, LobbyEntry::Finished(finished));
-                                self.broadcast_lobby_state(lobby_id)?;
                             }
                         }
                     }
@@ -413,7 +398,8 @@ impl ServerStateInner {
                 }
             }
         }
-
+        self.broadcast_lobby_state(lobby_id)?;
+        self.broadcast_game_state(lobby_id)?;
         Ok(())
     }
 }
