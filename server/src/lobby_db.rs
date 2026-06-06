@@ -2,8 +2,9 @@ use anyhow::bail;
 use rpc::{LobbyId, PlayerSide, RPSGameState, RpcClientMessage, RpcServerMessage};
 use std::error::Error;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{Mutex, mpsc::UnboundedSender};
-use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio_tungstenite::tungstenite::{Message as WsMessage, Message};
 use uuid::Uuid;
 
 use crate::{
@@ -99,6 +100,19 @@ impl ServerStateInner {
         }
     }
 
+    fn send_message_to_user(
+        &self,
+        message: &RpcServerMessage,
+        user_addr: &SocketAddr,
+    ) -> Result<(), SendError<Message>> {
+        let bytes = encode_server_message(message).expect("Error serializing LobbyMessage");
+        self.user_list
+            .get(user_addr)
+            .unwrap()
+            .sender
+            .send(WsMessage::Binary(bytes.to_vec().into()))
+    }
+
     fn insert_user(&mut self, addr: SocketAddr, sender: UserSender) -> (PlayerSide, LobbyId) {
         if let Some(existing) = self.user_list.get(&addr) {
             return (existing.player_side.clone(), existing.lobby_id);
@@ -113,10 +127,10 @@ impl ServerStateInner {
                 let (player_side, lobby_state) = lobby
                     .insert_player(addr)
                     .expect("should be successful in starting game");
-
+                // reset state when waiting lobby is now running (handles case of reusing existing lobby)
+                lobby.current_round = GameSession::new();
                 println!("Lobby {lobby_id} should now be running: {lobby_state:?}");
                 assert_eq!(lobby_state, LobbyState::Full);
-
                 self.running_lobby_list.insert(lobby_id, lobby);
                 (player_side, lobby_id)
             } else {
@@ -140,6 +154,18 @@ impl ServerStateInner {
                 sender,
             },
         );
+
+        // update both players with game state once the lobby is full
+        if let Some(lobby) = self.running_lobby_list.get(&lobby_id) {
+            // update both players with current game state
+            let current_game_state = lobby.current_round.compute_state();
+            // send players the current state of the game
+            let state_message = RpcServerMessage::GameState(current_game_state);
+            // we should be able to just send to both left and right side
+            let _ = self.send_message_to_user(&state_message, &lobby.get_left().unwrap());
+            let _ = self.send_message_to_user(&state_message, &lobby.get_right().unwrap());
+        }
+
         (player_side, lobby_id)
     }
 
@@ -151,28 +177,15 @@ impl ServerStateInner {
         if let Some(mut lobby) = self.running_lobby_list.remove(&user_data.lobby_id) {
             let (player_side, state) = lobby.remove_player(addr).unwrap();
             assert_eq!(LobbyState::Waiting, state);
-            // reset game when player leaves
-            lobby.current_round = GameSession::new();
             let current_game_state = lobby.current_round.compute_state();
+            let state_message = RpcServerMessage::GameState(current_game_state);
             // send player that's left the current state of the game
-            let bytes = encode_server_message(&RpcServerMessage::GameState(current_game_state))
-                .expect("Error serializing LobbyMessage");
             match player_side {
                 PlayerSide::Left => {
-                    let _ = self
-                        .user_list
-                        .get(&lobby.get_right().unwrap())
-                        .unwrap()
-                        .sender
-                        .send(WsMessage::Binary(bytes.to_vec().into()));
+                    let _ = self.send_message_to_user(&state_message, &lobby.get_right().unwrap());
                 }
                 PlayerSide::Right => {
-                    let _ = self
-                        .user_list
-                        .get(&lobby.get_left().unwrap())
-                        .unwrap()
-                        .sender
-                        .send(WsMessage::Binary(bytes.to_vec().into()));
+                    let _ = self.send_message_to_user(&state_message, &lobby.get_left().unwrap());
                 }
             }
 
@@ -207,15 +220,12 @@ impl ServerStateInner {
 
         let lobby_id = user_data.lobby_id;
 
-        let maybe_lobby = self
-            .running_lobby_list
-            .get_mut(&lobby_id)
-            .or_else(|| self.waiting_lobby_list.get_mut(&lobby_id));
+        let maybe_lobby = self.running_lobby_list.get_mut(&lobby_id);
 
         let Some(lobby) = maybe_lobby else {
-            unreachable!(
-                "If a user is in user_list, its lobby should exist in waiting or running list"
-            );
+            // TODO: Figure out a better way of handling this
+            // for now, we can just return Ok and ignore messages unless the lobby is running
+            return Ok(());
         };
 
         let player_side = lobby.get_player_side(user_rpc_message.send_addr);
