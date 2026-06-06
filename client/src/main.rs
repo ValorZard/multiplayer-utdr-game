@@ -3,7 +3,7 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{GameInput, LobbyId, PlayerSide, RPSGameState, RpcClientMessage, RpcServerMessage};
+use rpc::{GameInput, LobbyId, LobbyState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
@@ -73,8 +73,10 @@ async fn main() {
     let mut current_game_state: Option<RPSGameState> = None;
     let mut lobby_id: Option<LobbyId> = None;
     let mut player_side: Option<PlayerSide> = None;
+    let mut win_state: Option<RPSWinState> = None;
     let mut remote_right_input: Option<GameInput> = None;
     let mut remote_left_input: Option<GameInput> = None;
+    let mut lobby_state: LobbyState = LobbyState::Empty;
     while window.render_2d(&mut scene, &mut camera).await {
         // immediately pool the receiver even if there isn't a value there.
         while let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten() {
@@ -96,33 +98,18 @@ async fn main() {
                         RPSGameState::WaitingForRightInput { left_input } => {
                             remote_left_input = Some(left_input.clone());
                         }
-                        RPSGameState::LeftWin {
-                            left_input,
-                            right_input,
-                        } => {
-                            remote_left_input = Some(left_input.clone());
-                            remote_right_input = Some(right_input.clone());
-                        }
-                        RPSGameState::RightWin {
-                            left_input,
-                            right_input,
-                        } => {
-                            remote_left_input = Some(left_input.clone());
-                            remote_right_input = Some(right_input.clone());
-                        }
-                        RPSGameState::Tie {
-                            left_input,
-                            right_input,
-                        } => {
-                            remote_left_input = Some(left_input.clone());
-                            remote_right_input = Some(right_input.clone());
+                        RPSGameState::Win {state, left_input, right_input} => {
+                            win_state = Some(state.clone());
                         }
                     }
                     current_game_state = Some(game_state);
                 }
-                RpcServerMessage::Lobby(side, id) => {
+                RpcServerMessage::LobbyInit(side, id) => {
                     lobby_id = Some(id);
                     player_side = Some(side);
+                }
+                RpcServerMessage::LobbyState(state) => {
+                    lobby_state = state;
                 }
             }
         }
@@ -162,7 +149,9 @@ async fn main() {
                     ui.label(format!(
                         "Left input {remote_left_input:?}, Right input {remote_right_input:?}"
                     ));
-                    ui.label(format!("{current_game_state:?}"));
+                    ui.label(format!("Game State: {current_game_state:?}"));
+                    ui.label(format!("Lobby state: {lobby_state:?}"));
+                    ui.label(format!("Win state: {win_state:?}"));
 
                     ui.separator();
 
