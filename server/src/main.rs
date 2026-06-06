@@ -59,7 +59,7 @@ async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr, server_state
     let (mut outgoing, incoming) = ws_stream.split();
 
     // send our lobby id first
-    let bytes = encode_server_message(&RpcServerMessage::Lobby(player_side, lobby_id))
+    let bytes = encode_server_message(&RpcServerMessage::LobbyInit(player_side, lobby_id))
         .expect("Error serializing LobbyMessage");
     outgoing
         .send(WsMessage::Binary(bytes.to_vec().into()))
@@ -77,8 +77,7 @@ async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr, server_state
 
                         let user_rpc_message = UserRPCMessage {
                             message: decoded,
-                            send_addr: addr,
-                            player_side: None,
+                            send_addr: addr
                         };
 
                         server_state

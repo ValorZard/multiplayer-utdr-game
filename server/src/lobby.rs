@@ -1,18 +1,14 @@
-use rpc::PlayerSide;
+use rpc::{LobbyState, PlayerSide, RPSGameState, RPSWinState};
 use rpc::PlayerSideResolver;
 use std::net::SocketAddr;
+use anyhow::bail;
+use crate::rps::{GameError, GameSession};
 
-pub struct LobbyData {
-    pub left_side: Option<SocketAddr>,
-    pub right_side: Option<SocketAddr>,
-    winner: Option<SocketAddr>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum LobbyState {
-    Empty,
-    Waiting,
-    Full,
+pub struct LobbySession {
+    left_side: Option<SocketAddr>,
+    right_side: Option<SocketAddr>,
+    current_round: GameSession,
+    winner: Option<RPSWinState>,
 }
 
 #[derive(Debug)]
@@ -37,12 +33,13 @@ impl std::fmt::Display for LobbyError {
 
 impl std::error::Error for LobbyError {}
 
-impl LobbyData {
+impl LobbySession {
     pub fn new(left_side: SocketAddr) -> Self {
         Self {
             left_side: Some(left_side),
             right_side: None,
             winner: None,
+            current_round: GameSession::new(),
         }
     }
 
@@ -56,14 +53,14 @@ impl LobbyData {
             return Err(LobbyError::SameAddr);
         }
 
-        if self.left_side.is_none() {
+        return if self.left_side.is_none() {
             self.left_side = new_player;
-            return Ok((PlayerSide::Left, self.get_current_state()));
+            Ok((PlayerSide::Left, self.get_current_lobby_state()))
         } else if self.right_side.is_none() {
             self.right_side = new_player;
-            return Ok((PlayerSide::Right, self.get_current_state()));
+            Ok((PlayerSide::Right, self.get_current_lobby_state()))
         } else {
-            return Err(LobbyError::AlreadyFull);
+            Err(LobbyError::AlreadyFull)
         }
     }
 
@@ -75,24 +72,65 @@ impl LobbyData {
             && addr == leaving_player
         {
             let _ = self.left_side.take();
-            return Ok((PlayerSide::Left, self.get_current_state()));
+            return Ok((PlayerSide::Left, self.get_current_lobby_state()));
         } else if let Some(addr) = self.right_side
             && addr == leaving_player
         {
             let _ = self.right_side.take();
-            return Ok((PlayerSide::Right, self.get_current_state()));
+            return Ok((PlayerSide::Right, self.get_current_lobby_state()));
         }
 
         Err(LobbyError::NeverExisted)
     }
 
-    pub fn get_current_state(&self) -> LobbyState {
-        if self.left_side.is_some() && self.right_side.is_some() {
-            LobbyState::Full
+    pub fn get_winner(&self) -> Option<RPSWinState> {
+        self.winner.clone()
+    }
+
+    pub fn get_left(&self) -> Option<SocketAddr> {
+        self.left_side
+    }
+
+    pub fn get_right(&self) -> Option<SocketAddr> {
+        self.right_side
+    }
+
+    pub fn set_left_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {
+        self.current_round.set_left_input(input)
+    }
+
+    pub fn set_right_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {
+        self.current_round.set_right_input(input)
+    }
+
+    pub fn reset_lobby(&mut self) {
+        self.winner = None;
+        self.current_round = GameSession::new();
+    }
+
+    pub fn get_current_lobby_state(&self) -> LobbyState {
+        if self.winner.is_some() {
+            LobbyState::Finished
+        } else if self.left_side.is_some() && self.right_side.is_some() {
+            LobbyState::Running
         } else if self.left_side.is_none() && self.right_side.is_none() {
             LobbyState::Empty
         } else {
             LobbyState::Waiting
+        }
+    }
+
+    pub fn get_current_game_state(&self) -> RPSGameState {
+        self.current_round.compute_state()
+    }
+
+    pub fn get_player_side(&self, addr: SocketAddr) -> Option<PlayerSide> {
+        if self.get_left() == Some(addr) {
+            Some(PlayerSide::Left)
+        } else if self.get_right() == Some(addr) {
+            Some(PlayerSide::Right)
+        } else {
+            None
         }
     }
 }
@@ -111,7 +149,7 @@ mod tests {
         assert_eq!(lobby.get_current_state(), LobbyState::Waiting);
 
         lobby.insert_player(dummy_right).unwrap();
-        assert_eq!(lobby.get_current_state(), LobbyState::Full);
+        assert_eq!(lobby.get_current_state(), LobbyState::Running);
 
         lobby.remove_player(dummy_left).unwrap();
         assert_eq!(lobby.get_current_state(), LobbyState::Waiting);
