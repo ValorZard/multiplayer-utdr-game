@@ -3,7 +3,10 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{GameInput, LobbyId, LobbyState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage};
+use rpc::{
+    GameInput, LobbyId, LobbyState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage,
+    RpcServerMessage,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
@@ -98,7 +101,11 @@ async fn main() {
                         RPSGameState::WaitingForRightInput { left_input } => {
                             remote_left_input = Some(left_input.clone());
                         }
-                        RPSGameState::Win {state, left_input, right_input} => {
+                        RPSGameState::Win {
+                            state,
+                            left_input,
+                            right_input,
+                        } => {
                             win_state = Some(state.clone());
                         }
                     }
