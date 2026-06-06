@@ -40,7 +40,11 @@ pub fn encode_server_message(message: &RpcServerMessage) -> Result<AlignedVec, r
     rkyv::to_bytes::<rancor::Error>(message)
 }
 
-async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr, server_state: ServerState) -> anyhow::Result<()> {
+async fn handle_connection(
+    raw_stream: TcpStream,
+    addr: SocketAddr,
+    server_state: ServerState,
+) -> anyhow::Result<()> {
     println!("Incoming TCP connection from: {}", addr);
 
     let ws_stream = tokio_tungstenite::accept_async(raw_stream)
