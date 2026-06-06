@@ -53,29 +53,78 @@ impl GameSession {
         } else if let Some(input) = &self.left_input
             && self.right_input.is_none()
         {
-            self.current_state = RPSGameState::WaitingForRightInput;
+            self.current_state = RPSGameState::WaitingForRightInput {
+                left_input: input.clone(),
+            };
         } else if self.left_input.is_none()
             && let Some(input) = &self.right_input
         {
-            self.current_state = RPSGameState::WaitingForLeftInput
+            self.current_state = RPSGameState::WaitingForLeftInput {
+                right_input: input.clone(),
+            };
         } else if let Some(left_input) = &self.left_input
             && let Some(right_input) = &self.right_input
         {
             match left_input {
                 rpc::GameInput::Rock => match right_input {
-                    rpc::GameInput::Rock => self.current_state = RPSGameState::Tie,
-                    rpc::GameInput::Paper => self.current_state = RPSGameState::RightWin,
-                    rpc::GameInput::Scissors => self.current_state = RPSGameState::LeftWin,
+                    rpc::GameInput::Rock => {
+                        self.current_state = RPSGameState::Tie {
+                            left_input: left_input.clone(),
+                            right_input: right_input.clone(),
+                        }
+                    }
+                    rpc::GameInput::Paper => {
+                        self.current_state = RPSGameState::RightWin {
+                            left_input: left_input.clone(),
+                            right_input: right_input.clone(),
+                        }
+                    }
+                    rpc::GameInput::Scissors => {
+                        self.current_state = RPSGameState::LeftWin {
+                            left_input: left_input.clone(),
+                            right_input: right_input.clone(),
+                        }
+                    }
                 },
                 rpc::GameInput::Paper => match right_input {
-                    rpc::GameInput::Rock => self.current_state = RPSGameState::LeftWin,
-                    rpc::GameInput::Paper => self.current_state = RPSGameState::Tie,
-                    rpc::GameInput::Scissors => self.current_state = RPSGameState::RightWin,
+                    rpc::GameInput::Rock => {
+                        self.current_state = RPSGameState::LeftWin {
+                            left_input: left_input.clone(),
+                            right_input: right_input.clone(),
+                        }
+                    }
+                    rpc::GameInput::Paper => {
+                        self.current_state = RPSGameState::Tie {
+                            left_input: left_input.clone(),
+                            right_input: right_input.clone(),
+                        }
+                    }
+                    rpc::GameInput::Scissors => {
+                        self.current_state = RPSGameState::RightWin {
+                            left_input: left_input.clone(),
+                            right_input: right_input.clone(),
+                        }
+                    }
                 },
                 rpc::GameInput::Scissors => match right_input {
-                    rpc::GameInput::Rock => self.current_state = RPSGameState::RightWin,
-                    rpc::GameInput::Paper => self.current_state = RPSGameState::LeftWin,
-                    rpc::GameInput::Scissors => self.current_state = RPSGameState::Tie,
+                    rpc::GameInput::Rock => {
+                        self.current_state = RPSGameState::RightWin {
+                            left_input: left_input.clone(),
+                            right_input: right_input.clone(),
+                        }
+                    }
+                    rpc::GameInput::Paper => {
+                        self.current_state = RPSGameState::LeftWin {
+                            left_input: left_input.clone(),
+                            right_input: right_input.clone(),
+                        }
+                    }
+                    rpc::GameInput::Scissors => {
+                        self.current_state = RPSGameState::Tie {
+                            left_input: left_input.clone(),
+                            right_input: right_input.clone(),
+                        }
+                    }
                 },
             }
         }

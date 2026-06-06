@@ -68,9 +68,22 @@ pub enum GameInput {
 pub enum RPSGameState {
     // waiting on inputs from both players here
     StartRound,
-    WaitingForLeftInput,
-    WaitingForRightInput,
-    LeftWin,
-    RightWin,
-    Tie,
+    WaitingForLeftInput {
+        right_input: GameInput,
+    },
+    WaitingForRightInput {
+        left_input: GameInput,
+    },
+    LeftWin {
+        left_input: GameInput,
+        right_input: GameInput,
+    },
+    RightWin {
+        left_input: GameInput,
+        right_input: GameInput,
+    },
+    Tie {
+        left_input: GameInput,
+        right_input: GameInput,
+    },
 }

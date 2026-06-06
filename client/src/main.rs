@@ -73,6 +73,8 @@ async fn main() {
     let mut current_game_state: Option<RPSGameState> = None;
     let mut lobby_id: Option<LobbyId> = None;
     let mut player_side: Option<PlayerSide> = None;
+    let mut remote_right_input: Option<GameInput> = None;
+    let mut remote_left_input: Option<GameInput> = None;
     while window.render_2d(&mut scene, &mut camera).await {
         // immediately pool the receiver even if there isn't a value there.
         while let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten() {
@@ -82,6 +84,40 @@ async fn main() {
                     // TODO: Do something here I guess
                 }
                 RpcServerMessage::GameState(game_state) => {
+                    match &game_state {
+                        RPSGameState::StartRound => {
+                            // reset all game state on Start Round
+                            remote_left_input = None;
+                            remote_right_input = None;
+                        }
+                        RPSGameState::WaitingForLeftInput { right_input } => {
+                            remote_right_input = Some(right_input.clone());
+                        }
+                        RPSGameState::WaitingForRightInput { left_input } => {
+                            remote_left_input = Some(left_input.clone());
+                        }
+                        RPSGameState::LeftWin {
+                            left_input,
+                            right_input,
+                        } => {
+                            remote_left_input = Some(left_input.clone());
+                            remote_right_input = Some(right_input.clone());
+                        }
+                        RPSGameState::RightWin {
+                            left_input,
+                            right_input,
+                        } => {
+                            remote_left_input = Some(left_input.clone());
+                            remote_right_input = Some(right_input.clone());
+                        }
+                        RPSGameState::Tie {
+                            left_input,
+                            right_input,
+                        } => {
+                            remote_left_input = Some(left_input.clone());
+                            remote_right_input = Some(right_input.clone());
+                        }
+                    }
                     current_game_state = Some(game_state);
                 }
                 RpcServerMessage::Lobby(side, id) => {
@@ -123,6 +159,9 @@ async fn main() {
                 .show(ctx, |ui| {
                     ui.label(format!("lobby id: {lobby_id:#?}"));
                     ui.label(format!("player side: {player_side:#?}"));
+                    ui.label(format!(
+                        "Left input {remote_left_input:?}, Right input {remote_right_input:?}"
+                    ));
                     ui.label(format!("{current_game_state:?}"));
 
                     ui.separator();
