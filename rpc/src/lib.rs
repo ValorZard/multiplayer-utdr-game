@@ -43,6 +43,8 @@ pub enum PlayerSide {
     Right,
 }
 
+pub type ScoreSize = u32;
+
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
     // This will generate a PartialEq impl between our unarchived
@@ -52,7 +54,7 @@ pub enum PlayerSide {
     derive(Debug),
 )]
 pub enum RpcServerMessage {
-    GameState(RPSGameState),
+    GameState{state: RPSGameState, left_side_score: ScoreSize, right_side_score: ScoreSize},
     LobbyInit(PlayerSide, LobbyId),
     LobbyState(LobbyState),
     Text(String),

@@ -56,6 +56,8 @@ async fn main() {
     let mut win_state: Option<RPSWinState> = None;
     let mut remote_right_input: Option<GameInput> = None;
     let mut remote_left_input: Option<GameInput> = None;
+    let mut remote_right_score = 0;
+    let mut remote_left_score = 0;
     let mut lobby_state: LobbyState = LobbyState::Empty;
     let mut is_continue_selected = false;
     while window.render_2d(&mut scene, &mut camera).await {
@@ -66,8 +68,8 @@ async fn main() {
                 RpcServerMessage::Text(text) => {
                     // TODO: Do something here I guess
                 }
-                RpcServerMessage::GameState(game_state) => {
-                    match &game_state {
+                RpcServerMessage::GameState{state, left_side_score, right_side_score} => {
+                    match &state {
                         RPSGameState::StartRound => {
                             // reset all game state on Start Round
                             remote_left_input = None;
@@ -87,7 +89,9 @@ async fn main() {
                             win_state = Some(state.clone());
                         }
                     }
-                    current_game_state = Some(game_state);
+                    remote_left_score = left_side_score;
+                    remote_right_score = right_side_score;
+                    current_game_state = Some(state);
                 }
                 RpcServerMessage::LobbyInit(side, id) => {
                     lobby_id = Some(id);
@@ -135,6 +139,7 @@ async fn main() {
                     ui.label(format!("Game State: {current_game_state:?}"));
                     ui.label(format!("Lobby state: {lobby_state:?}"));
                     ui.label(format!("Win state: {win_state:?}"));
+                    ui.label(format!("Left side score: {remote_left_score}, Right side score: {remote_right_score}"));
 
                     ui.separator();
 
