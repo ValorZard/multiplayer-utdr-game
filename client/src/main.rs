@@ -3,10 +3,7 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{
-    GameInput, LobbyId, LobbyState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage,
-    RpcServerMessage,
-};
+use rpc::{GameInput, LobbyId, LobbyState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, YesOrNo};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
@@ -49,30 +46,7 @@ async fn main() {
         });
     }
 
-    let mut rect = scene
-        .add_rectangle(
-            image_texture.size.0 as f32 * 0.5,
-            image_texture.size.1 as f32 * 0.5,
-        )
-        .set_lines_width(10.0, false)
-        .set_lines_color(Some(WHITE))
-        .set_texture(image_texture);
-    rect.read_uvs(&mut |uv_vec| {
-        println!("{:?}", uv_vec);
-    });
-    let mut circ = scene
-        .add_circle(50.0)
-        .translate(Vec2::new(200.0, 0.0))
-        .set_color(BLUE);
-
-    let rot_rect = 0.014;
-    let rot_circ = -0.014;
-
     // UI state
-    let mut rotation_speed = 0.014;
-    let mut opacity = 1.0;
-    let mut circle_color = [1.0, 0.0, 0.0];
-
     let mut current_game_state: Option<RPSGameState> = None;
     let mut lobby_id: Option<LobbyId> = None;
     let mut player_side: Option<PlayerSide> = None;
@@ -142,16 +116,6 @@ async fn main() {
                 _ => {}
             }
         }
-        rect.append_rotation(rot_rect);
-        circ.append_rotation(rot_circ);
-
-        // set circle color
-        circ.set_color(Color::new(
-            circle_color[0],
-            circle_color[1],
-            circle_color[2],
-            opacity,
-        ));
 
         // Draw UI
         window.draw_ui(|ctx| {
@@ -169,29 +133,34 @@ async fn main() {
 
                     ui.separator();
 
-                    if ui.button("Rock").clicked() {
-                        let _ = client_rpc_sender
-                            .unbounded_send(RpcClientMessage::GameInput(GameInput::Rock));
+                    match lobby_state {
+                        LobbyState::Empty => {}
+                        LobbyState::Waiting => {}
+                        LobbyState::Running => {
+                            if ui.button("Rock").clicked() {
+                                let _ = client_rpc_sender
+                                    .unbounded_send(RpcClientMessage::GameInput(GameInput::Rock));
+                            }
+                            if ui.button("Paper").clicked() {
+                                let _ = client_rpc_sender
+                                    .unbounded_send(RpcClientMessage::GameInput(GameInput::Paper));
+                            }
+                            if ui.button("Scissors").clicked() {
+                                let _ = client_rpc_sender
+                                    .unbounded_send(RpcClientMessage::GameInput(GameInput::Scissors));
+                            }
+                        }
+                        LobbyState::Finished => {
+                            if ui.button("Yes").clicked() {
+                                let _ = client_rpc_sender
+                                    .unbounded_send(RpcClientMessage::ContinueRound(YesOrNo::Yes));
+                            }
+                            if ui.button("No").clicked() {
+                                let _ = client_rpc_sender
+                                    .unbounded_send(RpcClientMessage::ContinueRound(YesOrNo::No));
+                            }
+                        }
                     }
-                    if ui.button("Paper").clicked() {
-                        let _ = client_rpc_sender
-                            .unbounded_send(RpcClientMessage::GameInput(GameInput::Paper));
-                    }
-                    if ui.button("Scissors").clicked() {
-                        let _ = client_rpc_sender
-                            .unbounded_send(RpcClientMessage::GameInput(GameInput::Scissors));
-                    }
-
-                    // Opacity control
-                    ui.label("Opacity:");
-                    ui.add(egui::Slider::new(&mut opacity, 0.0..=1.0));
-
-                    // Color picker
-                    ui.label("Cube Color:");
-
-                    ui.horizontal(|ui| {
-                        ui.color_edit_button_rgb(&mut circle_color);
-                    });
                 });
         });
     }
