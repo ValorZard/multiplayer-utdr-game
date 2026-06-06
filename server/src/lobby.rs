@@ -75,20 +75,12 @@ impl LobbyData {
             && addr == leaving_player
         {
             let _ = self.left_side.take();
-            if self.right_side.is_some() {
-                return Ok((PlayerSide::Left, LobbyState::Waiting));
-            } else {
-                return Ok((PlayerSide::Left, LobbyState::Empty));
-            }
+            return Ok((PlayerSide::Left, self.get_current_state()));
         } else if let Some(addr) = self.right_side
             && addr == leaving_player
         {
             let _ = self.right_side.take();
-            if self.left_side.is_some() {
-                return Ok((PlayerSide::Right, LobbyState::Waiting));
-            } else {
-                return Ok((PlayerSide::Right, LobbyState::Empty));
-            }
+            return Ok((PlayerSide::Right, self.get_current_state()));
         }
 
         Err(LobbyError::NeverExisted)
