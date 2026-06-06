@@ -116,6 +116,13 @@ async fn main() {
                     player_side = Some(side);
                 }
                 RpcServerMessage::LobbyState(state) => {
+                    // unless lobby state is finished, we really shouldn't have a win state
+                    match state {
+                        LobbyState::Finished => {}
+                        _ => {
+                            win_state = None;
+                        }
+                    }
                     lobby_state = state;
                 }
             }
