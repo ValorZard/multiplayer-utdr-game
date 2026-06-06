@@ -1,5 +1,5 @@
 use anyhow::bail;
-use rpc::{LobbyId, RPSGameState, RpcClientMessage, RpcServerMessage};
+use rpc::{LobbyId, PlayerSide, RPSGameState, RpcClientMessage, RpcServerMessage};
 use std::error::Error;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::{Mutex, mpsc::UnboundedSender};
@@ -13,12 +13,6 @@ use crate::{
 };
 
 type UserSender = UnboundedSender<WsMessage>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlayerSide {
-    Left,
-    Right,
-}
 
 #[derive(Debug, Clone)]
 pub struct UserRPCMessage {
@@ -47,7 +41,10 @@ impl LobbySession {
         }
     }
 
-    pub fn insert_player(&mut self, new_player: SocketAddr) -> Result<LobbyState, LobbyError> {
+    pub fn insert_player(
+        &mut self,
+        new_player: SocketAddr,
+    ) -> Result<(PlayerSide, LobbyState), LobbyError> {
         self.lobby_data.insert_player(new_player)
     }
 
@@ -83,6 +80,7 @@ impl LobbySession {
 
 struct UserData {
     lobby_id: LobbyId,
+    player_side: PlayerSide,
     sender: UserSender,
 }
 
@@ -101,40 +99,48 @@ impl ServerStateInner {
         }
     }
 
-    fn insert_user(&mut self, addr: SocketAddr, sender: UserSender) -> LobbyId {
+    fn insert_user(&mut self, addr: SocketAddr, sender: UserSender) -> (PlayerSide, LobbyId) {
         if let Some(existing) = self.user_list.get(&addr) {
-            return existing.lobby_id;
+            return (existing.player_side.clone(), existing.lobby_id);
         }
 
-        let lobby_id = if let Some(lobby_id) = self.waiting_lobby_list.keys().next().copied() {
-            let mut lobby = self
-                .waiting_lobby_list
-                .remove(&lobby_id)
-                .expect("lobby id came from waiting list keys");
-            lobby
-                .insert_player(addr)
-                .expect("should be successful in starting game");
+        let (player_side, lobby_id) =
+            if let Some(lobby_id) = self.waiting_lobby_list.keys().next().copied() {
+                let mut lobby = self
+                    .waiting_lobby_list
+                    .remove(&lobby_id)
+                    .expect("lobby id came from waiting list keys");
+                let (player_side, lobby_state) = lobby
+                    .insert_player(addr)
+                    .expect("should be successful in starting game");
 
-            let lobby_state = lobby.get_current_state();
-            println!("Lobby {lobby_id} should now be running: {lobby_state:?}");
-            assert_eq!(lobby_state, LobbyState::Full);
+                println!("Lobby {lobby_id} should now be running: {lobby_state:?}");
+                assert_eq!(lobby_state, LobbyState::Full);
 
-            self.running_lobby_list.insert(lobby_id, lobby);
-            lobby_id
-        } else {
-            let lobby_id = Uuid::new_v4();
-            let new_lobby = LobbySession::new(addr);
+                self.running_lobby_list.insert(lobby_id, lobby);
+                (player_side, lobby_id)
+            } else {
+                let lobby_id = Uuid::new_v4();
+                let new_lobby = LobbySession::new(addr);
 
-            let lobby_state = new_lobby.get_current_state();
-            println!("Lobby {lobby_id} should now be waiting: {lobby_state:?}");
-            assert_eq!(lobby_state, LobbyState::Waiting);
+                let lobby_state = new_lobby.get_current_state();
+                println!("Lobby {lobby_id} should now be waiting: {lobby_state:?}");
+                assert_eq!(lobby_state, LobbyState::Waiting);
 
-            self.waiting_lobby_list.insert(lobby_id, new_lobby);
-            lobby_id
-        };
+                self.waiting_lobby_list.insert(lobby_id, new_lobby);
+                // default for new lobby is left side
+                (PlayerSide::Left, lobby_id)
+            };
 
-        self.user_list.insert(addr, UserData { lobby_id, sender });
-        lobby_id
+        self.user_list.insert(
+            addr,
+            UserData {
+                lobby_id,
+                player_side: player_side.clone(),
+                sender,
+            },
+        );
+        (player_side, lobby_id)
     }
 
     fn remove_user(&mut self, addr: SocketAddr) {
@@ -299,7 +305,7 @@ impl ServerState {
         }
     }
 
-    pub async fn insert_user(&self, addr: SocketAddr, sender: UserSender) -> LobbyId {
+    pub async fn insert_user(&self, addr: SocketAddr, sender: UserSender) -> (PlayerSide, LobbyId) {
         self.server_state.lock().await.insert_user(addr, sender)
     }
 

@@ -52,14 +52,14 @@ async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr, server_state
     let (user_sender, user_receiver) = mpsc::unbounded_channel();
 
     // assign this peer to a lobby
-    let lobby_id = server_state.insert_user(addr, user_sender).await;
+    let (player_side, lobby_id) = server_state.insert_user(addr, user_sender).await;
 
-    println!("Player assigned to lobby {lobby_id}");
+    println!("Player assigned to lobby {lobby_id} on side {player_side:?}");
 
     let (mut outgoing, incoming) = ws_stream.split();
 
     // send our lobby id first
-    let bytes = encode_server_message(&RpcServerMessage::Lobby(lobby_id))
+    let bytes = encode_server_message(&RpcServerMessage::Lobby(player_side, lobby_id))
         .expect("Error serializing LobbyMessage");
     outgoing
         .send(WsMessage::Binary(bytes.to_vec().into()))

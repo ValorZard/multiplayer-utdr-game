@@ -1,4 +1,5 @@
-use crate::lobby_db::PlayerSide;
+use rpc::PlayerSide;
+use rpc::PlayerSideResolver;
 use std::net::SocketAddr;
 
 pub struct LobbyData {
@@ -45,7 +46,10 @@ impl LobbyData {
         }
     }
 
-    pub fn insert_player(&mut self, new_player: SocketAddr) -> Result<LobbyState, LobbyError> {
+    pub fn insert_player(
+        &mut self,
+        new_player: SocketAddr,
+    ) -> Result<(PlayerSide, LobbyState), LobbyError> {
         let new_player = Some(new_player);
 
         if self.left_side == new_player || self.right_side == new_player {
@@ -54,16 +58,12 @@ impl LobbyData {
 
         if self.left_side.is_none() {
             self.left_side = new_player;
+            return Ok((PlayerSide::Left, self.get_current_state()));
         } else if self.right_side.is_none() {
             self.right_side = new_player;
+            return Ok((PlayerSide::Right, self.get_current_state()));
         } else {
             return Err(LobbyError::AlreadyFull);
-        }
-
-        if self.left_side.is_some() && self.right_side.is_some() {
-            Ok(LobbyState::Full)
-        } else {
-            Ok(LobbyState::Waiting)
         }
     }
 

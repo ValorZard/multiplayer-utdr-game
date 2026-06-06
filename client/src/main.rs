@@ -3,7 +3,7 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{GameInput, LobbyId, RPSGameState, RpcClientMessage, RpcServerMessage};
+use rpc::{GameInput, LobbyId, PlayerSide, RPSGameState, RpcClientMessage, RpcServerMessage};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
@@ -72,6 +72,7 @@ async fn main() {
 
     let mut current_game_state: Option<RPSGameState> = None;
     let mut lobby_id: Option<LobbyId> = None;
+    let mut player_side: Option<PlayerSide> = None;
     while window.render_2d(&mut scene, &mut camera).await {
         // immediately pool the receiver even if there isn't a value there.
         while let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten() {
@@ -83,8 +84,9 @@ async fn main() {
                 RpcServerMessage::GameState(game_state) => {
                     current_game_state = Some(game_state);
                 }
-                RpcServerMessage::Lobby(id) => {
+                RpcServerMessage::Lobby(side, id) => {
                     lobby_id = Some(id);
+                    player_side = Some(side);
                 }
             }
         }
@@ -120,6 +122,7 @@ async fn main() {
                 .default_width(300.0)
                 .show(ctx, |ui| {
                     ui.label(format!("lobby id: {lobby_id:#?}"));
+                    ui.label(format!("player side: {player_side:#?}"));
                     ui.label(format!("{current_game_state:?}"));
 
                     ui.separator();
