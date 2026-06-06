@@ -23,13 +23,6 @@ pub struct UserRPCMessage {
     pub send_addr: SocketAddr,
 }
 
-#[derive(Debug, Clone)]
-pub enum LobbyMessage {
-    Heartbeat,
-    Text(String),
-    GameState(RPSGameState),
-}
-
 struct UserData {
     lobby_id: LobbyId,
     player_side: PlayerSide,
@@ -223,6 +216,8 @@ impl ServerStateInner {
                         }
                     }?;
                     println!("{lobby_id}: Current game state: {current_state:?}");
+                    lobby_state = lobby.get_current_lobby_state();
+                    println!("{lobby_id}: Lobby State: {lobby_state:?}");
 
                     // Special case: if a lobby is in a win state, pop it out and put it in finished list
                     if let RPSGameState::Win { state, ..} = current_state.clone() {
@@ -238,14 +233,7 @@ impl ServerStateInner {
                             RPSWinState::Tie => {}
                         }
                     }
-
-                    lobby_state = lobby.get_current_lobby_state();
-
-                    let outgoing_messages = self
-                        .collect_lobby_broadcast(lobby_id, LobbyMessage::GameState(current_state));
-                    for (sender, msg) in outgoing_messages {
-                        sender.send(msg)?
-                    }
+                    self.send_message_to_lobby(&RpcServerMessage::GameState(current_state), &lobby_id)?;
                 }
                 _ => {},
             }
@@ -322,49 +310,6 @@ impl ServerStateInner {
         // for now, we can just return Ok and ignore messages unless the lobby is running
         return Ok(());
 
-    }
-
-    fn collect_lobby_broadcast(
-        &self,
-        lobby_id: LobbyId,
-        lobby_message: LobbyMessage,
-    ) -> Vec<(UserSender, WsMessage)> {
-        println!("Sending message to lobby users {lobby_message:?}");
-
-        let rpc_message = match lobby_message {
-            LobbyMessage::GameState(state) => RpcServerMessage::GameState(state),
-            LobbyMessage::Text(text) => RpcServerMessage::Text(text),
-            LobbyMessage::Heartbeat => RpcServerMessage::Text(format!("{lobby_id} : Heartbeat")),
-        };
-
-        let encoded = encode_server_message(&rpc_message).unwrap().to_vec();
-        let ws_message = WsMessage::Binary(encoded.into());
-
-        let lobby = self
-            .running_lobby_list
-            .get(&lobby_id)
-            .or_else(|| self.waiting_lobby_list.get(&lobby_id));
-
-        let Some(lobby) = lobby else {
-            return vec![];
-        };
-
-        let mut out = Vec::new();
-
-        // update both left and right side with new game state
-        if let Some(addr) = lobby.get_left()
-            && let Some(user) = self.user_list.get(&addr)
-        {
-            out.push((user.sender.clone(), ws_message.clone()));
-        }
-
-        if let Some(addr) = lobby.get_right()
-            && let Some(user) = self.user_list.get(&addr)
-        {
-            out.push((user.sender.clone(), ws_message.clone()));
-        }
-
-        out
     }
 }
 
