@@ -11,3 +11,4 @@ tokio-tungstenite = {workspace = true}
 tokio-stream = {workspace = true}
 rkyv = {workspace = true}
 uuid = {workspace = true }
+anyhow = "1.0.102"

@@ -1,4 +1,5 @@
-use std::{cell::OnceCell, io::Error as IoError, net::SocketAddr};
+use crate::lobby_db::PlayerSide;
+use std::net::SocketAddr;
 
 pub struct LobbyData {
     pub left_side: Option<SocketAddr>,
@@ -33,18 +34,9 @@ impl std::fmt::Display for LobbyError {
     }
 }
 
-impl std::error::Error for LobbyError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
-    }
-
-    fn cause(&self) -> Option<&dyn std::error::Error> {
-        self.source()
-    }
-}
+impl std::error::Error for LobbyError {}
 
 impl LobbyData {
-    // we initialize with the left side first, but the left side can leave the match, which can be annoying
     pub fn new(left_side: SocketAddr) -> Self {
         Self {
             left_side: Some(left_side),
@@ -55,19 +47,19 @@ impl LobbyData {
 
     pub fn insert_player(&mut self, new_player: SocketAddr) -> Result<LobbyState, LobbyError> {
         let new_player = Some(new_player);
+
         if self.left_side == new_player || self.right_side == new_player {
             return Err(LobbyError::SameAddr);
         }
-        // depending on if a player left the lobby, either left or right side can be free
+
         if self.left_side.is_none() {
             self.left_side = new_player;
         } else if self.right_side.is_none() {
             self.right_side = new_player;
         } else {
-            // both sides are filled, which means that this lobby is full
             return Err(LobbyError::AlreadyFull);
         }
-        // return state of lobby
+
         if self.left_side.is_some() && self.right_side.is_some() {
             Ok(LobbyState::Full)
         } else {
@@ -75,26 +67,30 @@ impl LobbyData {
         }
     }
 
-    pub fn remove_player(&mut self, leaving_player: SocketAddr) -> Result<LobbyState, LobbyError> {
+    pub fn remove_player(
+        &mut self,
+        leaving_player: SocketAddr,
+    ) -> Result<(PlayerSide, LobbyState), LobbyError> {
         if let Some(addr) = self.left_side
             && addr == leaving_player
         {
             let _ = self.left_side.take();
             if self.right_side.is_some() {
-                return Ok(LobbyState::Waiting);
+                return Ok((PlayerSide::Left, LobbyState::Waiting));
             } else {
-                return Ok(LobbyState::Empty);
+                return Ok((PlayerSide::Left, LobbyState::Empty));
             }
         } else if let Some(addr) = self.right_side
             && addr == leaving_player
         {
             let _ = self.right_side.take();
             if self.left_side.is_some() {
-                return Ok(LobbyState::Waiting);
+                return Ok((PlayerSide::Right, LobbyState::Waiting));
             } else {
-                return Ok(LobbyState::Empty);
+                return Ok((PlayerSide::Right, LobbyState::Empty));
             }
         }
+
         Err(LobbyError::NeverExisted)
     }
 
@@ -113,17 +109,21 @@ impl LobbyData {
 mod tests {
     use super::*;
     use std::str::FromStr;
+
     #[test]
     fn lobby_tests() {
-        // start with dummy left user
         let dummy_left = SocketAddr::from_str("127.0.0.1:1234").unwrap();
         let dummy_right = SocketAddr::from_str("127.0.0.1:12342").unwrap();
+
         let mut lobby = LobbyData::new(dummy_left);
         assert_eq!(lobby.get_current_state(), LobbyState::Waiting);
+
         lobby.insert_player(dummy_right).unwrap();
         assert_eq!(lobby.get_current_state(), LobbyState::Full);
+
         lobby.remove_player(dummy_left).unwrap();
         assert_eq!(lobby.get_current_state(), LobbyState::Waiting);
+
         lobby.remove_player(dummy_right).unwrap();
         assert_eq!(lobby.get_current_state(), LobbyState::Empty);
     }
