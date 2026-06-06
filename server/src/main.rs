@@ -40,7 +40,7 @@ pub fn encode_server_message(message: &RpcServerMessage) -> Result<AlignedVec, r
     rkyv::to_bytes::<rancor::Error>(message)
 }
 
-async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr, server_state: ServerState) {
+async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr, server_state: ServerState) -> anyhow::Result<()> {
     println!("Incoming TCP connection from: {}", addr);
 
     let ws_stream = tokio_tungstenite::accept_async(raw_stream)
@@ -52,19 +52,17 @@ async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr, server_state
     let (user_sender, user_receiver) = mpsc::unbounded_channel();
 
     // assign this peer to a lobby
-    let (player_side, lobby_id) = server_state.insert_user(addr, user_sender).await;
+    let (player_side, lobby_id) = server_state.insert_user(addr, user_sender).await?;
 
     println!("Player assigned to lobby {lobby_id} on side {player_side:?}");
 
     let (mut outgoing, incoming) = ws_stream.split();
 
     // send our lobby id first
-    let bytes = encode_server_message(&RpcServerMessage::LobbyInit(player_side, lobby_id))
-        .expect("Error serializing LobbyMessage");
+    let bytes = encode_server_message(&RpcServerMessage::LobbyInit(player_side, lobby_id))?;
     outgoing
         .send(WsMessage::Binary(bytes.to_vec().into()))
-        .await
-        .expect("initial lobby message should be sent");
+        .await?;
 
     let broadcast_incoming = incoming.try_for_each(|msg| {
         let server_state = server_state.clone();
@@ -113,7 +111,8 @@ async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr, server_state
     future::select(broadcast_incoming, receive_from_others).await;
 
     println!("{} disconnected", &addr);
-    server_state.remove_user(addr).await;
+    server_state.remove_user(addr).await?;
+    Ok(())
 }
 
 #[tokio::main]
