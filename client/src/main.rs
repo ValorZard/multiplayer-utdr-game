@@ -3,7 +3,10 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{GameInput, LobbyId, LobbyState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, YesOrNo};
+use rpc::{
+    GameInput, LobbyId, LobbyState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage,
+    RpcServerMessage, YesOrNo,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
@@ -54,6 +57,7 @@ async fn main() {
     let mut remote_right_input: Option<GameInput> = None;
     let mut remote_left_input: Option<GameInput> = None;
     let mut lobby_state: LobbyState = LobbyState::Empty;
+    let mut is_continue_selected = false;
     while window.render_2d(&mut scene, &mut camera).await {
         // immediately pool the receiver even if there isn't a value there.
         while let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten() {
@@ -95,6 +99,7 @@ async fn main() {
                         LobbyState::Finished => {}
                         _ => {
                             win_state = None;
+                            is_continue_selected = false;
                         }
                     }
                     lobby_state = state;
@@ -146,18 +151,25 @@ async fn main() {
                                     .unbounded_send(RpcClientMessage::GameInput(GameInput::Paper));
                             }
                             if ui.button("Scissors").clicked() {
-                                let _ = client_rpc_sender
-                                    .unbounded_send(RpcClientMessage::GameInput(GameInput::Scissors));
+                                let _ = client_rpc_sender.unbounded_send(
+                                    RpcClientMessage::GameInput(GameInput::Scissors),
+                                );
                             }
                         }
                         LobbyState::Finished => {
-                            if ui.button("Yes").clicked() {
-                                let _ = client_rpc_sender
-                                    .unbounded_send(RpcClientMessage::ContinueRound(YesOrNo::Yes));
-                            }
-                            if ui.button("No").clicked() {
-                                let _ = client_rpc_sender
-                                    .unbounded_send(RpcClientMessage::ContinueRound(YesOrNo::No));
+                            if !is_continue_selected {
+                                if ui.button("Yes").clicked() {
+                                    let _ = client_rpc_sender.unbounded_send(
+                                        RpcClientMessage::ContinueRound(YesOrNo::Yes),
+                                    );
+                                    is_continue_selected = true;
+                                }
+                                if ui.button("No").clicked() {
+                                    let _ = client_rpc_sender.unbounded_send(
+                                        RpcClientMessage::ContinueRound(YesOrNo::No),
+                                    );
+                                    is_continue_selected = true;
+                                }
                             }
                         }
                     }
