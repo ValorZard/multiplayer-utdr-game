@@ -96,11 +96,19 @@ impl LobbySession {
     }
 
     pub fn set_left_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {
-        self.current_round.set_left_input(input)
+        let state = self.current_round.set_left_input(input)?;
+        if let RPSGameState::Win{state, ..} = state.clone() {
+            self.winner = Some(state);
+        }
+        Ok(state)
     }
 
     pub fn set_right_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {
-        self.current_round.set_right_input(input)
+        let state = self.current_round.set_right_input(input)?;
+        if let RPSGameState::Win{state, ..} = state.clone() {
+            self.winner = Some(state);
+        }
+        Ok(state)
     }
 
     pub fn reset_lobby(&mut self) {
