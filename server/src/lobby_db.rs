@@ -53,7 +53,6 @@ impl LobbyEntry {
         }
     }
 
-
     fn lobby_state(&self) -> LobbyState {
         match self {
             LobbyEntry::Waiting(_) => LobbyState::Waiting,
@@ -62,7 +61,6 @@ impl LobbyEntry {
         }
     }
 }
-
 
 struct ServerStateInner {
     user_list: HashMap<SocketAddr, UserData>,
@@ -138,24 +136,31 @@ impl ServerStateInner {
         self.send_message_to_lobby(&RpcServerMessage::GameState(game_state), &lobby_id)
     }
 
-    fn insert_user(&mut self, addr: SocketAddr, sender: UserSender) -> anyhow::Result<(PlayerSide, LobbyId)> {
+    fn insert_user(
+        &mut self,
+        addr: SocketAddr,
+        sender: UserSender,
+    ) -> anyhow::Result<(PlayerSide, LobbyId)> {
         // TODO: Cache user data somehow so that users can still get their data after leaving and reconnecting to server
         if let Some(existing) = self.user_list.get(&addr) {
             return Ok((existing.player_side.clone(), existing.lobby_id));
         }
 
         // TODO: This is O(n), not O(log n)
-        let waiting_lobby_id = self.lobby_list.iter().find_map(|(lobby_id, lobby_entry)| {
-            match lobby_entry {
-                LobbyEntry::Waiting(_) => Some(*lobby_id),
-                _ => None,
-            }
-        });
+        let waiting_lobby_id =
+            self.lobby_list
+                .iter()
+                .find_map(|(lobby_id, lobby_entry)| match lobby_entry {
+                    LobbyEntry::Waiting(_) => Some(*lobby_id),
+                    _ => None,
+                });
 
         let (player_side, lobby_id, should_start_game) = if let Some(lobby_id) = waiting_lobby_id {
             let lobby_entry = self.lobby_list.get_mut(&lobby_id).unwrap();
             let LobbyEntry::Waiting(lobby) = lobby_entry else {
-                unreachable!("This should be waiting since we used find map to find something that matched what we want.");
+                unreachable!(
+                    "This should be waiting since we used find map to find something that matched what we want."
+                );
             };
             lobby.reset_lobby();
             let (player_side, state) = lobby.insert_player(addr)?;
@@ -165,7 +170,10 @@ impl ServerStateInner {
         } else {
             let lobby_id = Uuid::new_v4();
             let lobby = LobbySession::new(addr);
-            println!("Lobby {lobby_id} should now be waiting: {:?}", lobby.get_current_lobby_state());
+            println!(
+                "Lobby {lobby_id} should now be waiting: {:?}",
+                lobby.get_current_lobby_state()
+            );
             self.lobby_list.insert(lobby_id, LobbyEntry::Waiting(lobby));
             (PlayerSide::Left, lobby_id, false)
         };
@@ -218,7 +226,9 @@ impl ServerStateInner {
                     LobbyState::Empty => {
                         // delete lobby
                     }
-                    _ => unreachable!("Since we only have two players in lobby {lobby_id:?}, if we remove a player from a waiting lobby, its empty and can be deleted."),
+                    _ => unreachable!(
+                        "Since we only have two players in lobby {lobby_id:?}, if we remove a player from a waiting lobby, its empty and can be deleted."
+                    ),
                 }
             }
 
@@ -239,7 +249,7 @@ impl ServerStateInner {
             }
 
             LobbyEntry::Finished(mut finished) => {
-                let (_, state) =finished.lobby_session.remove_player(addr)?;
+                let (_, state) = finished.lobby_session.remove_player(addr)?;
 
                 match state {
                     LobbyState::Waiting => {
@@ -251,7 +261,9 @@ impl ServerStateInner {
                     LobbyState::Empty => {
                         // delete lobby
                     }
-                    _ => unreachable!("If we remove a player, the lobby {lobby_id:?} can't be running"),
+                    _ => unreachable!(
+                        "If we remove a player, the lobby {lobby_id:?} can't be running"
+                    ),
                 }
             }
         }
@@ -278,65 +290,63 @@ impl ServerStateInner {
                 self.lobby_list.insert(lobby_id, LobbyEntry::Waiting(lobby));
             }
 
-            LobbyEntry::Running(mut lobby) => {
-                match user_rpc_message.message {
-                    RpcClientMessage::GameInput(input) => {
-                        let side = lobby
-                            .get_player_side(user_rpc_message.send_addr)
-                            .ok_or_else(|| anyhow!("player has no side in running lobby"))?;
+            LobbyEntry::Running(mut lobby) => match user_rpc_message.message {
+                RpcClientMessage::GameInput(input) => {
+                    let side = lobby
+                        .get_player_side(user_rpc_message.send_addr)
+                        .ok_or_else(|| anyhow!("player has no side in running lobby"))?;
 
-                        let current_state = match side {
-                            PlayerSide::Left => lobby.set_left_input(input)?,
-                            PlayerSide::Right => lobby.set_right_input(input)?,
-                        };
+                    let current_state = match side {
+                        PlayerSide::Left => lobby.set_left_input(input)?,
+                        PlayerSide::Right => lobby.set_right_input(input)?,
+                    };
 
-                        if let RPSGameState::Win { state, .. } = current_state.clone() {
-                            match state {
-                                RPSWinState::Left => {
-                                    if let Some(winner) = lobby.get_left() {
-                                        if let Some(user) = self.user_list.get_mut(&winner) {
-                                            user.score += 1;
-                                        }
+                    if let RPSGameState::Win { state, .. } = current_state.clone() {
+                        match state {
+                            RPSWinState::Left => {
+                                if let Some(winner) = lobby.get_left() {
+                                    if let Some(user) = self.user_list.get_mut(&winner) {
+                                        user.score += 1;
                                     }
                                 }
-                                RPSWinState::Right => {
-                                    if let Some(winner) = lobby.get_right() {
-                                        if let Some(user) = self.user_list.get_mut(&winner) {
-                                            user.score += 1;
-                                        }
-                                    }
-                                }
-                                RPSWinState::Tie => {}
                             }
-
-                            self.lobby_list.insert(
-                                lobby_id,
-                                LobbyEntry::Finished(FinishedLobbySession {
-                                    lobby_session: lobby,
-                                    left_side_continue: None,
-                                    right_side_continue: None,
-                                }),
-                            );
-
-                            self.send_message_to_lobby(
-                                &RpcServerMessage::GameState(current_state),
-                                &lobby_id,
-                            )?;
-                            self.broadcast_lobby_state(lobby_id)?;
-                        } else {
-                            self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
-                            self.send_message_to_lobby(
-                                &RpcServerMessage::GameState(current_state),
-                                &lobby_id,
-                            )?;
-                            self.broadcast_lobby_state(lobby_id)?;
+                            RPSWinState::Right => {
+                                if let Some(winner) = lobby.get_right() {
+                                    if let Some(user) = self.user_list.get_mut(&winner) {
+                                        user.score += 1;
+                                    }
+                                }
+                            }
+                            RPSWinState::Tie => {}
                         }
-                    }
-                    _ => {
+
+                        self.lobby_list.insert(
+                            lobby_id,
+                            LobbyEntry::Finished(FinishedLobbySession {
+                                lobby_session: lobby,
+                                left_side_continue: None,
+                                right_side_continue: None,
+                            }),
+                        );
+
+                        self.send_message_to_lobby(
+                            &RpcServerMessage::GameState(current_state),
+                            &lobby_id,
+                        )?;
+                        self.broadcast_lobby_state(lobby_id)?;
+                    } else {
                         self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
+                        self.send_message_to_lobby(
+                            &RpcServerMessage::GameState(current_state),
+                            &lobby_id,
+                        )?;
+                        self.broadcast_lobby_state(lobby_id)?;
                     }
                 }
-            }
+                _ => {
+                    self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
+                }
+            },
 
             LobbyEntry::Finished(mut finished) => {
                 match user_rpc_message.message {
@@ -394,14 +404,16 @@ impl ServerStateInner {
                             }
 
                             _ => {
-                                self.lobby_list.insert(lobby_id, LobbyEntry::Finished(finished));
+                                self.lobby_list
+                                    .insert(lobby_id, LobbyEntry::Finished(finished));
                                 self.broadcast_lobby_state(lobby_id)?;
                             }
                         }
                     }
                     _ => {
                         // ignore other messages now that we're finished
-                        self.lobby_list.insert(lobby_id, LobbyEntry::Finished(finished));
+                        self.lobby_list
+                            .insert(lobby_id, LobbyEntry::Finished(finished));
                     }
                 }
             }
@@ -410,7 +422,6 @@ impl ServerStateInner {
         Ok(())
     }
 }
-
 
 #[derive(Clone)]
 pub struct ServerState {
@@ -424,11 +435,15 @@ impl ServerState {
         }
     }
 
-    pub async fn insert_user(&self, addr: SocketAddr, sender: UserSender) -> anyhow::Result<(PlayerSide, LobbyId)> {
+    pub async fn insert_user(
+        &self,
+        addr: SocketAddr,
+        sender: UserSender,
+    ) -> anyhow::Result<(PlayerSide, LobbyId)> {
         self.server_state.lock().await.insert_user(addr, sender)
     }
 
-    pub async fn remove_user(&self, addr: SocketAddr) -> anyhow::Result<()>{
+    pub async fn remove_user(&self, addr: SocketAddr) -> anyhow::Result<()> {
         self.server_state.lock().await.remove_user(addr)
     }
 
