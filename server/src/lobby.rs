@@ -68,6 +68,8 @@ impl LobbySession {
         &mut self,
         leaving_player: SocketAddr,
     ) -> Result<(PlayerSide, LobbyState), LobbyError> {
+        // clear lobby state if we're removing players
+        self.reset_lobby();
         if let Some(addr) = self.left_side
             && addr == leaving_player
         {
