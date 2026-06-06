@@ -252,7 +252,9 @@ impl ServerStateInner {
                     }
                     LobbyState::Empty => {
                         // delete lobby
-                        println!("Lobby {lobby_id} is now destroyed, both players rejected continuing to play");
+                        println!(
+                            "Lobby {lobby_id} is now destroyed, both players rejected continuing to play"
+                        );
                     }
                     _ => unreachable!(
                         "If we remove a player, the lobby {lobby_id:?} can't be running"
