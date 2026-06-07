@@ -118,21 +118,17 @@ impl ServerStateInner {
     }
 
     fn broadcast_lobby_state(&self, lobby_id: LobbyId) -> anyhow::Result<()> {
-       if let Some(lobby) = self
-            .lobby_list
-            .get(&lobby_id) {
-           self.send_message_to_lobby(
-               &RpcServerMessage::LobbyState(lobby.lobby_state()),
-               &lobby_id,
-           )?
-       }
+        if let Some(lobby) = self.lobby_list.get(&lobby_id) {
+            self.send_message_to_lobby(
+                &RpcServerMessage::LobbyState(lobby.lobby_state()),
+                &lobby_id,
+            )?
+        }
         Ok(())
     }
 
     fn broadcast_game_state(&self, lobby_id: LobbyId) -> anyhow::Result<()> {
-        if let Some(lobby) = self
-            .lobby_list
-            .get(&lobby_id) {
+        if let Some(lobby) = self.lobby_list.get(&lobby_id) {
             let lobby = self
                 .lobby_list
                 .get(&lobby_id)
@@ -338,8 +334,10 @@ impl ServerStateInner {
         if let Some(user) = self.connected_user_list.get_mut(&addr) {
             user.lobby_id = None;
             user.player_side = None;
-            let leaving_message = encode_server_message(&RpcServerMessage::LobbyState(LobbyState::Empty))?;
-            user.sender.send(WsMessage::Binary(leaving_message.to_vec().into()))?;
+            let leaving_message =
+                encode_server_message(&RpcServerMessage::LobbyState(LobbyState::Empty))?;
+            user.sender
+                .send(WsMessage::Binary(leaving_message.to_vec().into()))?;
             Ok(())
         } else {
             bail!("User {addr} is not actually connected")
@@ -438,8 +436,18 @@ impl ServerStateInner {
                                 }
 
                                 (Some(YesOrNo::No), Some(YesOrNo::No)) => {
-                                    self.remove_connected_user_from_lobby(finished.lobby_session.get_left().expect("Should have both players"))?;
-                                    self.remove_connected_user_from_lobby(finished.lobby_session.get_right().expect("Should have both players"))?;
+                                    self.remove_connected_user_from_lobby(
+                                        finished
+                                            .lobby_session
+                                            .get_left()
+                                            .expect("Should have both players"),
+                                    )?;
+                                    self.remove_connected_user_from_lobby(
+                                        finished
+                                            .lobby_session
+                                            .get_right()
+                                            .expect("Should have both players"),
+                                    )?;
                                     // delete lobby entirely
                                     println!(
                                         "Finished Lobby {lobby_id} is now destroyed, both players rejected continuing to play"
