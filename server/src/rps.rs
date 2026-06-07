@@ -110,19 +110,19 @@ impl GameSession {
         }
     }
 
+    // you can only set this once per turn
     pub fn set_left_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {
         if self.left_input.is_none() {
             self.left_input = Some(input);
-            return Ok(self.compute_state());
         }
-        Err(GameError::LeftInputAlreadySet)
+        return Ok(self.compute_state());
     }
 
+    // you can only set this once per turn
     pub fn set_right_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {
         if self.right_input.is_none() {
             self.right_input = Some(input);
-            return Ok(self.compute_state());
         }
-        Err(GameError::RightInputAlreadySet)
+        return Ok(self.compute_state());
     }
 }

@@ -59,7 +59,7 @@ async fn main() {
     let mut remote_right_score = 0;
     let mut remote_left_score = 0;
     let mut lobby_state: LobbyState = LobbyState::Empty;
-    let mut is_continue_selected = false;
+    let mut is_input_selected = false;
     while window.render_2d(&mut scene, &mut camera).await {
         // immediately pool the receiver even if there isn't a value there.
         while let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten() {
@@ -107,7 +107,7 @@ async fn main() {
                         LobbyState::Finished => {}
                         _ => {
                             win_state = None;
-                            is_continue_selected = false;
+                            is_input_selected = false;
                         }
                     }
                     lobby_state = state;
@@ -156,33 +156,49 @@ async fn main() {
                         }
                         LobbyState::Waiting => {}
                         LobbyState::Running => {
-                            if ui.button("Rock").clicked() {
-                                let _ = client_rpc_sender
-                                    .unbounded_send(RpcClientMessage::GameInput(GameInput::Rock));
-                            }
-                            if ui.button("Paper").clicked() {
-                                let _ = client_rpc_sender
-                                    .unbounded_send(RpcClientMessage::GameInput(GameInput::Paper));
-                            }
-                            if ui.button("Scissors").clicked() {
-                                let _ = client_rpc_sender.unbounded_send(
-                                    RpcClientMessage::GameInput(GameInput::Scissors),
-                                );
+                            if let Some(game_state) = &current_game_state && let Some(side) = player_side {
+                                let round_start = if let RPSGameState::StartRound = game_state {
+                                    true
+                                } else {
+                                    false
+                                };
+                                let waiting_on_us = if let RPSGameState::WaitingForLeftInput { .. } = game_state && side == PlayerSide::Left {
+                                    true
+                                } else if let RPSGameState::WaitingForRightInput { .. } = game_state && side == PlayerSide::Right {
+                                    true
+                                } else {
+                                    false
+                                };
+                                if round_start || waiting_on_us {
+                                    if ui.button("Rock").clicked() {
+                                        let _ = client_rpc_sender
+                                            .unbounded_send(RpcClientMessage::GameInput(GameInput::Rock));
+                                    }
+                                    if ui.button("Paper").clicked() {
+                                        let _ = client_rpc_sender
+                                            .unbounded_send(RpcClientMessage::GameInput(GameInput::Paper));
+                                    }
+                                    if ui.button("Scissors").clicked() {
+                                        let _ = client_rpc_sender.unbounded_send(
+                                            RpcClientMessage::GameInput(GameInput::Scissors),
+                                        );
+                                    }
+                                }
                             }
                         }
                         LobbyState::Finished => {
-                            if !is_continue_selected {
+                            if !is_input_selected {
                                 if ui.button("Yes").clicked() {
                                     let _ = client_rpc_sender.unbounded_send(
                                         RpcClientMessage::ContinueRound(YesOrNo::Yes),
                                     );
-                                    is_continue_selected = true;
+                                    is_input_selected = true;
                                 }
                                 if ui.button("No").clicked() {
                                     let _ = client_rpc_sender.unbounded_send(
                                         RpcClientMessage::ContinueRound(YesOrNo::No),
                                     );
-                                    is_continue_selected = true;
+                                    is_input_selected = true;
                                 }
                             }
                         }

@@ -33,7 +33,7 @@ pub enum RpcClientMessage {
 pub type LobbyId = Uuid;
 pub type UserId = SocketAddr;
 
-#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 #[rkyv(
     // This will generate a PartialEq impl between our unarchived
     // and archived types
