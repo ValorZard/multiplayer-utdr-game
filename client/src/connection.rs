@@ -1,4 +1,5 @@
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use futures_channel::oneshot;
 use futures_util::FutureExt;
 use futures_util::{SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
@@ -12,6 +13,9 @@ pub type ClientRpcSender = UnboundedSender<RpcClientMessage>;
 pub type ClientRpcReceiver = UnboundedReceiver<RpcClientMessage>;
 pub type ServerRpcSender = UnboundedSender<RpcServerMessage>;
 pub type ServerRpcReceiver = UnboundedReceiver<RpcServerMessage>;
+
+pub type ConnectionFinishedSender = oneshot::Sender<()>;
+pub type ConnectionFinishedReceiver = oneshot::Receiver<()>;
 
 pub fn make_channels() -> (
     ClientRpcSender,
@@ -59,10 +63,15 @@ pub fn encode_client_message(
 pub async fn connect_to_websocket_server_wasm(
     client_rpc_receiver: ClientRpcReceiver,
     server_rpc_sender: ServerRpcSender,
+    connection_finished_sender: ConnectionFinishedSender,
 ) {
-    let (ws, wsio) = WsMeta::connect(SERVER_ADDRESS, None)
-        .await
-        .expect("websocket connection should succeed");
+    let (ws, wsio) = match WsMeta::connect(SERVER_ADDRESS, None).await {
+        Ok(parts) => parts,
+        Err(e) => {
+            log!("WebSocket connect failed for {}: {:?}", SERVER_ADDRESS, e);
+            return;
+        }
+    };
 
     let (mut send_stream, mut recv_stream) = wsio.split();
 
@@ -76,7 +85,7 @@ pub async fn connect_to_websocket_server_wasm(
                         .send(WsMessage::Binary(bytes.to_vec().into()))
                         .await
                     {
-                        println!("Error! Breaking send loop: {e}");
+                        log!("Error! Breaking send loop: {e}");
                         break;
                     }
                 }
@@ -102,13 +111,18 @@ pub async fn connect_to_websocket_server_wasm(
         }
     }
 
-    ws.close().await.expect("close should succeed");
+    if let Err(e) = ws.close().await {
+        log!("WebSocket close failed for {}: {:?}", SERVER_ADDRESS, e);
+    }
+
+    let _ = connection_finished_sender.send(());
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn connect_to_websocket_server_native(
     mut client_rpc_receiver: ClientRpcReceiver,
     server_rpc_sender: ServerRpcSender,
+    connection_finished_sender: ConnectionFinishedSender,
 ) {
     use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -168,5 +182,7 @@ pub fn connect_to_websocket_server_native(
                 eprintln!("WebSocket connect failed for {}: {:?}", SERVER_ADDRESS, e);
                 return;
             }
+
+            let _ = connection_finished_sender.send(());
         })
 }
