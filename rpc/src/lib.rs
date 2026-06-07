@@ -26,6 +26,7 @@ pub enum RpcClientMessage {
     Text(String),
     GameInput(GameInput),
     ContinueRound(YesOrNo),
+    JoinLobby,
 }
 
 pub type LobbyId = Uuid;
