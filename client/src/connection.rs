@@ -29,7 +29,8 @@ pub fn make_channels() -> (
     )
 }
 
-const SERVER_ADDRESS: &str = "ws://127.0.0.1:12345/";
+// now that we are hosting on a proper server, we have to match the URL for it exactly for the websocket server to connect
+const SERVER_ADDRESS: &str = "wss://167.233.56.216/server/";
 
 #[macro_export]
 macro_rules! log {
@@ -116,52 +117,56 @@ pub fn connect_to_websocket_server_native(
         .build()
         .unwrap()
         .block_on(async {
-            let (socket, response) = connect_async(SERVER_ADDRESS).await.expect("Can't connect");
-
-            println!("Connected to the server");
-            println!("Response HTTP code: {}", response.status());
-            println!("Response contains the following headers:");
-            for (header, _value) in response.headers() {
-                println!("* {header}");
-            }
-
-            let (mut send_stream, mut recv_stream) = socket.split();
-
-            let send_loop = tokio::spawn(async move {
-                while let Some(rpc_message) = client_rpc_receiver.next().await {
-                    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&rpc_message).unwrap();
-                    if let Err(e) = send_stream
-                        .send(Message::Binary(bytes.to_vec().into()))
-                        .await
-                    {
-                        println!("Error! Breaking send loop: {e}");
-                        break;
-                    }
+            let connection_result = connect_async(SERVER_ADDRESS).await;
+            if let Ok((socket, response)) = connection_result {
+                println!("Connected to the server");
+                println!("Response HTTP code: {}", response.status());
+                println!("Response contains the following headers:");
+                for (header, _value) in response.headers() {
+                    println!("* {header}");
                 }
-            });
 
-            let recv_loop = tokio::spawn(async move {
-                while let Some(msg) = recv_stream.next().await {
-                    match msg {
-                        Ok(Message::Text(msg)) => {
-                            println!("Received text: {:?}", msg);
-                        }
-                        Ok(Message::Binary(msg)) => {
-                            let deserialized = decode_server_message(msg.as_ref()).unwrap();
-                            println!("Received binary: {:?}", deserialized);
-                            let _ = server_rpc_sender.unbounded_send(deserialized);
-                        }
-                        Ok(msg) => {
-                            println!("Unexpected message: {:?}", msg);
-                        }
-                        Err(e) => {
-                            println!("Error! Breaking receive loop: {e}");
+                let (mut send_stream, mut recv_stream) = socket.split();
+
+                let send_loop = tokio::spawn(async move {
+                    while let Some(rpc_message) = client_rpc_receiver.next().await {
+                        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&rpc_message).unwrap();
+                        if let Err(e) = send_stream
+                            .send(Message::Binary(bytes.to_vec().into()))
+                            .await
+                        {
+                            println!("Error! Breaking send loop: {e}");
                             break;
                         }
                     }
-                }
-            });
+                });
 
-            let _ = tokio::join!(send_loop, recv_loop);
+                let recv_loop = tokio::spawn(async move {
+                    while let Some(msg) = recv_stream.next().await {
+                        match msg {
+                            Ok(Message::Text(msg)) => {
+                                println!("Received text: {:?}", msg);
+                            }
+                            Ok(Message::Binary(msg)) => {
+                                let deserialized = decode_server_message(msg.as_ref()).unwrap();
+                                println!("Received binary: {:?}", deserialized);
+                                let _ = server_rpc_sender.unbounded_send(deserialized);
+                            }
+                            Ok(msg) => {
+                                println!("Unexpected message: {:?}", msg);
+                            }
+                            Err(e) => {
+                                println!("Error! Breaking receive loop: {e}");
+                                break;
+                            }
+                        }
+                    }
+                });
+
+                let _ = tokio::join!(send_loop, recv_loop);
+            } else if let Err(e) = connection_result {
+                eprintln!("WebSocket connect failed for {}: {:?}", SERVER_ADDRESS, e);
+                return;
+            }
         })
 }
