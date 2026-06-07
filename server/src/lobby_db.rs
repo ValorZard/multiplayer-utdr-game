@@ -1,10 +1,7 @@
 use anyhow::{anyhow, bail};
-use rpc::{
-    LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize,
-    YesOrNo,
-};
+use rpc::{LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, UserId, YesOrNo};
 use std::error::Error;
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{Mutex, mpsc::UnboundedSender};
 use tokio_tungstenite::tungstenite::{Message as WsMessage, Message};
@@ -23,7 +20,7 @@ type UserSender = UnboundedSender<WsMessage>;
 #[derive(Debug, Clone)]
 pub struct UserRPCMessage {
     pub message: RpcClientMessage,
-    pub send_addr: SocketAddr,
+    pub send_addr: UserId,
 }
 
 struct UserData {
@@ -64,8 +61,8 @@ impl LobbyEntry {
 }
 
 struct ServerStateInner {
-    disconnected_user_list: HashMap<SocketAddr, ScoreSize>,
-    connected_user_list: HashMap<SocketAddr, UserData>,
+    disconnected_user_list: HashMap<UserId, ScoreSize>,
+    connected_user_list: HashMap<UserId, UserData>,
     lobby_list: HashMap<LobbyId, LobbyEntry>,
 }
 
@@ -81,7 +78,7 @@ impl ServerStateInner {
     fn send_message_to_user(
         &self,
         message: &RpcServerMessage,
-        user_addr: &SocketAddr,
+        user_addr: &UserId,
     ) -> anyhow::Result<()> {
         let bytes = encode_server_message(message)?;
         let user = self
@@ -157,7 +154,7 @@ impl ServerStateInner {
         Ok(())
     }
 
-    fn connect_user(&mut self, addr: SocketAddr, sender: UserSender) -> anyhow::Result<()> {
+    fn connect_user(&mut self, addr: UserId, sender: UserSender) -> anyhow::Result<()> {
         if let Some(existing) = self.connected_user_list.get(&addr) {
             bail!("Can't double connect a user to the server");
         }
@@ -185,7 +182,7 @@ impl ServerStateInner {
 
     fn put_connected_user_in_lobby(
         &mut self,
-        addr: SocketAddr,
+        addr: UserId,
     ) -> anyhow::Result<(PlayerSide, LobbyId)> {
         // TODO: This is O(n), not O(log n)
         let waiting_lobby_id =
@@ -238,7 +235,7 @@ impl ServerStateInner {
         Ok((player_side, lobby_id))
     }
 
-    fn disconnect_user(&mut self, addr: SocketAddr) -> anyhow::Result<()> {
+    fn disconnect_user(&mut self, addr: UserId) -> anyhow::Result<()> {
         let Some(user_data) = self.connected_user_list.get_mut(&addr) else {
             bail!("Cannot disconnect user {addr} from the server if it's not connected");
         };
@@ -330,7 +327,7 @@ impl ServerStateInner {
         Ok(())
     }
 
-    fn remove_connected_user_from_lobby(&mut self, addr: SocketAddr) -> anyhow::Result<()> {
+    fn remove_connected_user_from_lobby(&mut self, addr: UserId) -> anyhow::Result<()> {
         if let Some(user) = self.connected_user_list.get_mut(&addr) {
             user.lobby_id = None;
             user.player_side = None;
@@ -530,11 +527,11 @@ impl ServerState {
         }
     }
 
-    pub async fn connect_user(&self, addr: SocketAddr, sender: UserSender) -> anyhow::Result<()> {
+    pub async fn connect_user(&self, addr: UserId, sender: UserSender) -> anyhow::Result<()> {
         self.server_state.lock().await.connect_user(addr, sender)
     }
 
-    pub async fn disconnect_user(&self, addr: SocketAddr) -> anyhow::Result<()> {
+    pub async fn disconnect_user(&self, addr: UserId) -> anyhow::Result<()> {
         self.server_state.lock().await.disconnect_user(addr)
     }
 

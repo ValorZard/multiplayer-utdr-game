@@ -1,12 +1,12 @@
 use crate::rps::{GameError, GameSession};
 use anyhow::bail;
 use rpc::PlayerSideResolver;
-use rpc::{LobbyState, PlayerSide, RPSGameState, RPSWinState};
-use std::net::SocketAddr;
+use rpc::{LobbyState, PlayerSide, RPSGameState, RPSWinState, UserId};
+
 
 pub struct LobbySession {
-    left_side: Option<SocketAddr>,
-    right_side: Option<SocketAddr>,
+    left_side: Option<UserId>,
+    right_side: Option<UserId>,
     current_round: GameSession,
     winner: Option<RPSWinState>,
 }
@@ -34,7 +34,7 @@ impl std::fmt::Display for LobbyError {
 impl std::error::Error for LobbyError {}
 
 impl LobbySession {
-    pub fn new(left_side: SocketAddr) -> Self {
+    pub fn new(left_side: UserId) -> Self {
         Self {
             left_side: Some(left_side),
             right_side: None,
@@ -45,7 +45,7 @@ impl LobbySession {
 
     pub fn insert_player(
         &mut self,
-        new_player: SocketAddr,
+        new_player: UserId,
     ) -> Result<(PlayerSide, LobbyState), LobbyError> {
         let new_player = Some(new_player);
 
@@ -66,7 +66,7 @@ impl LobbySession {
 
     pub fn remove_player(
         &mut self,
-        leaving_player: SocketAddr,
+        leaving_player: UserId,
     ) -> Result<(PlayerSide, LobbyState), LobbyError> {
         // clear lobby state if we're removing players
         self.reset_lobby();
@@ -89,11 +89,11 @@ impl LobbySession {
         self.winner.clone()
     }
 
-    pub fn get_left(&self) -> Option<SocketAddr> {
+    pub fn get_left(&self) -> Option<UserId> {
         self.left_side
     }
 
-    pub fn get_right(&self) -> Option<SocketAddr> {
+    pub fn get_right(&self) -> Option<UserId> {
         self.right_side
     }
 
@@ -134,7 +134,7 @@ impl LobbySession {
         self.current_round.compute_state()
     }
 
-    pub fn get_player_side(&self, addr: SocketAddr) -> Option<PlayerSide> {
+    pub fn get_player_side(&self, addr: UserId) -> Option<PlayerSide> {
         if self.get_left() == Some(addr) {
             Some(PlayerSide::Left)
         } else if self.get_right() == Some(addr) {
@@ -152,8 +152,8 @@ mod tests {
 
     #[test]
     fn lobby_tests() {
-        let dummy_left = SocketAddr::from_str("127.0.0.1:1234").unwrap();
-        let dummy_right = SocketAddr::from_str("127.0.0.1:12342").unwrap();
+        let dummy_left = UserId::from_str("127.0.0.1:1234").unwrap();
+        let dummy_right = UserId::from_str("127.0.0.1:12342").unwrap();
 
         let mut lobby = LobbySession::new(dummy_left);
         assert_eq!(lobby.get_current_lobby_state(), LobbyState::Waiting);
