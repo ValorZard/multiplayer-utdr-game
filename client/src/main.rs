@@ -144,7 +144,12 @@ async fn main() {
                     ui.separator();
 
                     match lobby_state {
-                        LobbyState::Empty => {}
+                        LobbyState::Empty => {
+                            if ui.button("Join Lobby").clicked() {
+                                let _ = client_rpc_sender
+                                    .unbounded_send(RpcClientMessage::JoinLobby);
+                            }
+                        }
                         LobbyState::Waiting => {}
                         LobbyState::Running => {
                             if ui.button("Rock").clicked() {

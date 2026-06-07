@@ -56,17 +56,9 @@ async fn handle_connection(
     let (user_sender, user_receiver) = mpsc::unbounded_channel();
 
     // assign this peer to a lobby
-    let (player_side, lobby_id) = server_state.insert_user(addr, user_sender).await?;
-
-    println!("Player assigned to lobby {lobby_id} on side {player_side:?}");
+    server_state.connect_user(addr, user_sender).await?;
 
     let (mut outgoing, incoming) = ws_stream.split();
-
-    // send our lobby id first
-    let bytes = encode_server_message(&RpcServerMessage::LobbyInit(player_side, lobby_id))?;
-    outgoing
-        .send(WsMessage::Binary(bytes.to_vec().into()))
-        .await?;
 
     let broadcast_incoming = incoming.try_for_each(|msg| {
         let server_state = server_state.clone();
@@ -115,7 +107,7 @@ async fn handle_connection(
     future::select(broadcast_incoming, receive_from_others).await;
 
     println!("{} disconnected", &addr);
-    server_state.remove_user(addr).await?;
+    server_state.disconnect_user(addr).await?;
     Ok(())
 }
 
