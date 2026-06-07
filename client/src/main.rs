@@ -1,3 +1,6 @@
+use crate::connection::{ClientRpcSender, ConnectionFinishedReceiver, ServerRpcReceiver};
+use futures_channel::oneshot;
+use futures_util::future::FusedFuture;
 use futures_util::{FutureExt, StreamExt};
 use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
@@ -14,26 +17,22 @@ mod connection;
 
 static ASSET_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR\\assets");
 
-#[kiss3d::main]
-async fn main() {
-    let mut window = Window::new("Kiss3d: rectangle").await;
-    let mut camera = PanZoomCamera2d::new(Vec2::ZERO, 2.0);
-    let mut scene = SceneNode2d::empty();
-
-    let image_buffer = ASSET_DIR.get_file("background_concept_2.png").unwrap();
-    let mut texture_manager = TextureManager::new();
-    let image_texture =
-        texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
-
-    let (client_rpc_sender, client_rpc_receiver, server_rpc_sender, mut server_rpc_receiver) =
+fn get_connection_receivers() -> (
+    ClientRpcSender,
+    ServerRpcReceiver,
+    ConnectionFinishedReceiver,
+) {
+    let (client_rpc_sender, client_rpc_receiver, server_rpc_sender, server_rpc_receiver) =
         connection::make_channels();
-
+    let (connection_finished_sender, connection_finished_receiver) = oneshot::channel::<()>();
     #[cfg(target_arch = "wasm32")]
     {
+        console_error_panic_hook::set_once();
         spawn_local(async move {
             crate::connection::connect_to_websocket_server_wasm(
                 client_rpc_receiver,
                 server_rpc_sender,
+                connection_finished_sender,
             )
             .await;
         });
@@ -45,9 +44,31 @@ async fn main() {
             crate::connection::connect_to_websocket_server_native(
                 client_rpc_receiver,
                 server_rpc_sender,
+                connection_finished_sender,
             )
         });
     }
+
+    (
+        client_rpc_sender,
+        server_rpc_receiver,
+        connection_finished_receiver,
+    )
+}
+
+#[kiss3d::main]
+async fn main() {
+    let mut window = Window::new("Kiss3d: rectangle").await;
+    let mut camera = PanZoomCamera2d::new(Vec2::ZERO, 2.0);
+    let mut scene = SceneNode2d::empty();
+
+    let image_buffer = ASSET_DIR.get_file("background_concept_2.png").unwrap();
+    let mut texture_manager = TextureManager::new();
+    let image_texture =
+        texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
+
+    let (client_rpc_sender, mut server_rpc_receiver, mut connection_finished_receiver) =
+        get_connection_receivers();
 
     // UI state
     let mut current_game_state: Option<RPSGameState> = None;
@@ -61,6 +82,13 @@ async fn main() {
     let mut lobby_state: LobbyState = LobbyState::Empty;
     let mut is_input_selected = false;
     while window.render_2d(&mut scene, &mut camera).await {
+        // set lobby state to empty if connection lost
+        let check_current_connection_state = connection_finished_receiver.try_recv();
+        if let Ok(Some(_)) = check_current_connection_state {
+            log!("Connection dropped.");
+            lobby_state = LobbyState::Empty;
+        }
+
         // immediately pool the receiver even if there isn't a value there.
         while let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten() {
             log!("{rpc_message:?}");
