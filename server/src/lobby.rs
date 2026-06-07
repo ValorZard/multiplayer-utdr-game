@@ -3,7 +3,6 @@ use anyhow::bail;
 use rpc::PlayerSideResolver;
 use rpc::{LobbyState, PlayerSide, RPSGameState, RPSWinState, UserId};
 
-
 pub struct LobbySession {
     left_side: Option<UserId>,
     right_side: Option<UserId>,

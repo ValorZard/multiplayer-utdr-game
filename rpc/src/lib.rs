@@ -1,5 +1,5 @@
-use std::net::SocketAddr;
 use rkyv::{Archive, Deserialize, Serialize, util::AlignedVec};
+use std::net::SocketAddr;
 use uuid::Uuid;
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
