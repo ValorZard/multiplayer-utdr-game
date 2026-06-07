@@ -3,7 +3,10 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{GameInput, LobbyId, PlayerSide, RPSGameState, RpcClientMessage, RpcServerMessage};
+use rpc::{
+    GameInput, LobbyId, LobbyState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage,
+    RpcServerMessage, YesOrNo,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
@@ -46,35 +49,17 @@ async fn main() {
         });
     }
 
-    let mut rect = scene
-        .add_rectangle(
-            image_texture.size.0 as f32 * 0.5,
-            image_texture.size.1 as f32 * 0.5,
-        )
-        .set_lines_width(10.0, false)
-        .set_lines_color(Some(WHITE))
-        .set_texture(image_texture);
-    rect.read_uvs(&mut |uv_vec| {
-        println!("{:?}", uv_vec);
-    });
-    let mut circ = scene
-        .add_circle(50.0)
-        .translate(Vec2::new(200.0, 0.0))
-        .set_color(BLUE);
-
-    let rot_rect = 0.014;
-    let rot_circ = -0.014;
-
     // UI state
-    let mut rotation_speed = 0.014;
-    let mut opacity = 1.0;
-    let mut circle_color = [1.0, 0.0, 0.0];
-
     let mut current_game_state: Option<RPSGameState> = None;
     let mut lobby_id: Option<LobbyId> = None;
     let mut player_side: Option<PlayerSide> = None;
+    let mut win_state: Option<RPSWinState> = None;
     let mut remote_right_input: Option<GameInput> = None;
     let mut remote_left_input: Option<GameInput> = None;
+    let mut remote_right_score = 0;
+    let mut remote_left_score = 0;
+    let mut lobby_state: LobbyState = LobbyState::Empty;
+    let mut is_continue_selected = false;
     while window.render_2d(&mut scene, &mut camera).await {
         // immediately pool the receiver even if there isn't a value there.
         while let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten() {
@@ -83,8 +68,12 @@ async fn main() {
                 RpcServerMessage::Text(text) => {
                     // TODO: Do something here I guess
                 }
-                RpcServerMessage::GameState(game_state) => {
-                    match &game_state {
+                RpcServerMessage::GameState {
+                    state,
+                    left_side_score,
+                    right_side_score,
+                } => {
+                    match &state {
                         RPSGameState::StartRound => {
                             // reset all game state on Start Round
                             remote_left_input = None;
@@ -96,33 +85,32 @@ async fn main() {
                         RPSGameState::WaitingForRightInput { left_input } => {
                             remote_left_input = Some(left_input.clone());
                         }
-                        RPSGameState::LeftWin {
+                        RPSGameState::Win {
+                            state,
                             left_input,
                             right_input,
                         } => {
-                            remote_left_input = Some(left_input.clone());
-                            remote_right_input = Some(right_input.clone());
-                        }
-                        RPSGameState::RightWin {
-                            left_input,
-                            right_input,
-                        } => {
-                            remote_left_input = Some(left_input.clone());
-                            remote_right_input = Some(right_input.clone());
-                        }
-                        RPSGameState::Tie {
-                            left_input,
-                            right_input,
-                        } => {
-                            remote_left_input = Some(left_input.clone());
-                            remote_right_input = Some(right_input.clone());
+                            win_state = Some(state.clone());
                         }
                     }
-                    current_game_state = Some(game_state);
+                    remote_left_score = left_side_score;
+                    remote_right_score = right_side_score;
+                    current_game_state = Some(state);
                 }
-                RpcServerMessage::Lobby(side, id) => {
+                RpcServerMessage::LobbyInit(side, id) => {
                     lobby_id = Some(id);
                     player_side = Some(side);
+                }
+                RpcServerMessage::LobbyState(state) => {
+                    // unless lobby state is finished, we really shouldn't have a win state
+                    match state {
+                        LobbyState::Finished => {}
+                        _ => {
+                            win_state = None;
+                            is_continue_selected = false;
+                        }
+                    }
+                    lobby_state = state;
                 }
             }
         }
@@ -141,16 +129,6 @@ async fn main() {
                 _ => {}
             }
         }
-        rect.append_rotation(rot_rect);
-        circ.append_rotation(rot_circ);
-
-        // set circle color
-        circ.set_color(Color::new(
-            circle_color[0],
-            circle_color[1],
-            circle_color[2],
-            opacity,
-        ));
 
         // Draw UI
         window.draw_ui(|ctx| {
@@ -162,33 +140,53 @@ async fn main() {
                     ui.label(format!(
                         "Left input {remote_left_input:?}, Right input {remote_right_input:?}"
                     ));
-                    ui.label(format!("{current_game_state:?}"));
+                    ui.label(format!("Game State: {current_game_state:?}"));
+                    ui.label(format!("Lobby state: {lobby_state:?}"));
+                    ui.label(format!("Win state: {win_state:?}"));
+                    ui.label(format!("Left side score: {remote_left_score}, Right side score: {remote_right_score}"));
 
                     ui.separator();
 
-                    if ui.button("Rock").clicked() {
-                        let _ = client_rpc_sender
-                            .unbounded_send(RpcClientMessage::GameInput(GameInput::Rock));
+                    match lobby_state {
+                        LobbyState::Empty => {
+                            if ui.button("Join Lobby").clicked() {
+                                let _ = client_rpc_sender
+                                    .unbounded_send(RpcClientMessage::JoinLobby);
+                            }
+                        }
+                        LobbyState::Waiting => {}
+                        LobbyState::Running => {
+                            if ui.button("Rock").clicked() {
+                                let _ = client_rpc_sender
+                                    .unbounded_send(RpcClientMessage::GameInput(GameInput::Rock));
+                            }
+                            if ui.button("Paper").clicked() {
+                                let _ = client_rpc_sender
+                                    .unbounded_send(RpcClientMessage::GameInput(GameInput::Paper));
+                            }
+                            if ui.button("Scissors").clicked() {
+                                let _ = client_rpc_sender.unbounded_send(
+                                    RpcClientMessage::GameInput(GameInput::Scissors),
+                                );
+                            }
+                        }
+                        LobbyState::Finished => {
+                            if !is_continue_selected {
+                                if ui.button("Yes").clicked() {
+                                    let _ = client_rpc_sender.unbounded_send(
+                                        RpcClientMessage::ContinueRound(YesOrNo::Yes),
+                                    );
+                                    is_continue_selected = true;
+                                }
+                                if ui.button("No").clicked() {
+                                    let _ = client_rpc_sender.unbounded_send(
+                                        RpcClientMessage::ContinueRound(YesOrNo::No),
+                                    );
+                                    is_continue_selected = true;
+                                }
+                            }
+                        }
                     }
-                    if ui.button("Paper").clicked() {
-                        let _ = client_rpc_sender
-                            .unbounded_send(RpcClientMessage::GameInput(GameInput::Paper));
-                    }
-                    if ui.button("Scissors").clicked() {
-                        let _ = client_rpc_sender
-                            .unbounded_send(RpcClientMessage::GameInput(GameInput::Scissors));
-                    }
-
-                    // Opacity control
-                    ui.label("Opacity:");
-                    ui.add(egui::Slider::new(&mut opacity, 0.0..=1.0));
-
-                    // Color picker
-                    ui.label("Cube Color:");
-
-                    ui.horizontal(|ui| {
-                        ui.color_edit_button_rgb(&mut circle_color);
-                    });
                 });
         });
     }

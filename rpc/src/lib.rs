@@ -1,5 +1,19 @@
 use rkyv::{Archive, Deserialize, Serialize, util::AlignedVec};
+use std::net::SocketAddr;
 use uuid::Uuid;
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum YesOrNo {
+    Yes,
+    No,
+}
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
@@ -12,9 +26,12 @@ use uuid::Uuid;
 pub enum RpcClientMessage {
     Text(String),
     GameInput(GameInput),
+    ContinueRound(YesOrNo),
+    JoinLobby,
 }
 
 pub type LobbyId = Uuid;
+pub type UserId = SocketAddr;
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
@@ -29,6 +46,8 @@ pub enum PlayerSide {
     Right,
 }
 
+pub type ScoreSize = u32;
+
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
     // This will generate a PartialEq impl between our unarchived
@@ -38,9 +57,29 @@ pub enum PlayerSide {
     derive(Debug),
 )]
 pub enum RpcServerMessage {
-    GameState(RPSGameState),
-    Lobby(PlayerSide, LobbyId),
+    GameState {
+        state: RPSGameState,
+        left_side_score: ScoreSize,
+        right_side_score: ScoreSize,
+    },
+    LobbyInit(PlayerSide, LobbyId),
+    LobbyState(LobbyState),
     Text(String),
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum LobbyState {
+    Empty,
+    Waiting,
+    Running,
+    Finished,
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
@@ -65,6 +104,20 @@ pub enum GameInput {
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
+pub enum RPSWinState {
+    Left,
+    Right,
+    Tie,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
 pub enum RPSGameState {
     // waiting on inputs from both players here
     StartRound,
@@ -74,15 +127,8 @@ pub enum RPSGameState {
     WaitingForRightInput {
         left_input: GameInput,
     },
-    LeftWin {
-        left_input: GameInput,
-        right_input: GameInput,
-    },
-    RightWin {
-        left_input: GameInput,
-        right_input: GameInput,
-    },
-    Tie {
+    Win {
+        state: RPSWinState,
         left_input: GameInput,
         right_input: GameInput,
     },

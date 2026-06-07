@@ -1,4 +1,4 @@
-use rpc::{GameInput, RPSGameState};
+use rpc::{GameInput, RPSGameState, RPSWinState};
 
 #[derive(Debug)]
 pub enum GameError {
@@ -55,43 +55,52 @@ impl GameSession {
                 None => RPSGameState::WaitingForRightInput { left_input },
                 Some(right_input) => match left_input {
                     GameInput::Rock => match right_input {
-                        GameInput::Rock => RPSGameState::Tie {
+                        GameInput::Rock => RPSGameState::Win {
+                            state: RPSWinState::Tie,
                             left_input,
                             right_input,
                         },
-                        GameInput::Paper => RPSGameState::RightWin {
+                        GameInput::Paper => RPSGameState::Win {
+                            state: RPSWinState::Right,
                             left_input,
                             right_input,
                         },
-                        GameInput::Scissors => RPSGameState::LeftWin {
+                        GameInput::Scissors => RPSGameState::Win {
+                            state: RPSWinState::Left,
                             left_input,
                             right_input,
                         },
                     },
                     GameInput::Paper => match right_input {
-                        GameInput::Rock => RPSGameState::LeftWin {
+                        GameInput::Rock => RPSGameState::Win {
+                            state: RPSWinState::Left,
                             left_input,
                             right_input,
                         },
-                        GameInput::Paper => RPSGameState::Tie {
+                        GameInput::Paper => RPSGameState::Win {
+                            state: RPSWinState::Tie,
                             left_input,
                             right_input,
                         },
-                        GameInput::Scissors => RPSGameState::RightWin {
+                        GameInput::Scissors => RPSGameState::Win {
+                            state: RPSWinState::Right,
                             left_input,
                             right_input,
                         },
                     },
                     GameInput::Scissors => match right_input {
-                        GameInput::Rock => RPSGameState::RightWin {
+                        GameInput::Rock => RPSGameState::Win {
+                            state: RPSWinState::Right,
                             left_input,
                             right_input,
                         },
-                        GameInput::Paper => RPSGameState::LeftWin {
+                        GameInput::Paper => RPSGameState::Win {
+                            state: RPSWinState::Left,
                             left_input,
                             right_input,
                         },
-                        GameInput::Scissors => RPSGameState::Tie {
+                        GameInput::Scissors => RPSGameState::Win {
+                            state: RPSWinState::Tie,
                             left_input,
                             right_input,
                         },
