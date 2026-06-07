@@ -47,9 +47,13 @@ async fn handle_connection(
 ) -> anyhow::Result<()> {
     println!("Incoming TCP connection from: {}", addr);
 
-    let ws_stream = tokio_tungstenite::accept_async(raw_stream)
-        .await
-        .expect("Error during the websocket handshake occurred");
+    let ws_stream = match tokio_tungstenite::accept_async(raw_stream).await {
+        Ok(ws) => ws,
+        Err(err) => {
+            eprintln!("WebSocket handshake failed for {}: {:?}", addr, err);
+            return Ok(());
+        }
+    };
     println!("WebSocket connection established: {}", addr);
 
     // Insert the write part of this peer to the peer map.
@@ -122,8 +126,9 @@ async fn main() -> Result<(), IoError> {
     let server_state = ServerState::new();
 
     // Let's spawn the handling of each connection in a separate task.
+    let mut connection_set = JoinSet::new();
     while let Ok((stream, addr)) = listener.accept().await {
-        tokio::spawn(handle_connection(stream, addr, server_state.clone()));
+        connection_set.spawn(handle_connection(stream, addr, server_state.clone()));
     }
 
     Ok(())
