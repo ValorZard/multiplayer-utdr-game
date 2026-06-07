@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use rkyv::{Archive, Deserialize, Serialize, util::AlignedVec};
 use uuid::Uuid;
 
@@ -30,6 +31,7 @@ pub enum RpcClientMessage {
 }
 
 pub type LobbyId = Uuid;
+pub type UserId = SocketAddr;
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
