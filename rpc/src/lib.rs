@@ -55,7 +55,11 @@ pub type ScoreSize = u32;
     derive(Debug),
 )]
 pub enum RpcServerMessage {
-    GameState{state: RPSGameState, left_side_score: ScoreSize, right_side_score: ScoreSize},
+    GameState {
+        state: RPSGameState,
+        left_side_score: ScoreSize,
+        right_side_score: ScoreSize,
+    },
     LobbyInit(PlayerSide, LobbyId),
     LobbyState(LobbyState),
     Text(String),

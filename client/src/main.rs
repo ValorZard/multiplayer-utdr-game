@@ -68,7 +68,11 @@ async fn main() {
                 RpcServerMessage::Text(text) => {
                     // TODO: Do something here I guess
                 }
-                RpcServerMessage::GameState{state, left_side_score, right_side_score} => {
+                RpcServerMessage::GameState {
+                    state,
+                    left_side_score,
+                    right_side_score,
+                } => {
                     match &state {
                         RPSGameState::StartRound => {
                             // reset all game state on Start Round

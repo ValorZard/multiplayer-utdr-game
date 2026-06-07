@@ -1,5 +1,8 @@
 use anyhow::{anyhow, bail};
-use rpc::{LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, YesOrNo};
+use rpc::{
+    LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize,
+    YesOrNo,
+};
 use std::error::Error;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::mpsc::error::SendError;
@@ -143,20 +146,26 @@ impl ServerStateInner {
         } else {
             0
         };
-        self.send_message_to_lobby(&RpcServerMessage::GameState{state, left_side_score, right_side_score}, &lobby_id)
+        self.send_message_to_lobby(
+            &RpcServerMessage::GameState {
+                state,
+                left_side_score,
+                right_side_score,
+            },
+            &lobby_id,
+        )
     }
 
-    fn connect_user(
-        &mut self,
-        addr: SocketAddr,
-        sender: UserSender,
-    ) -> anyhow::Result<()> {
+    fn connect_user(&mut self, addr: SocketAddr, sender: UserSender) -> anyhow::Result<()> {
         if let Some(existing) = self.connected_user_list.get(&addr) {
             bail!("Can't double connect a user to the server");
         }
 
         // restore score if user has connected before
-        let user_score = self.disconnected_user_list.remove(&addr).unwrap_or_default();
+        let user_score = self
+            .disconnected_user_list
+            .remove(&addr)
+            .unwrap_or_default();
 
         self.connected_user_list.insert(
             addr,
@@ -173,8 +182,10 @@ impl ServerStateInner {
         Ok(())
     }
 
-    fn put_connected_user_in_lobby( &mut self,
-                                    addr: SocketAddr) -> anyhow::Result<(PlayerSide, LobbyId)>{
+    fn put_connected_user_in_lobby(
+        &mut self,
+        addr: SocketAddr,
+    ) -> anyhow::Result<(PlayerSide, LobbyId)> {
         // TODO: This is O(n), not O(log n)
         let waiting_lobby_id =
             self.lobby_list
@@ -218,7 +229,6 @@ impl ServerStateInner {
         let lobby_init = RpcServerMessage::LobbyInit(player_side.clone(), lobby_id);
         self.send_message_to_user(&lobby_init, &addr)?;
 
-
         self.broadcast_lobby_state(lobby_id)?;
         self.broadcast_game_state(lobby_id)?;
 
@@ -229,7 +239,7 @@ impl ServerStateInner {
 
     fn disconnect_user(&mut self, addr: SocketAddr) -> anyhow::Result<()> {
         let Some(user_data) = self.connected_user_list.get_mut(&addr) else {
-           bail!("Cannot disconnect user {addr} from the server if it's not connected");
+            bail!("Cannot disconnect user {addr} from the server if it's not connected");
         };
 
         let score = user_data.score;
@@ -237,7 +247,9 @@ impl ServerStateInner {
             // removed player lobby is now empty
             let message = encode_server_message(&RpcServerMessage::LobbyState(LobbyState::Empty))?;
             // this can fail if the player totally disconnected
-            let _ = user_data.sender.send(WsMessage::Binary(message.to_vec().into()));
+            let _ = user_data
+                .sender
+                .send(WsMessage::Binary(message.to_vec().into()));
             user_data.lobby_id = None;
             user_data.player_side = None;
 
@@ -298,7 +310,7 @@ impl ServerStateInner {
                             unreachable!(
                                 "If we remove a player, the lobby {lobby_id:?} can't be finished"
                             );
-                        },
+                        }
                         LobbyState::Running => unreachable!(
                             "If we remove a player, the lobby {lobby_id:?} can't be running"
                         ),
@@ -311,7 +323,8 @@ impl ServerStateInner {
             return Ok(());
         };
 
-        self.disconnected_user_list.insert(addr, user_data.score.max(score));
+        self.disconnected_user_list
+            .insert(addr, user_data.score.max(score));
 
         Ok(())
     }
@@ -346,14 +359,18 @@ impl ServerStateInner {
                             match state {
                                 RPSWinState::Left => {
                                     if let Some(winner) = lobby.get_left() {
-                                        if let Some(user) = self.connected_user_list.get_mut(&winner) {
+                                        if let Some(user) =
+                                            self.connected_user_list.get_mut(&winner)
+                                        {
                                             user.score += 1;
                                         }
                                     }
                                 }
                                 RPSWinState::Right => {
                                     if let Some(winner) = lobby.get_right() {
-                                        if let Some(user) = self.connected_user_list.get_mut(&winner) {
+                                        if let Some(user) =
+                                            self.connected_user_list.get_mut(&winner)
+                                        {
                                             user.score += 1;
                                         }
                                     }
@@ -397,8 +414,10 @@ impl ServerStateInner {
                             ) {
                                 (Some(YesOrNo::Yes), Some(YesOrNo::Yes)) => {
                                     finished.lobby_session.reset_lobby();
-                                    self.lobby_list
-                                        .insert(lobby_id, LobbyEntry::Running(finished.lobby_session));
+                                    self.lobby_list.insert(
+                                        lobby_id,
+                                        LobbyEntry::Running(finished.lobby_session),
+                                    );
                                 }
 
                                 (Some(YesOrNo::No), Some(YesOrNo::No)) => {
@@ -409,8 +428,12 @@ impl ServerStateInner {
                                 }
 
                                 (Some(YesOrNo::No), Some(YesOrNo::Yes)) => {
-                                    let leaving = finished.lobby_session.get_left().expect("Should have both players in here");
-                                    let (_, state) = finished.lobby_session.remove_player(leaving)?;
+                                    let leaving = finished
+                                        .lobby_session
+                                        .get_left()
+                                        .expect("Should have both players in here");
+                                    let (_, state) =
+                                        finished.lobby_session.remove_player(leaving)?;
                                     assert_eq!(state, LobbyState::Waiting);
 
                                     if let Some(user) = self.connected_user_list.get_mut(&leaving) {
@@ -419,13 +442,19 @@ impl ServerStateInner {
                                     }
 
                                     finished.lobby_session.reset_lobby();
-                                    self.lobby_list
-                                        .insert(lobby_id, LobbyEntry::Waiting(finished.lobby_session));
+                                    self.lobby_list.insert(
+                                        lobby_id,
+                                        LobbyEntry::Waiting(finished.lobby_session),
+                                    );
                                 }
 
                                 (Some(YesOrNo::Yes), Some(YesOrNo::No)) => {
-                                    let leaving = finished.lobby_session.get_right().expect("Should have both players in here");
-                                    let (_, state) = finished.lobby_session.remove_player(leaving)?;
+                                    let leaving = finished
+                                        .lobby_session
+                                        .get_right()
+                                        .expect("Should have both players in here");
+                                    let (_, state) =
+                                        finished.lobby_session.remove_player(leaving)?;
                                     assert_eq!(state, LobbyState::Waiting);
 
                                     if let Some(user) = self.connected_user_list.get_mut(&leaving) {
@@ -434,8 +463,10 @@ impl ServerStateInner {
                                     }
 
                                     finished.lobby_session.reset_lobby();
-                                    self.lobby_list
-                                        .insert(lobby_id, LobbyEntry::Waiting(finished.lobby_session));
+                                    self.lobby_list.insert(
+                                        lobby_id,
+                                        LobbyEntry::Waiting(finished.lobby_session),
+                                    );
                                 }
 
                                 _ => {
@@ -458,7 +489,7 @@ impl ServerStateInner {
             match user_rpc_message.message {
                 RpcClientMessage::JoinLobby => {
                     self.put_connected_user_in_lobby(user_rpc_message.send_addr)?;
-                },
+                }
                 _ => {}
             }
         }
@@ -478,11 +509,7 @@ impl ServerState {
         }
     }
 
-    pub async fn connect_user(
-        &self,
-        addr: SocketAddr,
-        sender: UserSender,
-    ) -> anyhow::Result<()> {
+    pub async fn connect_user(&self, addr: SocketAddr, sender: UserSender) -> anyhow::Result<()> {
         self.server_state.lock().await.connect_user(addr, sender)
     }
 
