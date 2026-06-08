@@ -1,5 +1,6 @@
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_channel::oneshot;
+use futures::select;
 use futures_util::FutureExt;
 use futures_util::{SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
@@ -69,47 +70,70 @@ pub async fn connect_to_websocket_server_wasm(
         Ok(parts) => parts,
         Err(e) => {
             log!("WebSocket connect failed for {}: {:?}", SERVER_ADDRESS, e);
+            let _ = connection_finished_sender.send(());
             return;
         }
     };
 
     let (mut send_stream, mut recv_stream) = wsio.split();
 
+    let (loop_finished_sender, loop_finished_receiver) = futures_channel::oneshot::channel::<()>();
+
     spawn_local(async move {
+        use futures_util::{FutureExt, StreamExt, SinkExt, select};
+
         let mut client_rpc_receiver = client_rpc_receiver;
-        loop {
-            match client_rpc_receiver.next().await {
-                Some(rpc_message) => {
-                    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&rpc_message).unwrap();
-                    if let Err(e) = send_stream
-                        .send(WsMessage::Binary(bytes.to_vec().into()))
-                        .await
-                    {
-                        log!("Error! Breaking send loop: {e}");
-                        break;
+        let mut loop_finished_receiver = loop_finished_receiver.fuse();
+
+        'send_loop: loop {
+            select! {
+                rpc_message = client_rpc_receiver.next().fuse() => {
+                    match rpc_message {
+                        Some(rpc_message) => {
+                            match rkyv::to_bytes::<rkyv::rancor::Error>(&rpc_message) {
+                                Ok(bytes) => {
+                                    if let Err(e) = send_stream
+                                        .send(WsMessage::Binary(bytes.to_vec().into()))
+                                        .await
+                                    {
+                                        log!("Error! Breaking send loop: {:?}", e);
+                                        break 'send_loop;
+                                    }
+                                }
+                                Err(e) => {
+                                    log!("Failed to encode client message: {:?}", e);
+                                    break 'send_loop;
+                                }
+                            }
+                        }
+                        None => break 'send_loop,
                     }
+                },
+
+                _ = loop_finished_receiver => {
+                    log!("Stopping send loop because receive loop finished");
+                    break 'send_loop;
                 }
-                None => break,
             }
         }
     });
-    loop {
-        if let Some(reply) = recv_stream.next().await {
-            match reply {
-                WsMessage::Text(msg) => {
-                    log!("Received text: {:?}", msg);
-                }
-                WsMessage::Binary(msg) => {
-                    let deserialized = decode_server_message(msg.as_ref()).unwrap();
-                    log!("Received binary: {:?}", deserialized);
-                    let _ = server_rpc_sender.unbounded_send(deserialized);
-                }
+
+    while let Some(reply) = recv_stream.next().await {
+        match reply {
+            WsMessage::Text(msg) => {
+                log!("Received text: {:?}", msg);
             }
-        } else {
-            // error, break
-            break;
+            WsMessage::Binary(msg) => {
+                let deserialized = decode_server_message(msg.as_ref()).unwrap();
+                log!("Received binary: {:?}", deserialized);
+                let _ = server_rpc_sender.unbounded_send(deserialized);
+            }
         }
     }
+
+    log!("WebSocket connection closed for {}", SERVER_ADDRESS);
+
+    let _ = loop_finished_sender.send(());
 
     if let Err(e) = ws.close().await {
         log!("WebSocket close failed for {}: {:?}", SERVER_ADDRESS, e);
@@ -142,7 +166,7 @@ pub fn connect_to_websocket_server_native(
 
                 let (mut send_stream, mut recv_stream) = socket.split();
 
-                let send_loop = tokio::spawn(async move {
+                let mut send_loop = tokio::spawn(async move {
                     while let Some(rpc_message) = client_rpc_receiver.next().await {
                         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&rpc_message).unwrap();
                         if let Err(e) = send_stream
@@ -155,7 +179,7 @@ pub fn connect_to_websocket_server_native(
                     }
                 });
 
-                let recv_loop = tokio::spawn(async move {
+                let mut recv_loop = tokio::spawn(async move {
                     while let Some(msg) = recv_stream.next().await {
                         match msg {
                             Ok(Message::Text(msg)) => {
@@ -177,7 +201,11 @@ pub fn connect_to_websocket_server_native(
                     }
                 });
 
-                let _ = tokio::join!(send_loop, recv_loop);
+                // we want both loops to break if one of them drops
+                tokio::select! {
+                    _ = send_loop => (),
+                    _ = recv_loop => (),
+                }
             } else if let Err(e) = connection_result {
                 eprintln!("WebSocket connect failed for {}: {:?}", SERVER_ADDRESS, e);
                 return;
