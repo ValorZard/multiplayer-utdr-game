@@ -1,7 +1,7 @@
 use crate::connection::{ClientRpcSender, ConnectionFinishedReceiver, ServerRpcReceiver};
 use futures_channel::oneshot;
 use futures_util::future::FusedFuture;
-use futures_util::{FutureExt, StreamExt};
+use futures_util::{FutureExt, SinkExt, StreamExt};
 use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
@@ -12,6 +12,7 @@ use rpc::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
+use time::{Duration, OffsetDateTime};
 
 mod connection;
 
@@ -106,7 +107,18 @@ async fn main() {
     // UI state
     let mut ui_game_state = UiGameState::new();
     let mut is_input_selected = false;
+    let mut previous_time = OffsetDateTime::now_utc();
+    let mut timer = Duration::new(0, 0);
+    let max_time_for_heartbeat = Duration::new(1, 0);
     while window.render_2d(&mut scene, &mut camera).await {
+        let current_time = OffsetDateTime::now_utc();
+        let time_since_last_frame = current_time - previous_time;
+        timer += time_since_last_frame;
+        if timer >= max_time_for_heartbeat {
+            timer = Duration::new(0, 0);
+            let _ = client_rpc_sender.send(RpcClientMessage::Heartbeat);
+        }
+        previous_time = current_time;
         // set lobby state to empty if connection lost
         let check_current_connection_state = connection_finished_receiver.try_recv();
         let disconnected_from_server = if let Ok(Some(_)) = check_current_connection_state {
@@ -118,7 +130,6 @@ async fn main() {
         } else {
             false
         };
-
         // immediately pool the receiver even if there isn't a value there.
         while let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten() {
             log!("{rpc_message:?}");
