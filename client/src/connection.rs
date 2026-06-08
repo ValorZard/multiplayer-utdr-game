@@ -166,7 +166,7 @@ pub fn connect_to_websocket_server_native(
 
                 let (mut send_stream, mut recv_stream) = socket.split();
 
-                let mut send_loop = tokio::spawn(async move {
+                let send_loop = tokio::spawn(async move {
                     while let Some(rpc_message) = client_rpc_receiver.next().await {
                         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&rpc_message).unwrap();
                         if let Err(e) = send_stream
@@ -179,7 +179,7 @@ pub fn connect_to_websocket_server_native(
                     }
                 });
 
-                let mut recv_loop = tokio::spawn(async move {
+                let recv_loop = tokio::spawn(async move {
                     while let Some(msg) = recv_stream.next().await {
                         match msg {
                             Ok(Message::Text(msg)) => {
