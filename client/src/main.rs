@@ -8,7 +8,7 @@ use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
 use rpc::{
     GameInput, LobbyId, LobbyState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage,
-    RpcServerMessage, YesOrNo,
+    RpcServerMessage, ScoreSize, YesOrNo,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
@@ -56,6 +56,39 @@ fn get_connection_receivers() -> (
     )
 }
 
+#[derive(Debug)]
+struct UiGameState {
+    lobby_state: LobbyState,
+    lobby_id: Option<LobbyId>,
+    remote_right_input: Option<GameInput>,
+    remote_left_input: Option<GameInput>,
+    remote_right_score: ScoreSize,
+    remote_left_score: ScoreSize,
+    player_side: Option<PlayerSide>,
+    win_state: Option<RPSWinState>,
+    current_game_state: Option<RPSGameState>,
+}
+
+impl UiGameState {
+    fn new() -> Self {
+        Self {
+            lobby_state: LobbyState::Empty,
+            lobby_id: None,
+            remote_right_input: None,
+            remote_left_input: None,
+            remote_right_score: 0,
+            remote_left_score: 0,
+            player_side: None,
+            win_state: None,
+            current_game_state: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+}
+
 #[kiss3d::main]
 async fn main() {
     let mut window = Window::new("Kiss3d: rectangle").await;
@@ -67,27 +100,24 @@ async fn main() {
     let image_texture =
         texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
 
-    let (client_rpc_sender, mut server_rpc_receiver, mut connection_finished_receiver) =
+    let (mut client_rpc_sender, mut server_rpc_receiver, mut connection_finished_receiver) =
         get_connection_receivers();
 
     // UI state
-    let mut current_game_state: Option<RPSGameState> = None;
-    let mut lobby_id: Option<LobbyId> = None;
-    let mut player_side: Option<PlayerSide> = None;
-    let mut win_state: Option<RPSWinState> = None;
-    let mut remote_right_input: Option<GameInput> = None;
-    let mut remote_left_input: Option<GameInput> = None;
-    let mut remote_right_score = 0;
-    let mut remote_left_score = 0;
-    let mut lobby_state: LobbyState = LobbyState::Empty;
+    let mut ui_game_state = UiGameState::new();
     let mut is_input_selected = false;
     while window.render_2d(&mut scene, &mut camera).await {
         // set lobby state to empty if connection lost
         let check_current_connection_state = connection_finished_receiver.try_recv();
-        if let Ok(Some(_)) = check_current_connection_state {
+        let disconnected_from_server = if let Ok(Some(_)) = check_current_connection_state {
             log!("Connection dropped.");
-            lobby_state = LobbyState::Empty;
-        }
+            ui_game_state.reset();
+            true
+        } else if let Err(_) = check_current_connection_state {
+            true
+        } else {
+            false
+        };
 
         // immediately pool the receiver even if there isn't a value there.
         while let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten() {
@@ -104,41 +134,43 @@ async fn main() {
                     match &state {
                         RPSGameState::StartRound => {
                             // reset all game state on Start Round
-                            remote_left_input = None;
-                            remote_right_input = None;
+                            ui_game_state.remote_left_input = None;
+                            ui_game_state.remote_right_input = None;
                         }
                         RPSGameState::WaitingForLeftInput { right_input } => {
-                            remote_right_input = Some(right_input.clone());
+                            ui_game_state.remote_right_input = Some(right_input.clone());
                         }
                         RPSGameState::WaitingForRightInput { left_input } => {
-                            remote_left_input = Some(left_input.clone());
+                            ui_game_state.remote_left_input = Some(left_input.clone());
                         }
                         RPSGameState::Win {
                             state,
                             left_input,
                             right_input,
                         } => {
-                            win_state = Some(state.clone());
+                            ui_game_state.win_state = Some(state.clone());
+                            ui_game_state.remote_right_input = Some(right_input.clone());
+                            ui_game_state.remote_left_input = Some(left_input.clone());
                         }
                     }
-                    remote_left_score = left_side_score;
-                    remote_right_score = right_side_score;
-                    current_game_state = Some(state);
+                    ui_game_state.remote_left_score = left_side_score;
+                    ui_game_state.remote_right_score = right_side_score;
+                    ui_game_state.current_game_state = Some(state);
                 }
                 RpcServerMessage::LobbyInit(side, id) => {
-                    lobby_id = Some(id);
-                    player_side = Some(side);
+                    ui_game_state.lobby_id = Some(id);
+                    ui_game_state.player_side = Some(side);
                 }
                 RpcServerMessage::LobbyState(state) => {
                     // unless lobby state is finished, we really shouldn't have a win state
                     match state {
                         LobbyState::Finished => {}
                         _ => {
-                            win_state = None;
+                            ui_game_state.win_state = None;
                             is_input_selected = false;
                         }
                     }
-                    lobby_state = state;
+                    ui_game_state.lobby_state = state;
                 }
             }
         }
@@ -163,48 +195,58 @@ async fn main() {
             egui::Window::new("Kiss3d egui Example")
                 .default_width(300.0)
                 .show(ctx, |ui| {
-                    ui.label(format!("lobby id: {lobby_id:#?}"));
-                    ui.label(format!("player side: {player_side:#?}"));
-                    ui.label(format!(
-                        "Left input {remote_left_input:?}, Right input {remote_right_input:?}"
-                    ));
-                    ui.label(format!("Game State: {current_game_state:?}"));
-                    ui.label(format!("Lobby state: {lobby_state:?}"));
-                    ui.label(format!("Win state: {win_state:?}"));
-                    ui.label(format!("Left side score: {remote_left_score}, Right side score: {remote_right_score}"));
+                    ui.label(format!("{ui_game_state:#?}"));
 
                     ui.separator();
 
-                    match lobby_state {
+                    match ui_game_state.lobby_state {
                         LobbyState::Empty => {
                             if ui.button("Join Lobby").clicked() {
-                                let _ = client_rpc_sender
-                                    .unbounded_send(RpcClientMessage::JoinLobby);
+                                let _ =
+                                    client_rpc_sender.unbounded_send(RpcClientMessage::JoinLobby);
+                                if disconnected_from_server
+                                {
+                                    // reset the connection
+                                    let parts = get_connection_receivers();
+                                    client_rpc_sender = parts.0;
+                                    server_rpc_receiver = parts.1;
+                                    connection_finished_receiver = parts.2;
+                                }
                             }
                         }
                         LobbyState::Waiting => {}
                         LobbyState::Running => {
-                            if let Some(game_state) = &current_game_state && let Some(side) = player_side {
+                            if let Some(game_state) = &ui_game_state.current_game_state
+                                && let Some(side) = ui_game_state.player_side
+                            {
                                 let round_start = if let RPSGameState::StartRound = game_state {
                                     true
                                 } else {
                                     false
                                 };
-                                let waiting_on_us = if let RPSGameState::WaitingForLeftInput { .. } = game_state && side == PlayerSide::Left {
-                                    true
-                                } else if let RPSGameState::WaitingForRightInput { .. } = game_state && side == PlayerSide::Right {
-                                    true
-                                } else {
-                                    false
-                                };
+                                let waiting_on_us =
+                                    if let RPSGameState::WaitingForLeftInput { .. } = game_state
+                                        && side == PlayerSide::Left
+                                    {
+                                        true
+                                    } else if let RPSGameState::WaitingForRightInput { .. } =
+                                        game_state
+                                        && side == PlayerSide::Right
+                                    {
+                                        true
+                                    } else {
+                                        false
+                                    };
                                 if round_start || waiting_on_us {
                                     if ui.button("Rock").clicked() {
-                                        let _ = client_rpc_sender
-                                            .unbounded_send(RpcClientMessage::GameInput(GameInput::Rock));
+                                        let _ = client_rpc_sender.unbounded_send(
+                                            RpcClientMessage::GameInput(GameInput::Rock),
+                                        );
                                     }
                                     if ui.button("Paper").clicked() {
-                                        let _ = client_rpc_sender
-                                            .unbounded_send(RpcClientMessage::GameInput(GameInput::Paper));
+                                        let _ = client_rpc_sender.unbounded_send(
+                                            RpcClientMessage::GameInput(GameInput::Paper),
+                                        );
                                     }
                                     if ui.button("Scissors").clicked() {
                                         let _ = client_rpc_sender.unbounded_send(
