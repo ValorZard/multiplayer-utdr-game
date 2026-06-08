@@ -1,6 +1,6 @@
+use futures::select;
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_channel::oneshot;
-use futures::select;
 use futures_util::FutureExt;
 use futures_util::{SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
@@ -80,7 +80,7 @@ pub async fn connect_to_websocket_server_wasm(
     let (loop_finished_sender, loop_finished_receiver) = futures_channel::oneshot::channel::<()>();
 
     spawn_local(async move {
-        use futures_util::{FutureExt, StreamExt, SinkExt, select};
+        use futures_util::{FutureExt, SinkExt, StreamExt, select};
 
         let mut client_rpc_receiver = client_rpc_receiver;
         let mut loop_finished_receiver = loop_finished_receiver.fuse();
