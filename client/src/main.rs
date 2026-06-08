@@ -204,8 +204,7 @@ async fn main() {
                             if ui.button("Join Lobby").clicked() {
                                 let _ =
                                     client_rpc_sender.unbounded_send(RpcClientMessage::JoinLobby);
-                                if disconnected_from_server
-                                {
+                                if disconnected_from_server {
                                     // reset the connection
                                     let parts = get_connection_receivers();
                                     client_rpc_sender = parts.0;
