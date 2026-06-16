@@ -1,24 +1,21 @@
 use anyhow::{anyhow, bail};
 use rpc::{
-    LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize,
-    UserId, YesOrNo,
+    HEADER_MESSAGE, LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, UserId, YesOrNo, encode_server_message
 };
 use std::error::Error;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{Mutex, mpsc::UnboundedSender};
-use tokio_tungstenite::tungstenite::{Message as WsMessage, Message};
 use uuid::Uuid;
 
 use crate::{
-    encode_server_message,
     lobby::{LobbyError, LobbySession},
     rps::GameSession,
 };
 
 use rpc::LobbyState;
 
-type UserSender = UnboundedSender<WsMessage>;
+type UserSender = UnboundedSender<Vec<u8>>;
 
 #[derive(Debug, Clone)]
 pub struct UserRPCMessage {
@@ -83,14 +80,15 @@ impl ServerStateInner {
         message: &RpcServerMessage,
         user_addr: &UserId,
     ) -> anyhow::Result<()> {
-        let bytes = encode_server_message(message)?;
         let user = self
             .connected_user_list
             .get(user_addr)
             .ok_or_else(|| anyhow!("user {user_addr} not found"))?;
 
+        let message_as_bytes = encode_server_message(message)?;
+
         user.sender
-            .send(WsMessage::Binary(bytes.to_vec().into()))
+            .send(message_as_bytes)
             .map_err(|e| anyhow!("failed to send message to {user_addr}: {e}"))?;
 
         Ok(())
@@ -250,7 +248,7 @@ impl ServerStateInner {
             // this can fail if the player totally disconnected
             let _ = user_data
                 .sender
-                .send(WsMessage::Binary(message.to_vec().into()));
+                .send(message);
             user_data.lobby_id = None;
             user_data.player_side = None;
 
@@ -337,7 +335,7 @@ impl ServerStateInner {
             let leaving_message =
                 encode_server_message(&RpcServerMessage::LobbyState(LobbyState::Empty))?;
             user.sender
-                .send(WsMessage::Binary(leaving_message.to_vec().into()))?;
+                .send(leaving_message)?;
             Ok(())
         } else {
             bail!("User {addr} is not actually connected")
