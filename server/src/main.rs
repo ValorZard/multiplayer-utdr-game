@@ -1,111 +1,90 @@
+use anyhow::{Context, bail};
 use futures_util::{SinkExt, StreamExt, future, pin_mut, stream::TryStreamExt};
 use rkyv::rancor;
 use rkyv::util::AlignedVec;
-use rpc::{RpcClientMessage, RpcServerMessage};
+use rpc::{HEADER_MESSAGE, RpcClientMessage, RpcServerMessage, decode_client_message};
+use web_transport_quinn::{RecvStream, Request, SendStream, Server, Session, proto::ConnectResponse};
 use std::{
-    cell::{LazyCell, OnceCell},
-    collections::HashMap,
-    hash::Hash,
-    io::Error as IoError,
-    net::SocketAddr,
-    sync::{Arc, Mutex},
+    cell::{LazyCell, OnceCell}, collections::HashMap, hash::Hash, io::Error as IoError, net::{IpAddr, Ipv4Addr, SocketAddr}, path, str::FromStr, sync::{Arc, Mutex}
 };
 use tokio::{
-    net::{TcpListener, TcpStream},
-    sync::{mpsc, oneshot},
-    task::JoinSet,
+    io::AsyncReadExt, net::{TcpListener, TcpStream}, sync::{mpsc, oneshot}, task::JoinSet
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
+use clap::Parser;
 
 use uuid::Uuid;
 
+use rustls::pki_types::CertificateDer;
 use crate::lobby_db::ServerState;
 use crate::lobby_db::UserRPCMessage;
 
-const SERVER_HOSTING_ADDRESS: &str = "0.0.0.0:12345";
+const SERVER_HOSTING_ADDRESS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),12345);
 
 mod lobby;
 mod lobby_db;
 mod rps;
 
-// messages sent from a websocket stream might not be aligned to what rkyv wants
-pub fn decode_client_message(bytes: &[u8]) -> Result<RpcClientMessage, rancor::Error> {
-    let mut aligned: rkyv::util::AlignedVec = rkyv::util::AlignedVec::new();
-    aligned.extend_from_slice(bytes);
-    rkyv::from_bytes::<RpcClientMessage, rancor::Error>(aligned.as_ref())
-}
-
-pub fn encode_server_message(message: &RpcServerMessage) -> Result<AlignedVec, rancor::Error> {
-    rkyv::to_bytes::<rancor::Error>(message)
-}
-
 async fn handle_connection(
-    raw_stream: TcpStream,
-    addr: SocketAddr,
+    request: Request,
     server_state: ServerState,
 ) -> anyhow::Result<()> {
-    println!("Incoming TCP connection from: {}", addr);
+    println!("WebTransport connection established: {}", request.url);
 
-    let ws_stream = match tokio_tungstenite::accept_async(raw_stream).await {
-        Ok(ws) => ws,
-        Err(err) => {
-            eprintln!("WebSocket handshake failed for {}: {:?}", addr, err);
-            return Ok(());
-        }
-    };
-    println!("WebSocket connection established: {}", addr);
+    // Accept the session.
+    let mut response = ConnectResponse::OK;
+    let session = request
+        .respond(response)
+        .await?;
 
     // Insert the write part of this peer to the peer map.
-    let (user_sender, user_receiver) = mpsc::unbounded_channel();
+    let (user_sender, mut user_receiver) = mpsc::unbounded_channel();
 
     // assign this peer to a lobby
+    let addr = session.remote_address();
     server_state.connect_user(addr, user_sender).await?;
 
-    let (mut outgoing, incoming) = ws_stream.split();
+    let (mut outgoing, mut incoming) = session.open_bi().await?;
 
-    let broadcast_incoming = incoming.try_for_each(|msg| {
-        let server_state = server_state.clone();
-
-        async move {
-            match &msg {
-                WsMessage::Binary(bytes) => match decode_client_message(bytes) {
-                    Ok(decoded) => {
-                        println!("Received a binary message from {}: {:?}", addr, decoded);
-
-                        let user_rpc_message = UserRPCMessage {
-                            message: decoded,
-                            send_addr: addr,
-                        };
-
-                        server_state
-                            .handle_user_rpc(user_rpc_message)
-                            .await
-                            .expect("Error handling user rpc");
-                    }
-                    Err(err) => {
-                        println!("Failed to decode binary message from {}: {:?}", addr, err);
-                    }
-                },
-                WsMessage::Text(text) => {
-                    println!("Received a text message from {}: {}", addr, text);
-                }
-                other => {
-                    println!(
-                        "Received a websocket control frame from {}: {:?}",
-                        addr, other
-                    );
-                }
+    let server_state_clone = server_state.clone();
+    let broadcast_incoming = tokio::spawn(async move {
+        let server_state = server_state_clone;
+        let mut header_buf = [0_u8; HEADER_MESSAGE.len()];
+        let mut message_size_buf = [0_u8; 4]; // u32 is 4 u8
+        while let Ok(()) = incoming.read_exact(&mut header_buf).await {
+            if header_buf != HEADER_MESSAGE {
+                bail!("Connection has received corrupted header, stopping...")
             }
 
-            Ok(())
+            // read message size, (currently hardcoded to be size u32)
+            incoming.read_exact(&mut message_size_buf);
+            let message_size: u32 = u32::from_be_bytes(message_size_buf);
+
+            let chunk = incoming.read_chunk(message_size as usize, true).await?.expect("There should be a chunk here we can use");
+            let message = decode_client_message(&chunk.bytes)?;
+
+            let user_rpc_message = UserRPCMessage {
+                message,
+                send_addr: addr
+            };
+
+            server_state
+                .handle_user_rpc(user_rpc_message)
+                .await
+                .expect("Error handling user rpc");
         }
-    });
+
+        Ok(())
+    });    
 
     // forward the binary websocket messages from user receiver into the web socket stream itself
-    let receive_from_others = UnboundedReceiverStream::new(user_receiver)
-        .map(Ok)
-        .forward(outgoing);
+    let receive_from_others = tokio::spawn(async move {
+        while let Some(message) = user_receiver.recv().await {
+            if let Err(e) = outgoing.write_all(&message).await {
+                println!("{e}");
+            }
+        }
+    });
 
     pin_mut!(broadcast_incoming, receive_from_others);
     future::select(broadcast_incoming, receive_from_others).await;
@@ -115,20 +94,59 @@ async fn handle_connection(
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<(), IoError> {
-    // Create the event loop and TCP listener we'll accept connections on.
-    let try_socket = TcpListener::bind(SERVER_HOSTING_ADDRESS).await;
-    let listener = try_socket.expect("Failed to bind");
-    println!("Listening on: {}", SERVER_HOSTING_ADDRESS);
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(short, long, default_value = "0.0.0.0:12345")]
+    addr: std::net::SocketAddr,
 
+    /// Use the certificates at this path, encoded as PEM.
+    #[arg(long)]
+    pub tls_cert: path::PathBuf,
+
+    /// Use the private key at this path, encoded as PEM.
+    #[arg(long)]
+    pub tls_key: path::PathBuf,
+
+    /// Optional WebTransport subprotocol to support.
+    #[arg(long)]
+    pub protocol: Option<String>,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Create the event loop and TCP listener we'll accept connections on.
+    let server_builder = web_transport_quinn::ServerBuilder::new().with_addr(SERVER_HOSTING_ADDRESS);
+
+    let args = Args::parse();
+
+     // Read the PEM certificate chain
+    let chain = std::fs::File::open(args.tls_cert)?;
+    let mut chain = std::io::BufReader::new(chain);
+
+    let chain: Vec<CertificateDer> = rustls_pemfile::certs(&mut chain).map(|c| {c.unwrap()}).collect();
+
+    anyhow::ensure!(!chain.is_empty(), "could not find certificate");
+
+    // Read the PEM private key
+    let keys = std::fs::File::open(args.tls_key).expect("failed to open key file");
+
+    // Try to parse a PKCS#8 key
+    // -----BEGIN PRIVATE KEY-----
+    let key = rustls_pemfile::private_key(&mut std::io::BufReader::new(keys))
+        .context("failed to load private key")?
+        .context("missing private key")?;
+
+
+    let mut server : Server = server_builder.with_certificate(chain, key)?;
+    println!("Listening on: {}", SERVER_HOSTING_ADDRESS);
     // spawn lobby actor
     let server_state = ServerState::new();
 
     // Let's spawn the handling of each connection in a separate task.
     let mut connection_set = JoinSet::new();
-    while let Ok((stream, addr)) = listener.accept().await {
-        connection_set.spawn(handle_connection(stream, addr, server_state.clone()));
+    while let Some(session) = server.accept().await {
+        connection_set.spawn(handle_connection(session, server_state.clone()));
     }
 
     Ok(())
