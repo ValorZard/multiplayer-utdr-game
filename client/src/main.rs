@@ -27,7 +27,7 @@ fn get_connection_receivers() -> (
         connection::make_channels();
     let (connection_finished_sender, connection_finished_receiver) = oneshot::channel::<()>();
 
-     #[cfg(target_arch = "wasm32")]
+    #[cfg(target_arch = "wasm32")]
     {
         console_error_panic_hook::set_once();
         spawn_local(async move {
