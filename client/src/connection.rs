@@ -90,7 +90,7 @@ async fn recv_loop(server_rpc_sender: ServerRpcSender, mut recv_stream: RecvStre
 }
 
 #[cfg(target_arch = "wasm32")]
-pub async fn  connect_to_webtransport_server_wasm(
+pub async fn connect_to_webtransport_server_wasm(
     client_rpc_receiver: ClientRpcReceiver,
     server_rpc_sender: ServerRpcSender,
     connection_finished_sender: ConnectionFinishedSender,
