@@ -135,7 +135,7 @@ pub enum RPSGameState {
     },
 }
 
-pub const HEADER_MESSAGE : [u8; 4] = [0, 3, 4, 5];
+pub const HEADER_MESSAGE: [u8; 4] = [0, 3, 4, 5];
 
 // messages sent from a websocket stream might not be aligned to what rkyv wants
 pub fn decode_client_message(bytes: &[u8]) -> Result<RpcClientMessage, rancor::Error> {
@@ -162,9 +162,7 @@ pub fn decode_server_message(bytes: &[u8]) -> Result<RpcServerMessage, rkyv::ran
     rkyv::from_bytes::<RpcServerMessage, rkyv::rancor::Error>(aligned.as_ref())
 }
 
-pub fn encode_client_message(
-    message: &RpcClientMessage,
-) -> Result<Vec<u8>, rkyv::rancor::Error> {
+pub fn encode_client_message(message: &RpcClientMessage) -> Result<Vec<u8>, rkyv::rancor::Error> {
     let mut message_byte_vec = Vec::new();
     message_byte_vec.append(&mut HEADER_MESSAGE.to_vec());
     let message_as_bytes = rkyv::to_bytes::<rancor::Error>(message)?;

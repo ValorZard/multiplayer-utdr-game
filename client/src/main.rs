@@ -27,7 +27,6 @@ fn get_connection_receivers() -> (
         connection::make_channels();
     let (connection_finished_sender, connection_finished_receiver) = oneshot::channel::<()>();
 
-    
     let connection_handle = thread::spawn(move || {
         crate::connection::connect_to_webtransport_server(
             client_rpc_receiver,
@@ -35,7 +34,6 @@ fn get_connection_receivers() -> (
             connection_finished_sender,
         )
     });
-    
 
     (
         client_rpc_sender,
