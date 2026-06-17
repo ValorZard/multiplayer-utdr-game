@@ -27,13 +27,29 @@ fn get_connection_receivers() -> (
         connection::make_channels();
     let (connection_finished_sender, connection_finished_receiver) = oneshot::channel::<()>();
 
-    let connection_handle = thread::spawn(move || {
-        crate::connection::connect_to_webtransport_server(
-            client_rpc_receiver,
-            server_rpc_sender,
-            connection_finished_sender,
-        )
-    });
+     #[cfg(target_arch = "wasm32")]
+    {
+        console_error_panic_hook::set_once();
+        spawn_local(async move {
+            crate::connection::connect_to_webtransport_server_wasm(
+                client_rpc_receiver,
+                server_rpc_sender,
+                connection_finished_sender,
+            )
+            .await;
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _connection_handle = thread::spawn(move || {
+            crate::connection::connect_to_webtransport_server_native(
+                client_rpc_receiver,
+                server_rpc_sender,
+                connection_finished_sender,
+            )
+        });
+    }
 
     (
         client_rpc_sender,

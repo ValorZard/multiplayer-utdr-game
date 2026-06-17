@@ -11,10 +11,7 @@ use rpc::{
     decode_client_message, decode_server_message, encode_client_message,
 };
 use url::Url;
-use web_transport::quinn::proto::ConnectRequest;
 use web_transport::{Client, ClientBuilder, RecvStream, SendStream};
-#[cfg(target_arch = "wasm32")]
-use ws_stream_wasm::{WsMessage, WsMeta};
 
 pub type ClientRpcSender = UnboundedSender<RpcClientMessage>;
 pub type ClientRpcReceiver = UnboundedReceiver<RpcClientMessage>;
@@ -92,11 +89,47 @@ async fn recv_loop(server_rpc_sender: ServerRpcSender, mut recv_stream: RecvStre
     }
 }
 
-pub fn connect_to_webtransport_server(
-    mut client_rpc_receiver: ClientRpcReceiver,
+#[cfg(target_arch = "wasm32")]
+pub async fn  connect_to_webtransport_server_wasm(
+    client_rpc_receiver: ClientRpcReceiver,
+    server_rpc_sender: ServerRpcSender,
+    connection_finished_sender: ConnectionFinishedSender,
+) {
+    let client_builder = ClientBuilder::new();
+    let client: Client = client_builder
+        .with_system_roots()
+        .expect("trying to build client failed");
+    let request_url = Url::parse(SERVER_ADDRESS).expect("should be valid url");
+    let connection_result = client.connect(request_url).await;
+    if let Ok(session) = connection_result {
+        log!("Connected to the server");
+
+        let (send_stream, recv_stream) = session.accept_bi().await.expect("Accept bi");
+
+        // we want both loops to break if one of them drops
+        futures_util::select! {
+            _ = send_loop(client_rpc_receiver, send_stream).fuse() => (),
+            _ = recv_loop(server_rpc_sender, recv_stream).fuse() => (),
+        }
+    } else if let Err(e) = connection_result {
+        eprintln!(
+            "WebTransport connect failed for {}: {:?}",
+            SERVER_ADDRESS, e
+        );
+        return;
+    }
+
+    let _ = connection_finished_sender.send(());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn connect_to_webtransport_server_native(
+    client_rpc_receiver: ClientRpcReceiver,
     server_rpc_sender: ServerRpcSender,
     connection_finished_sender: ConnectionFinishedSender,
 ) -> anyhow::Result<()> {
+    use web_transport::quinn::proto::ConnectRequest;
+
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
