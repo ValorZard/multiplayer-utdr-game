@@ -1,41 +1,49 @@
 use anyhow::{Context, bail};
+use clap::Parser;
 use futures_util::{SinkExt, StreamExt, future, pin_mut, stream::TryStreamExt};
 use rkyv::rancor;
 use rkyv::util::AlignedVec;
 use rpc::{HEADER_MESSAGE, RpcClientMessage, RpcServerMessage, decode_client_message};
-use web_transport_quinn::{RecvStream, Request, SendStream, Server, Session, proto::ConnectResponse};
 use std::{
-    cell::{LazyCell, OnceCell}, collections::HashMap, hash::Hash, io::Error as IoError, net::{IpAddr, Ipv4Addr, SocketAddr}, path, str::FromStr, sync::{Arc, Mutex}
+    cell::{LazyCell, OnceCell},
+    collections::HashMap,
+    hash::Hash,
+    io::Error as IoError,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path,
+    str::FromStr,
+    sync::{Arc, Mutex},
 };
 use tokio::{
-    io::AsyncReadExt, net::{TcpListener, TcpStream}, sync::{mpsc, oneshot}, task::JoinSet
+    io::AsyncReadExt,
+    net::{TcpListener, TcpStream},
+    sync::{mpsc, oneshot},
+    task::JoinSet,
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use clap::Parser;
+use web_transport_quinn::{
+    RecvStream, Request, SendStream, Server, Session, proto::ConnectResponse,
+};
 
 use uuid::Uuid;
 
-use rustls::pki_types::CertificateDer;
 use crate::lobby_db::ServerState;
 use crate::lobby_db::UserRPCMessage;
+use rustls::pki_types::CertificateDer;
 
-const SERVER_HOSTING_ADDRESS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),12345);
+const SERVER_HOSTING_ADDRESS: SocketAddr =
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 12345);
 
 mod lobby;
 mod lobby_db;
 mod rps;
 
-async fn handle_connection(
-    request: Request,
-    server_state: ServerState,
-) -> anyhow::Result<()> {
+async fn handle_connection(request: Request, server_state: ServerState) -> anyhow::Result<()> {
     println!("WebTransport connection established: {}", request.url);
 
     // Accept the session.
     let response = ConnectResponse::OK;
-    let session = request
-        .respond(response)
-        .await?;
+    let session = request.respond(response).await?;
 
     // Insert the write part of this peer to the peer map.
     let (user_sender, mut user_receiver) = mpsc::unbounded_channel();
@@ -63,14 +71,17 @@ async fn handle_connection(
                 incoming.read_exact(&mut message_size_buf).await?;
                 let message_size: u32 = u32::from_be_bytes(message_size_buf);
 
-                let chunk = incoming.read_chunk(message_size as usize, true).await?.expect("There should be a chunk here we can use");
+                let chunk = incoming
+                    .read_chunk(message_size as usize, true)
+                    .await?
+                    .expect("There should be a chunk here we can use");
                 let message = decode_client_message(&chunk.bytes)?;
 
                 println!("message received!");
 
                 let user_rpc_message = UserRPCMessage {
                     message,
-                    send_addr: addr
+                    send_addr: addr,
                 };
 
                 server_state
@@ -84,7 +95,7 @@ async fn handle_connection(
         }
 
         Ok(())
-    });    
+    });
 
     // forward the binary websocket messages from user receiver into the web socket stream itself
     let receive_from_others = tokio::spawn(async move {
@@ -126,15 +137,18 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Create the event loop and TCP listener we'll accept connections on.
-    let server_builder = web_transport_quinn::ServerBuilder::new().with_addr(SERVER_HOSTING_ADDRESS);
+    let server_builder =
+        web_transport_quinn::ServerBuilder::new().with_addr(SERVER_HOSTING_ADDRESS);
 
     let args = Args::parse();
 
-     // Read the PEM certificate chain
+    // Read the PEM certificate chain
     let chain = std::fs::File::open(args.tls_cert)?;
     let mut chain = std::io::BufReader::new(chain);
 
-    let chain: Vec<CertificateDer> = rustls_pemfile::certs(&mut chain).map(|c| {c.unwrap()}).collect();
+    let chain: Vec<CertificateDer> = rustls_pemfile::certs(&mut chain)
+        .map(|c| c.unwrap())
+        .collect();
 
     anyhow::ensure!(!chain.is_empty(), "could not find certificate");
 
@@ -147,8 +161,7 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to load private key")?
         .context("missing private key")?;
 
-
-    let mut server : Server = server_builder.with_certificate(chain, key)?;
+    let mut server: Server = server_builder.with_certificate(chain, key)?;
     println!("Listening on: {}", SERVER_HOSTING_ADDRESS);
     // spawn lobby actor
     let server_state = ServerState::new();

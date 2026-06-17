@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail};
 use rpc::{
-    HEADER_MESSAGE, LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, UserId, YesOrNo, encode_server_message
+    HEADER_MESSAGE, LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage,
+    RpcServerMessage, ScoreSize, UserId, YesOrNo, encode_server_message,
 };
 use std::error::Error;
 use std::{collections::HashMap, sync::Arc};
@@ -246,9 +247,7 @@ impl ServerStateInner {
             // removed player lobby is now empty
             let message = encode_server_message(&RpcServerMessage::LobbyState(LobbyState::Empty))?;
             // this can fail if the player totally disconnected
-            let _ = user_data
-                .sender
-                .send(message);
+            let _ = user_data.sender.send(message);
             user_data.lobby_id = None;
             user_data.player_side = None;
 
@@ -334,8 +333,7 @@ impl ServerStateInner {
             user.player_side = None;
             let leaving_message =
                 encode_server_message(&RpcServerMessage::LobbyState(LobbyState::Empty))?;
-            user.sender
-                .send(leaving_message)?;
+            user.sender.send(leaving_message)?;
             Ok(())
         } else {
             bail!("User {addr} is not actually connected")
