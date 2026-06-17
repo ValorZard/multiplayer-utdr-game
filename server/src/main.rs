@@ -53,11 +53,12 @@ async fn handle_connection(
         let mut message_size_buf = [0_u8; 4]; // u32 is 4 u8
         while let Ok(()) = incoming.read_exact(&mut header_buf).await {
             if header_buf != HEADER_MESSAGE {
+                println!("Connection has received corrupted header, stopping...");
                 bail!("Connection has received corrupted header, stopping...")
             }
 
             // read message size, (currently hardcoded to be size u32)
-            incoming.read_exact(&mut message_size_buf);
+            incoming.read_exact(&mut message_size_buf).await?;
             let message_size: u32 = u32::from_be_bytes(message_size_buf);
 
             let chunk = incoming.read_chunk(message_size as usize, true).await?.expect("There should be a chunk here we can use");
@@ -74,6 +75,8 @@ async fn handle_connection(
                 .expect("Error handling user rpc");
         }
 
+        println!("Incoming messages have stopped");
+
         Ok(())
     });    
 
@@ -84,6 +87,7 @@ async fn handle_connection(
                 println!("{e}");
             }
         }
+        println!("Receiver for user messages into outgoing stream stopped");
     });
 
     pin_mut!(broadcast_incoming, receive_from_others);
