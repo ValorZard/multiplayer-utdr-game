@@ -12,7 +12,7 @@ use rpc::{
 };
 use url::Url;
 use web_transport::quinn::proto::ConnectRequest;
-use web_transport::{Client, ClientBuilder};
+use web_transport::{Client, ClientBuilder, RecvStream, SendStream};
 #[cfg(target_arch = "wasm32")]
 use ws_stream_wasm::{WsMessage, WsMeta};
 
@@ -53,6 +53,47 @@ macro_rules! log {
     };
 }
 
+async fn send_loop(mut client_rpc_receiver: ClientRpcReceiver, mut send_stream: SendStream) {
+     while let Some(rpc_message) = client_rpc_receiver.next().await {
+        log!("sending rpc message {rpc_message:?}");
+        let bytes = encode_client_message(&rpc_message)
+            .expect("should have message encoded");
+        send_stream.write(&bytes).await.expect("send should work");
+    }
+}
+
+async fn recv_loop( server_rpc_sender: ServerRpcSender, mut recv_stream: RecvStream) {
+    while let Ok(Some(header_buf)) = recv_stream.read(HEADER_MESSAGE.len()).await {
+        if *header_buf != HEADER_MESSAGE {
+            log!("Connection has received corrupted header, stopping...");
+            break;
+        }
+
+        // read message size, (currently hardcoded to be size u32)
+        let message_size_buf = recv_stream
+            .read(4)
+            .await
+            .expect("Has message size")
+            .expect("Should have chunk ready for message size");
+        let message_size_buf: Vec<u8> = message_size_buf.into();
+        let message_size_buf_slice: [u8; 4] = message_size_buf
+            .try_into()
+            .expect("Should be able to convert this to a 4 byte array.");
+        let message_size: u32 = u32::from_be_bytes(message_size_buf_slice);
+
+        let chunk = recv_stream
+            .read(message_size as usize)
+            .await
+            .expect("There should be a chunk here we can use")
+            .expect("Can unwrap option");
+        let message =
+            decode_server_message(&chunk).expect("Should be able to get message");
+
+        println!("Received binary: {:?}", message);
+        let _ = server_rpc_sender.unbounded_send(message);
+    }
+}
+
 pub fn connect_to_webtransport_server(
     mut client_rpc_receiver: ClientRpcReceiver,
     server_rpc_sender: ServerRpcSender,
@@ -67,59 +108,18 @@ pub fn connect_to_webtransport_server(
             let client: Client = client_builder
                 .with_system_roots()
                 .expect("trying to build client failed");
-            let mut request_url = Url::parse(SERVER_ADDRESS).expect("should be valid url");
+            let request_url = Url::parse(SERVER_ADDRESS).expect("should be valid url");
             let connection_result = client.connect(request_url).await;
             if let Ok(session) = connection_result {
                 log!("Connected to the server");
 
-                let (mut send_stream, mut recv_stream) =
+                let (send_stream, recv_stream) =
                     session.accept_bi().await.expect("Accept bi");
-
-                let send_loop = tokio::spawn(async move {
-                    while let Some(rpc_message) = client_rpc_receiver.next().await {
-                        log!("sending rpc message {rpc_message:?}");
-                        let bytes = encode_client_message(&rpc_message)
-                            .expect("should have message encoded");
-                        send_stream.write(&bytes).await.expect("send should work");
-                    }
-                });
-
-                let recv_loop = tokio::spawn(async move {
-                    while let Ok(Some(header_buf)) = recv_stream.read(HEADER_MESSAGE.len()).await {
-                        if *header_buf != HEADER_MESSAGE {
-                            log!("Connection has received corrupted header, stopping...");
-                            break;
-                        }
-
-                        // read message size, (currently hardcoded to be size u32)
-                        let message_size_buf = recv_stream
-                            .read(4)
-                            .await
-                            .expect("Has message size")
-                            .expect("Should have chunk ready for message size");
-                        let message_size_buf: Vec<u8> = message_size_buf.into();
-                        let message_size_buf_slice: [u8; 4] = message_size_buf
-                            .try_into()
-                            .expect("Should be able to convert this to a 4 byte array.");
-                        let message_size: u32 = u32::from_be_bytes(message_size_buf_slice);
-
-                        let chunk = recv_stream
-                            .read(message_size as usize)
-                            .await
-                            .expect("There should be a chunk here we can use")
-                            .expect("Can unwrap option");
-                        let message =
-                            decode_server_message(&chunk).expect("Should be able to get message");
-
-                        println!("Received binary: {:?}", message);
-                        let _ = server_rpc_sender.unbounded_send(message);
-                    }
-                });
 
                 // we want both loops to break if one of them drops
                 tokio::select! {
-                    _ = send_loop => (),
-                    _ = recv_loop => (),
+                    _ = send_loop(client_rpc_receiver, send_stream) => (),
+                    _ = recv_loop(server_rpc_sender, recv_stream) => (),
                 }
             } else if let Err(e) = connection_result {
                 eprintln!(
