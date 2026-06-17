@@ -7,7 +7,7 @@ use url::Url;
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use rkyv::util::AlignedVec;
-use rpc::{GameInput, HEADER_MESSAGE, RPSGameState, RpcClientMessage, RpcServerMessage, decode_client_message, decode_server_message};
+use rpc::{GameInput, HEADER_MESSAGE, RPSGameState, RpcClientMessage, RpcServerMessage, decode_client_message, decode_server_message, encode_client_message};
 use web_transport::quinn::proto::ConnectRequest;
 use web_transport::{Client, ClientBuilder};
 #[cfg(target_arch = "wasm32")]
@@ -71,11 +71,7 @@ pub fn connect_to_webtransport_server(
 
                 let send_loop = tokio::spawn(async move {
                     while let Some(rpc_message) = client_rpc_receiver.next().await {
-                        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&rpc_message).unwrap();
-                        let message_size = bytes.len() as u32;
-                        let _ = send_stream.write(&HEADER_MESSAGE).await;
-                        let message_size_buf = message_size.to_be_bytes();
-                        let _ = send_stream.write(&message_size_buf).await;
+                        let bytes = encode_client_message(&rpc_message).expect("should have message encoded");
                         let _ = send_stream.write(&bytes);
                     }
                 });
