@@ -73,10 +73,10 @@ pub fn connect_to_webtransport_server(
                     while let Some(rpc_message) = client_rpc_receiver.next().await {
                         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&rpc_message).unwrap();
                         let message_size = bytes.len() as u32;
-                        send_stream.write(&HEADER_MESSAGE).await;
+                        let _ = send_stream.write(&HEADER_MESSAGE).await;
                         let message_size_buf = message_size.to_be_bytes();
-                        send_stream.write(&message_size_buf).await;
-                        send_stream.write(&bytes);
+                        let _ = send_stream.write(&message_size_buf).await;
+                        let _ = send_stream.write(&bytes);
                     }
                 });
 
@@ -111,7 +111,7 @@ pub fn connect_to_webtransport_server(
                 return;
             }
 
-            connection_finished_sender.send(());
+            let _ = connection_finished_sender.send(());
         });
 
     Ok(())
