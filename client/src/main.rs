@@ -104,7 +104,6 @@ async fn main() {
         if timer >= max_time_for_heartbeat {
             timer = Duration::new(0, 0);
             let _ = client_rpc_sender.unbounded_send(RpcClientMessage::Heartbeat);
-            log!("Heartbeat");
         }
         previous_time = current_time;
         // set lobby state to empty if connection lost

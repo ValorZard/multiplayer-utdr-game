@@ -65,14 +65,15 @@ pub fn connect_to_webtransport_server(
             let mut request_url = Url::parse(SERVER_ADDRESS).expect("should be valid url");
             let connection_result = client.connect(request_url).await;
             if let Ok(session) = connection_result {
-                println!("Connected to the server");
+                log!("Connected to the server");
 
                 let (mut send_stream, mut recv_stream) = session.accept_bi().await.expect("Accept bi");
 
                 let send_loop = tokio::spawn(async move {
                     while let Some(rpc_message) = client_rpc_receiver.next().await {
+                        log!("sending rpc message {rpc_message:?}");
                         let bytes = encode_client_message(&rpc_message).expect("should have message encoded");
-                        let _ = send_stream.write(&bytes);
+                        send_stream.write(&bytes).await.expect("send should work");
                     }
                 });
 
