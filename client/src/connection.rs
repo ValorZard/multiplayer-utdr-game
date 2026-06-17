@@ -54,15 +54,14 @@ macro_rules! log {
 }
 
 async fn send_loop(mut client_rpc_receiver: ClientRpcReceiver, mut send_stream: SendStream) {
-     while let Some(rpc_message) = client_rpc_receiver.next().await {
+    while let Some(rpc_message) = client_rpc_receiver.next().await {
         log!("sending rpc message {rpc_message:?}");
-        let bytes = encode_client_message(&rpc_message)
-            .expect("should have message encoded");
+        let bytes = encode_client_message(&rpc_message).expect("should have message encoded");
         send_stream.write(&bytes).await.expect("send should work");
     }
 }
 
-async fn recv_loop( server_rpc_sender: ServerRpcSender, mut recv_stream: RecvStream) {
+async fn recv_loop(server_rpc_sender: ServerRpcSender, mut recv_stream: RecvStream) {
     while let Ok(Some(header_buf)) = recv_stream.read(HEADER_MESSAGE.len()).await {
         if *header_buf != HEADER_MESSAGE {
             log!("Connection has received corrupted header, stopping...");
@@ -86,8 +85,7 @@ async fn recv_loop( server_rpc_sender: ServerRpcSender, mut recv_stream: RecvStr
             .await
             .expect("There should be a chunk here we can use")
             .expect("Can unwrap option");
-        let message =
-            decode_server_message(&chunk).expect("Should be able to get message");
+        let message = decode_server_message(&chunk).expect("Should be able to get message");
 
         println!("Received binary: {:?}", message);
         let _ = server_rpc_sender.unbounded_send(message);
@@ -113,8 +111,7 @@ pub fn connect_to_webtransport_server(
             if let Ok(session) = connection_result {
                 log!("Connected to the server");
 
-                let (send_stream, recv_stream) =
-                    session.accept_bi().await.expect("Accept bi");
+                let (send_stream, recv_stream) = session.accept_bi().await.expect("Accept bi");
 
                 // we want both loops to break if one of them drops
                 tokio::select! {
