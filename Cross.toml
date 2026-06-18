@@ -1,0 +1,20 @@
+# using this to fix default str0m build
+# https://github.com/cross-rs/cross/issues/1689#issuecomment-3476476678
+
+[build.env]
+passthrough = ["BINDGEN_EXTRA_CLANG_ARGS", "BINDGEN_EXTRA_CLANG_ARGS=-I/usr/lib/llvm-13/lib/clang/13.0.0/include"]
+
+[target.x86_64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main"
+
+[target.x86_64-unknown-illumos]
+image = "ghcr.io/cross-rs/x86_64-unknown-illumos:main"
+
+[build]
+pre-build = [
+    "dpkg --add-architecture $CROSS_DEB_ARCH",
+    "apt-get update && apt-get install --assume-yes protobuf-compiler libclang-dev clang build-essential",
+    "cargo install --force --locked bindgen-cli",
+    "update-alternatives --install /usr/bin/cc cc /usr/bin/clang 100",
+    "update-alternatives --install /usr/bin/c++ c++ /usr/bin/clang++ 100"
+]
