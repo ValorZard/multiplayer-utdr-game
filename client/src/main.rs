@@ -16,7 +16,7 @@ use time::{Duration, OffsetDateTime};
 
 mod connection;
 
-static ASSET_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR\\assets");
+static ASSET_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets");
 
 fn get_connection_receivers() -> (
     ClientRpcSender,

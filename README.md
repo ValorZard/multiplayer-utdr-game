@@ -16,3 +16,7 @@ cd .\client\
 trunk serve
 ```
 Note: we might have to turn off certain chrome flags to test on a local computer with WASM, see: https://moq.dev/blog/tls-and-quic/ 
+
+to build for linux:
+- Run Docker
+- then do ``cross build --target x86_64-unknown-linux-gnu --release``
