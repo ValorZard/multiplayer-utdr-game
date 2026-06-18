@@ -1,4 +1,4 @@
-use rkyv::{Archive, Deserialize, Serialize, util::AlignedVec};
+use rkyv::{Archive, Deserialize, Serialize, rancor, util::AlignedVec};
 use std::net::SocketAddr;
 use uuid::Uuid;
 
@@ -133,4 +133,42 @@ pub enum RPSGameState {
         left_input: GameInput,
         right_input: GameInput,
     },
+}
+
+pub const HEADER_MESSAGE: [u8; 4] = [0, 3, 4, 5];
+
+// messages sent from a websocket stream might not be aligned to what rkyv wants
+pub fn decode_client_message(bytes: &[u8]) -> Result<RpcClientMessage, rancor::Error> {
+    let mut aligned: rkyv::util::AlignedVec = rkyv::util::AlignedVec::new();
+    aligned.extend_from_slice(bytes);
+    rkyv::from_bytes::<RpcClientMessage, rancor::Error>(aligned.as_ref())
+}
+
+pub fn encode_server_message(message: &RpcServerMessage) -> Result<Vec<u8>, rancor::Error> {
+    let mut message_byte_vec = Vec::new();
+    message_byte_vec.append(&mut HEADER_MESSAGE.to_vec());
+    let message_as_bytes = rkyv::to_bytes::<rancor::Error>(message)?;
+    let message_size = message_as_bytes.len() as u32;
+    let message_size_buf = message_size.to_be_bytes();
+    message_byte_vec.append(&mut message_size_buf.to_vec());
+    message_byte_vec.append(&mut message_as_bytes.into_vec());
+    Ok(message_byte_vec)
+}
+
+// messages sent from a websocket stream might not be aligned to what rkyv wants
+pub fn decode_server_message(bytes: &[u8]) -> Result<RpcServerMessage, rkyv::rancor::Error> {
+    let mut aligned: rkyv::util::AlignedVec = rkyv::util::AlignedVec::new();
+    aligned.extend_from_slice(bytes);
+    rkyv::from_bytes::<RpcServerMessage, rkyv::rancor::Error>(aligned.as_ref())
+}
+
+pub fn encode_client_message(message: &RpcClientMessage) -> Result<Vec<u8>, rkyv::rancor::Error> {
+    let mut message_byte_vec = Vec::new();
+    message_byte_vec.append(&mut HEADER_MESSAGE.to_vec());
+    let message_as_bytes = rkyv::to_bytes::<rancor::Error>(message)?;
+    let message_size = message_as_bytes.len() as u32;
+    let message_size_buf = message_size.to_be_bytes();
+    message_byte_vec.append(&mut message_size_buf.to_vec());
+    message_byte_vec.append(&mut message_as_bytes.into_vec());
+    Ok(message_byte_vec)
 }

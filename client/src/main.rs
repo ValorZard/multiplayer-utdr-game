@@ -26,11 +26,12 @@ fn get_connection_receivers() -> (
     let (client_rpc_sender, client_rpc_receiver, server_rpc_sender, server_rpc_receiver) =
         connection::make_channels();
     let (connection_finished_sender, connection_finished_receiver) = oneshot::channel::<()>();
+
     #[cfg(target_arch = "wasm32")]
     {
         console_error_panic_hook::set_once();
         spawn_local(async move {
-            crate::connection::connect_to_websocket_server_wasm(
+            crate::connection::connect_to_webtransport_server_wasm(
                 client_rpc_receiver,
                 server_rpc_sender,
                 connection_finished_sender,
@@ -42,7 +43,7 @@ fn get_connection_receivers() -> (
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _connection_handle = thread::spawn(move || {
-            crate::connection::connect_to_websocket_server_native(
+            crate::connection::connect_to_webtransport_server_native(
                 client_rpc_receiver,
                 server_rpc_sender,
                 connection_finished_sender,
@@ -117,7 +118,6 @@ async fn main() {
         if timer >= max_time_for_heartbeat {
             timer = Duration::new(0, 0);
             let _ = client_rpc_sender.unbounded_send(RpcClientMessage::Heartbeat);
-            log!("Heartbeat");
         }
         previous_time = current_time;
         // set lobby state to empty if connection lost
