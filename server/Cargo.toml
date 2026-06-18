@@ -7,8 +7,11 @@ edition = "2024"
 rpc = {path = "../rpc"}
 futures-util = "0.3.32"
 tokio = {workspace = true}
-tokio-tungstenite = {workspace = true}
+web-transport-quinn = "0.11.9"
 tokio-stream = {workspace = true}
 rkyv = {workspace = true}
 uuid = {workspace = true }
 anyhow = "1.0.102"
+rustls = "0.23.40"
+clap = { version = "4", features = ["derive"] }
+rustls-pemfile = "2"
