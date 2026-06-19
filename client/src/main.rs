@@ -95,6 +95,11 @@ impl UiGameState {
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct ClientConfig {
+    server : String
+}
+
 #[kiss3d::main]
 async fn main() {
     let mut window = Window::new("Kiss3d: rectangle").await;
@@ -116,7 +121,11 @@ async fn main() {
     let mut previous_time = OffsetDateTime::now_utc();
     let mut timer = Duration::new(0, 0);
     let max_time_for_heartbeat = Duration::new(1, 0);
-    let mut server_address = "https://127.0.0.1:12345/".to_string();
+
+    // Client config
+    let client_config = include_str!("../client_config.toml");
+    let client_config: ClientConfig = toml::from_str(client_config).unwrap();
+    let mut server_address = client_config.server;
     while window.render_2d(&mut scene, &mut camera).await {
         let current_time = OffsetDateTime::now_utc();
         let time_since_last_frame = current_time - previous_time;
