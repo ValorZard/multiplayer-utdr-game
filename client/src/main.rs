@@ -18,7 +18,9 @@ mod connection;
 
 static ASSET_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets");
 
-fn get_connection_receivers(server_address: String) -> (
+fn get_connection_receivers(
+    server_address: String,
+) -> (
     ClientRpcSender,
     ServerRpcReceiver,
     ConnectionFinishedReceiver,
