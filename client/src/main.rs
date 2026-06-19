@@ -18,7 +18,7 @@ mod connection;
 
 static ASSET_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets");
 
-fn get_connection_receivers() -> (
+fn get_connection_receivers(server_address: String) -> (
     ClientRpcSender,
     ServerRpcReceiver,
     ConnectionFinishedReceiver,
@@ -32,6 +32,7 @@ fn get_connection_receivers() -> (
         console_error_panic_hook::set_once();
         spawn_local(async move {
             crate::connection::connect_to_webtransport_server_wasm(
+                server_address,
                 client_rpc_receiver,
                 server_rpc_sender,
                 connection_finished_sender,
@@ -44,6 +45,7 @@ fn get_connection_receivers() -> (
     {
         let _connection_handle = thread::spawn(move || {
             crate::connection::connect_to_webtransport_server_native(
+                server_address,
                 client_rpc_receiver,
                 server_rpc_sender,
                 connection_finished_sender,
@@ -112,6 +114,7 @@ async fn main() {
     let mut previous_time = OffsetDateTime::now_utc();
     let mut timer = Duration::new(0, 0);
     let max_time_for_heartbeat = Duration::new(1, 0);
+    let mut server_address = "https://127.0.0.1:12345/";
     while window.render_2d(&mut scene, &mut camera).await {
         let current_time = OffsetDateTime::now_utc();
         let time_since_last_frame = current_time - previous_time;
@@ -214,9 +217,10 @@ async fn main() {
 
                     match ui_game_state.lobby_state {
                         LobbyState::Empty => {
+                            ui.text_edit_singleline(&mut server_address);
                             if ui.button("Join Lobby").clicked() {
                                 // reset the connection
-                                let parts = get_connection_receivers();
+                                let parts = get_connection_receivers(server_address.to_string());
                                 client_rpc_sender = Some(parts.0);
                                 server_rpc_receiver = Some(parts.1);
                                 connection_finished_receiver = Some(parts.2);
