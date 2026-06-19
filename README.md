@@ -20,4 +20,4 @@ Note: we might have to turn off certain chrome flags to test on a local computer
 to build for linux:
 - Run Docker
 - then do ``cross build --target x86_64-unknown-linux-gnu --release``
-- copy through ssh: ``scp -P 22 server root@174.138.45.57:~/server ``
+- copy through ssh: ``scp -P 22 target/x86_64-unknown-linux-gnu/release/server root@174.138.45.57:~/server``

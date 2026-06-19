@@ -113,7 +113,7 @@ pub async fn connect_to_webtransport_server_wasm(
     } else if let Err(e) = connection_result {
         eprintln!(
             "WebTransport connect failed for {}: {:?}",
-            SERVER_ADDRESS, e
+            server_address, e
         );
         return;
     }
