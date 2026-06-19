@@ -124,12 +124,16 @@ async fn main() {
         }
         previous_time = current_time;
         // set lobby state to empty if connection lost
-        if let Some(ref mut connection_finished_receiver) = connection_finished_receiver && let Ok(Some(_)) = connection_finished_receiver.try_recv() {
+        if let Some(ref mut connection_finished_receiver) = connection_finished_receiver
+            && let Ok(Some(_)) = connection_finished_receiver.try_recv()
+        {
             log!("Connection dropped.");
             ui_game_state.reset();
         }
         // immediately pool the receiver even if there isn't a value there.
-        while let Some(ref mut server_rpc_receiver) = server_rpc_receiver && let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten() {
+        while let Some(ref mut server_rpc_receiver) = server_rpc_receiver
+            && let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten()
+        {
             log!("{rpc_message:?}");
             match rpc_message {
                 RpcServerMessage::Text(text) => {
@@ -216,12 +220,17 @@ async fn main() {
                                 client_rpc_sender = Some(parts.0);
                                 server_rpc_receiver = Some(parts.1);
                                 connection_finished_receiver = Some(parts.2);
-                                let _ = client_rpc_sender.clone().expect("should be set").unbounded_send(RpcClientMessage::JoinLobby);
+                                let _ = client_rpc_sender
+                                    .clone()
+                                    .expect("should be set")
+                                    .unbounded_send(RpcClientMessage::JoinLobby);
                             }
                         }
                         LobbyState::Waiting => {}
                         LobbyState::Running => {
-                            let client_rpc_sender = client_rpc_sender.clone().expect("should be setup by this point since the lobby is running");
+                            let client_rpc_sender = client_rpc_sender
+                                .clone()
+                                .expect("should be setup by this point since the lobby is running");
                             if let Some(game_state) = &ui_game_state.current_game_state
                                 && let Some(side) = ui_game_state.player_side
                             {
@@ -263,7 +272,9 @@ async fn main() {
                             }
                         }
                         LobbyState::Finished => {
-                            let client_rpc_sender = client_rpc_sender.clone().expect("should be setup by this point since the lobby is finished");
+                            let client_rpc_sender = client_rpc_sender.clone().expect(
+                                "should be setup by this point since the lobby is finished",
+                            );
                             if !is_input_selected {
                                 if ui.button("Yes").clicked() {
                                     let _ = client_rpc_sender.unbounded_send(
