@@ -116,7 +116,7 @@ async fn main() {
     let mut previous_time = OffsetDateTime::now_utc();
     let mut timer = Duration::new(0, 0);
     let max_time_for_heartbeat = Duration::new(1, 0);
-    let mut server_address = "https://127.0.0.1:12345/";
+    let mut server_address = "https://127.0.0.1:12345/".to_string();
     while window.render_2d(&mut scene, &mut camera).await {
         let current_time = OffsetDateTime::now_utc();
         let time_since_last_frame = current_time - previous_time;
@@ -219,7 +219,10 @@ async fn main() {
 
                     match ui_game_state.lobby_state {
                         LobbyState::Empty => {
-                            ui.text_edit_singleline(&mut server_address);
+                            let response = ui.add(egui::TextEdit::singleline(&mut server_address));
+                            if response.changed() {
+                                log!("Edit response {}", &server_address);
+                            }
                             if ui.button("Join Lobby").clicked() {
                                 // reset the connection
                                 let parts = get_connection_receivers(server_address.to_string());
