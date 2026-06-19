@@ -37,9 +37,6 @@ pub fn make_channels() -> (
     )
 }
 
-// now that we are hosting on a proper server, we have to match the URL for it exactly for the websocket server to connect
-const SERVER_ADDRESS: &str = "https://127.0.0.1:12345/";
-
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => {
@@ -91,6 +88,7 @@ async fn recv_loop(server_rpc_sender: ServerRpcSender, mut recv_stream: RecvStre
 
 #[cfg(target_arch = "wasm32")]
 pub async fn connect_to_webtransport_server_wasm(
+    server_address: String,
     client_rpc_receiver: ClientRpcReceiver,
     server_rpc_sender: ServerRpcSender,
     connection_finished_sender: ConnectionFinishedSender,
@@ -99,7 +97,7 @@ pub async fn connect_to_webtransport_server_wasm(
     let client: Client = client_builder
         .with_system_roots()
         .expect("trying to build client failed");
-    let request_url = Url::parse(SERVER_ADDRESS).expect("should be valid url");
+    let request_url = Url::parse(&*server_address).expect("should be valid url");
     let connection_result = client.connect(request_url).await;
     if let Ok(session) = connection_result {
         log!("Connected to the server");
@@ -124,6 +122,7 @@ pub async fn connect_to_webtransport_server_wasm(
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn connect_to_webtransport_server_native(
+    server_address: String,
     client_rpc_receiver: ClientRpcReceiver,
     server_rpc_sender: ServerRpcSender,
     connection_finished_sender: ConnectionFinishedSender,
@@ -132,14 +131,13 @@ pub fn connect_to_webtransport_server_native(
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()
-        .unwrap()
+        .build()?
         .block_on(async {
             let client_builder = ClientBuilder::new();
             let client: Client = client_builder
                 .with_system_roots()
                 .expect("trying to build client failed");
-            let request_url = Url::parse(SERVER_ADDRESS).expect("should be valid url");
+            let request_url = Url::parse(&*server_address).expect("should be valid url");
             let connection_result = client.connect(request_url).await;
             if let Ok(session) = connection_result {
                 log!("Connected to the server");
@@ -154,7 +152,7 @@ pub fn connect_to_webtransport_server_native(
             } else if let Err(e) = connection_result {
                 eprintln!(
                     "WebTransport connect failed for {}: {:?}",
-                    SERVER_ADDRESS, e
+                    server_address, e
                 );
                 return;
             }
