@@ -10,6 +10,7 @@ use rpc::{
     GameInput, HEADER_MESSAGE, RPSGameState, RpcClientMessage, RpcServerMessage,
     decode_client_message, decode_server_message, encode_client_message,
 };
+use std::sync::LazyLock;
 use url::Url;
 use web_transport::{Client, ClientBuilder, RecvStream, SendStream};
 
@@ -121,6 +122,13 @@ pub async fn connect_to_webtransport_server_wasm(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+});
+#[cfg(not(target_arch = "wasm32"))]
 pub fn connect_to_webtransport_server_native(
     server_address: String,
     client_rpc_receiver: ClientRpcReceiver,
@@ -129,36 +137,33 @@ pub fn connect_to_webtransport_server_native(
 ) -> anyhow::Result<()> {
     use web_transport::quinn::proto::ConnectRequest;
 
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?
-        .block_on(async {
-            let client_builder = ClientBuilder::new();
-            let client: Client = client_builder
-                .with_system_roots()
-                .expect("trying to build client failed");
-            let request_url = Url::parse(&*server_address).expect("should be valid url");
-            let connection_result = client.connect(request_url).await;
-            if let Ok(session) = connection_result {
-                log!("Connected to the server");
+    RUNTIME.block_on(async {
+        let client_builder = ClientBuilder::new();
+        let client: Client = client_builder
+            .with_system_roots()
+            .expect("trying to build client failed");
+        let request_url = Url::parse(&*server_address).expect("should be valid url");
+        let connection_result = client.connect(request_url).await;
+        if let Ok(session) = connection_result {
+            log!("Connected to the server");
 
-                let (send_stream, recv_stream) = session.accept_bi().await.expect("Accept bi");
+            let (send_stream, recv_stream) = session.accept_bi().await.expect("Accept bi");
 
-                // we want both loops to break if one of them drops
-                tokio::select! {
-                    _ = send_loop(client_rpc_receiver, send_stream) => (),
-                    _ = recv_loop(server_rpc_sender, recv_stream) => (),
-                }
-            } else if let Err(e) = connection_result {
-                eprintln!(
-                    "WebTransport connect failed for {}: {:?}",
-                    server_address, e
-                );
-                return;
+            // we want both loops to break if one of them drops
+            tokio::select! {
+                _ = send_loop(client_rpc_receiver, send_stream) => (),
+                _ = recv_loop(server_rpc_sender, recv_stream) => (),
             }
+        } else if let Err(e) = connection_result {
+            eprintln!(
+                "WebTransport connect failed for {}: {:?}",
+                server_address, e
+            );
+            return;
+        }
 
-            let _ = connection_finished_sender.send(());
-        });
+        let _ = connection_finished_sender.send(());
+    });
 
     Ok(())
 }
