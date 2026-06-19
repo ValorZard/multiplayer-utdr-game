@@ -97,7 +97,7 @@ impl UiGameState {
 
 #[derive(Debug, serde::Deserialize)]
 struct ClientConfig {
-    server : String
+    server: String,
 }
 
 #[kiss3d::main]
