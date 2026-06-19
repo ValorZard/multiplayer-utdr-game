@@ -2166,8 +2166,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 [[package]]
 name = "kiss3d"
 version = "0.44.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35c245302aa0c00d7cb63a43de81de6e83eef5069e787c083d1029c016849041"
+source = "git+https://github.com/ValorZard/kiss3d.git?branch=fix-text-input#594d9205ef94af9c53f7c7ab6e046b38bdb1c3c5"
 dependencies = [
  "bitflags 2.13.0",
  "bytemuck",
@@ -2198,8 +2197,7 @@ dependencies = [
 [[package]]
 name = "kiss3d-macro"
 version = "0.36.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5a36382c6543d11c3ce4928eff122001a9fd3fc0096c305beb5ed2486cc0d72"
+source = "git+https://github.com/ValorZard/kiss3d.git?branch=fix-text-input#594d9205ef94af9c53f7c7ab6e046b38bdb1c3c5"
 dependencies = [
  "proc-macro2",
  "quote",

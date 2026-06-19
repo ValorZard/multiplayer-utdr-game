@@ -9,7 +9,7 @@ rpc = {path = "../rpc"}
 futures-util = "0.3"
 futures-channel = "0.3"
 include_dir = "0.7.4"
-kiss3d = { version = "0.44.0", features = ["egui"]}
+kiss3d = { git = "https://github.com/ValorZard/kiss3d.git", branch = "fix-text-input", features = ["egui"]}
 rkyv = {workspace = true}
 bytes = {workspace = true}
 console_error_panic_hook = "0.1.7"
