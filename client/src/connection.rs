@@ -38,7 +38,7 @@ pub fn make_channels() -> (
 }
 
 // now that we are hosting on a proper server, we have to match the URL for it exactly for the websocket server to connect
-const SERVER_ADDRESS: &str = "https://174.138.45.57:12345/";
+const SERVER_ADDRESS: &str = "https://127.0.0.1:12345/";
 
 #[macro_export]
 macro_rules! log {
