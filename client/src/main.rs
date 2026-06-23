@@ -97,7 +97,7 @@ impl UiGameState {
 
 #[derive(Debug, serde::Deserialize)]
 struct ClientConfig {
-    server: String,
+    servers: Vec<String>,
 }
 
 #[kiss3d::main]
@@ -125,7 +125,7 @@ async fn main() {
     // Client config
     let client_config = include_str!("../client_config.toml");
     let client_config: ClientConfig = toml::from_str(client_config).unwrap();
-    let mut server_address = client_config.server;
+    let mut direct_connect_addr = String::new();
     while window.render_2d(&mut scene, &mut camera).await {
         let current_time = OffsetDateTime::now_utc();
         let time_since_last_frame = current_time - previous_time;
@@ -228,13 +228,30 @@ async fn main() {
 
                     match ui_game_state.lobby_state {
                         LobbyState::Empty => {
-                            let response = ui.add(egui::TextEdit::singleline(&mut server_address));
-                            if response.changed() {
-                                log!("Edit response {}", &server_address);
+                            ui.label("Server List");
+                            for server_address in &client_config.servers {
+                                if ui.button(server_address).clicked() {
+                                    // reset the connection
+                                    let parts =
+                                        get_connection_receivers(server_address.to_string());
+                                    client_rpc_sender = Some(parts.0);
+                                    server_rpc_receiver = Some(parts.1);
+                                    connection_finished_receiver = Some(parts.2);
+                                    let _ = client_rpc_sender
+                                        .clone()
+                                        .expect("should be set")
+                                        .unbounded_send(RpcClientMessage::JoinLobby);
+                                }
                             }
-                            if ui.button("Join Lobby").clicked() {
+                            let response =
+                                ui.add(egui::TextEdit::singleline(&mut direct_connect_addr));
+                            if response.changed() {
+                                log!("Edit response {}", &direct_connect_addr);
+                            }
+                            if ui.button("Direct Connect").clicked() {
                                 // reset the connection
-                                let parts = get_connection_receivers(server_address.to_string());
+                                let parts =
+                                    get_connection_receivers(direct_connect_addr.to_string());
                                 client_rpc_sender = Some(parts.0);
                                 server_rpc_receiver = Some(parts.1);
                                 connection_finished_receiver = Some(parts.2);
