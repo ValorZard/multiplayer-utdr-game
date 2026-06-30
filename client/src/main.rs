@@ -100,6 +100,33 @@ struct ClientConfig {
     servers: Vec<String>,
 }
 
+struct Input {
+    up: bool,
+    down: bool,
+    left: bool,
+    right: bool,
+}
+impl Default for Input {
+    fn default() -> Self {
+        Self {
+            up: false,
+            down: false,
+            left: false,
+            right: false,
+        }
+    }
+}
+
+impl Input {
+    fn as_normalized_vec(&self) -> Vec2 {
+        Vec2::new(
+            (self.right as i8 - self.left as i8) as f32,
+            (self.up as i8 - self.down as i8) as f32,
+        )
+        .normalize_or_zero()
+    }
+}
+
 #[kiss3d::main]
 async fn main() {
     let mut window = Window::new("Kiss3d: rectangle").await;
@@ -125,6 +152,9 @@ async fn main() {
     let mut previous_time = OffsetDateTime::now_utc();
     let mut timer = Duration::new(0, 0);
     let max_time_for_heartbeat = Duration::new(1, 0);
+
+    // input state
+    let mut input = Input::default();
 
     // Client config
     let client_config = include_str!("../client_config.toml");
@@ -206,40 +236,36 @@ async fn main() {
             }
         }
 
-        let mut input_direction = Vec2::ZERO;
-
+        // the way OS's poll key inputs mean that there's a frame of waiting before sending in the next key input
+        // see: https://stereopsis.com/keyrepeat/
         for event in window.events().iter() {
             match event.value {
                 WindowEvent::Key(Key::Space, Action::Press, _) => {
                     log!("Space pressed");
                 }
                 WindowEvent::Key(Key::Left, Action::Press, _) => {
-                    log!("Left pressed");
-                    input_direction.x -= 1.;
+                    input.left = true;
                 }
                 WindowEvent::Key(Key::Right, Action::Press, _) => {
-                    log!("Right pressed");
-                    input_direction.x += 1.;
+                    input.right = true;
                 }
                 WindowEvent::Key(Key::Up, Action::Press, _) => {
-                    log!("Up pressed");
-                    input_direction.y += 1.;
+                    input.up = true;
                 }
                 WindowEvent::Key(Key::Down, Action::Press, _) => {
-                    log!("Down pressed");
-                    input_direction.y -= 1.;
+                    input.down = true;
                 }
                 WindowEvent::Key(Key::Left, Action::Release, _) => {
-                    log!("Left release");
+                    input.left = false;
                 }
                 WindowEvent::Key(Key::Right, Action::Release, _) => {
-                    log!("Right release");
+                    input.right = false;
                 }
                 WindowEvent::Key(Key::Up, Action::Release, _) => {
-                    log!("Up release");
+                    input.up = false;
                 }
                 WindowEvent::Key(Key::Down, Action::Release, _) => {
-                    log!("Down release");
+                    input.down = false;
                 }
                 WindowEvent::MouseButton(MouseButton::Button1, Action::Press, _) => {
                     log!("Left click");
@@ -251,19 +277,18 @@ async fn main() {
             }
         }
 
-        if input_direction != Vec2::ZERO {
-            input_direction = input_direction.normalize();
-            let speed = 1000.;
-            let delta = time_since_last_frame.as_seconds_f32();
-            let new_position = c.position() + (input_direction * speed * delta);
-            c.set_position(new_position);
-        }
+        let speed = 100.;
+        let delta = time_since_last_frame.as_seconds_f32();
+        let new_position = c.position() + (input.as_normalized_vec() * speed * delta);
+        c.set_position(new_position);
 
         // Draw UI
         window.draw_ui(|ctx| {
             egui::Window::new("Kiss3d egui Example")
                 .default_width(300.0)
                 .show(ctx, |ui| {
+                    ui.label(format!("Current Frame Time {}", time_since_last_frame));
+                    ui.label(format!("Current player position {}", c.position()));
                     ui.label(format!("{ui_game_state:#?}"));
 
                     ui.separator();
