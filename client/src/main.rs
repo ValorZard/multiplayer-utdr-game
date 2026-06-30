@@ -206,6 +206,8 @@ async fn main() {
             }
         }
 
+        let mut input_direction = Vec2::ZERO;
+
         for event in window.events().iter() {
             match event.value {
                 WindowEvent::Key(Key::Space, Action::Press, _) => {
@@ -213,13 +215,19 @@ async fn main() {
                 }
                 WindowEvent::Key(Key::Left, Action::Press, _) => {
                     log!("Left pressed");
-                    let position = c.position();
-                    c.set_position(position - Vec2::new(1., 0.));
+                    input_direction.x -= 1.;
                 }
                 WindowEvent::Key(Key::Right, Action::Press, _) => {
                     log!("Right pressed");
-                    let position = c.position();
-                    c.set_position(position - Vec2::new(-1., 0.));
+                    input_direction.x += 1.;
+                }
+                WindowEvent::Key(Key::Up, Action::Press, _) => {
+                    log!("Left pressed");
+                    input_direction.y += 1.;
+                }
+                WindowEvent::Key(Key::Down, Action::Press, _) => {
+                    log!("Right pressed");
+                    input_direction.y -= 1.;
                 }
                 WindowEvent::MouseButton(MouseButton::Button1, Action::Press, _) => {
                     log!("Left click");
@@ -229,6 +237,14 @@ async fn main() {
                 }
                 _ => {}
             }
+        }
+
+        if input_direction != Vec2::ZERO {
+            input_direction = input_direction.normalize();
+            let speed = 1000.;
+            let delta = time_since_last_frame.as_seconds_f32();
+            let new_position = c.position() + (input_direction * speed * delta);
+            c.set_position(new_position);
         }
 
         // Draw UI
