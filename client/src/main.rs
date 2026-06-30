@@ -207,6 +207,12 @@ async fn main() {
                 WindowEvent::Key(Key::Space, Action::Press, _) => {
                     log!("Space pressed");
                 }
+                WindowEvent::Key(Key::Left, Action::Press, _) => {
+                    log!("Left pressed");
+                }
+                WindowEvent::Key(Key::Right, Action::Press, _) => {
+                    log!("Right pressed");
+                }
                 WindowEvent::MouseButton(MouseButton::Button1, Action::Press, _) => {
                     log!("Left click");
                 }
