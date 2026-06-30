@@ -222,12 +222,24 @@ async fn main() {
                     input_direction.x += 1.;
                 }
                 WindowEvent::Key(Key::Up, Action::Press, _) => {
-                    log!("Left pressed");
+                    log!("Up pressed");
                     input_direction.y += 1.;
                 }
                 WindowEvent::Key(Key::Down, Action::Press, _) => {
-                    log!("Right pressed");
+                    log!("Down pressed");
                     input_direction.y -= 1.;
+                }
+                WindowEvent::Key(Key::Left, Action::Release, _) => {
+                    log!("Left release");
+                }
+                WindowEvent::Key(Key::Right, Action::Release, _) => {
+                    log!("Right release");
+                }
+                WindowEvent::Key(Key::Up, Action::Release, _) => {
+                    log!("Up release");
+                }
+                WindowEvent::Key(Key::Down, Action::Release, _) => {
+                    log!("Down release");
                 }
                 WindowEvent::MouseButton(MouseButton::Button1, Action::Press, _) => {
                     log!("Left click");
