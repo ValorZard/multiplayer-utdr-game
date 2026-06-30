@@ -115,6 +115,10 @@ async fn main() {
     let mut server_rpc_receiver: Option<ServerRpcReceiver> = None;
     let mut connection_finished_receiver: Option<ConnectionFinishedReceiver> = None;
 
+    let mut camera = PanZoomCamera2d::new(Vec2::ZERO, 5.0);
+    let mut scene = SceneNode2d::empty();
+    let mut c = scene.add_rectangle(10.0, 10.0).set_color(RED);
+
     // UI state
     let mut ui_game_state = UiGameState::new();
     let mut is_input_selected = false;
@@ -209,9 +213,13 @@ async fn main() {
                 }
                 WindowEvent::Key(Key::Left, Action::Press, _) => {
                     log!("Left pressed");
+                    let position = c.position();
+                    c.set_position(position - Vec2::new(1., 0.));
                 }
                 WindowEvent::Key(Key::Right, Action::Press, _) => {
                     log!("Right pressed");
+                    let position = c.position();
+                    c.set_position(position - Vec2::new(-1., 0.));
                 }
                 WindowEvent::MouseButton(MouseButton::Button1, Action::Press, _) => {
                     log!("Left click");
