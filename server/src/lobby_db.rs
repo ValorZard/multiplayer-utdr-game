@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail};
 use rpc::{
-    LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage,
-    RpcServerMessage, ScoreSize, UserId, YesOrNo, encode_server_message,
+    LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize,
+    UserId, YesOrNo, encode_server_message,
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
@@ -116,8 +116,9 @@ impl ServerStateInner {
                     _ => None,
                 });
 
-        let (player_side, lobby_id) = if let Some(lobby_id) = waiting_lobby_id {
-            let lobby_entry = self.lobby_list.remove(&lobby_id).unwrap();
+        let (player_side, lobby_id) = if let Some(lobby_id) = waiting_lobby_id
+            && let Some(lobby_entry) = self.lobby_list.remove(&lobby_id)
+        {
             let LobbyEntry::Waiting(mut lobby) = lobby_entry else {
                 unreachable!(
                     "This should be waiting since we used find map to find something that matched what we want."
@@ -274,8 +275,9 @@ impl ServerStateInner {
             .ok_or_else(|| anyhow!("user not found"))?;
 
         let lobby_id = user.lobby_id;
-        if let Some(lobby_id) = lobby_id {
-            let lobby_entry = self.lobby_list.remove(&lobby_id).unwrap();
+        if let Some(lobby_id) = lobby_id
+            && let Some(lobby_entry) = self.lobby_list.remove(&lobby_id)
+        {
             match lobby_entry {
                 LobbyEntry::Waiting(lobby) => {
                     // ignore most messages while waiting
@@ -304,17 +306,17 @@ impl ServerStateInner {
                                     if let Some(winner) = lobby.get_left()
                                         && let Some(user) =
                                             self.connected_user_list.get_mut(&winner)
-                                        {
-                                            user.score += 1;
-                                        }
+                                    {
+                                        user.score += 1;
+                                    }
                                 }
                                 RPSWinState::Right => {
                                     if let Some(winner) = lobby.get_right()
                                         && let Some(user) =
                                             self.connected_user_list.get_mut(&winner)
-                                        {
-                                            user.score += 1;
-                                        }
+                                    {
+                                        user.score += 1;
+                                    }
                                 }
                                 RPSWinState::Tie => {}
                             }

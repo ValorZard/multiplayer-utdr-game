@@ -6,15 +6,8 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path,
 };
-use tokio::{
-    io::AsyncReadExt,
-    sync::mpsc,
-    task::JoinSet,
-};
-use web_transport_quinn::{
-    Request, Server, proto::ConnectResponse,
-};
-
+use tokio::{io::AsyncReadExt, sync::mpsc, task::JoinSet};
+use web_transport_quinn::{Request, Server, proto::ConnectResponse};
 
 use crate::lobby_db::ServerState;
 use crate::lobby_db::UserRPCMessage;
@@ -138,7 +131,7 @@ async fn main() -> anyhow::Result<()> {
     let mut chain = std::io::BufReader::new(chain);
 
     let chain: Vec<CertificateDer> = rustls_pemfile::certs(&mut chain)
-        .map(|c| c.unwrap())
+        .map(|c| c.expect("Could not load certificate"))
         .collect();
 
     anyhow::ensure!(!chain.is_empty(), "could not find certificate");

@@ -1,7 +1,7 @@
 use crate::rps::{GameError, GameSession};
 use anyhow::anyhow;
-use rpc::{RpcServerMessage, encode_server_message};
 use rpc::{LobbyState, PlayerSide, RPSGameState, RPSWinState, UserId};
+use rpc::{RpcServerMessage, encode_server_message};
 use tokio::sync::mpsc::UnboundedSender;
 
 pub type UserSender = UnboundedSender<Vec<u8>>;
@@ -50,8 +50,12 @@ impl LobbySession {
         &mut self,
         new_player: (UserId, UserSender),
     ) -> Result<(PlayerSide, LobbyState), LobbyError> {
-        if (self.left_side.is_some() && self.left_side.as_ref().unwrap().0 == new_player.0)
-            || (self.right_side.is_some() && self.right_side.as_ref().unwrap().0 == new_player.0)
+        if let Some((player, _)) = self.left_side.as_ref()
+            && *player == new_player.0
+        {
+            return Err(LobbyError::SameAddr);
+        } else if let Some((player, _)) = self.right_side.as_ref()
+            && *player == new_player.0
         {
             return Err(LobbyError::SameAddr);
         }
@@ -95,13 +99,11 @@ impl LobbySession {
     }
 
     pub fn get_left(&self) -> Option<UserId> {
-        self.left_side
-            .as_ref().map(|(user, _)| *user)
+        self.left_side.as_ref().map(|(user, _)| *user)
     }
 
     pub fn get_right(&self) -> Option<UserId> {
-        self.right_side
-            .as_ref().map(|(user, _)| *user)
+        self.right_side.as_ref().map(|(user, _)| *user)
     }
 
     pub fn set_left_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {
