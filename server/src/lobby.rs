@@ -405,10 +405,8 @@ impl LobbySessionHandle {
     }
 
     pub async fn reset_lobby(&self) {
-        let (send, recv) = oneshot::channel();
         let msg = LobbySessionMessage::ResetLobby;
         let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
     }
 
     pub async fn get_left(&self) -> Result<UserId, LobbyError> {
