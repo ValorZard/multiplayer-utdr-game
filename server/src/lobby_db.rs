@@ -1,18 +1,13 @@
 use anyhow::{anyhow, bail};
 use rpc::{
-    HEADER_MESSAGE, LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage,
+    LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage,
     RpcServerMessage, ScoreSize, UserId, YesOrNo, encode_server_message,
 };
-use std::error::Error;
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::mpsc::error::SendError;
-use tokio::sync::{Mutex, mpsc::UnboundedSender};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::{
-    lobby::{LobbyError, LobbySession},
-    rps::GameSession,
-};
+use crate::lobby::LobbySession;
 
 use crate::lobby::UserSender;
 use rpc::LobbyState;
@@ -76,7 +71,7 @@ impl ServerStateInner {
     }
 
     fn connect_user(&mut self, addr: UserId, sender: UserSender) -> anyhow::Result<()> {
-        if let Some(existing) = self.connected_user_list.get(&addr) {
+        if let Some(_existing) = self.connected_user_list.get(&addr) {
             bail!("Can't double connect a user to the server");
         }
 
@@ -147,12 +142,12 @@ impl ServerStateInner {
         };
 
         if let Some(user) = self.connected_user_list.get_mut(&addr) {
-            user.player_side = Some(player_side.clone());
+            user.player_side = Some(player_side);
             user.lobby_id = Some(lobby_id);
         }
 
         // send our lobby id first
-        let lobby_init = RpcServerMessage::LobbyInit(player_side.clone(), addr, lobby_id);
+        let lobby_init = RpcServerMessage::LobbyInit(player_side, addr, lobby_id);
         let lobby_session = self
             .lobby_list
             .get(&lobby_id)
@@ -306,22 +301,20 @@ impl ServerStateInner {
                         if let RPSGameState::Win { state, .. } = current_state.clone() {
                             match state {
                                 RPSWinState::Left => {
-                                    if let Some(winner) = lobby.get_left() {
-                                        if let Some(user) =
+                                    if let Some(winner) = lobby.get_left()
+                                        && let Some(user) =
                                             self.connected_user_list.get_mut(&winner)
                                         {
                                             user.score += 1;
                                         }
-                                    }
                                 }
                                 RPSWinState::Right => {
-                                    if let Some(winner) = lobby.get_right() {
-                                        if let Some(user) =
+                                    if let Some(winner) = lobby.get_right()
+                                        && let Some(user) =
                                             self.connected_user_list.get_mut(&winner)
                                         {
                                             user.score += 1;
                                         }
-                                    }
                                 }
                                 RPSWinState::Tie => {}
                             }
@@ -445,11 +438,8 @@ impl ServerStateInner {
                 lobby_entry.session().broadcast_game_state()?;
             }
         } else {
-            match user_rpc_message.message {
-                RpcClientMessage::JoinLobby => {
-                    self.put_connected_user_in_lobby(user_rpc_message.send_addr)?;
-                }
-                _ => {}
+            if user_rpc_message.message == RpcClientMessage::JoinLobby {
+                self.put_connected_user_in_lobby(user_rpc_message.send_addr)?;
             }
         }
         Ok(())
