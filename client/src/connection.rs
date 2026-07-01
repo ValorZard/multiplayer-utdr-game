@@ -123,7 +123,7 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .unwrap()
+        .expect("This should succeed since we need to setup tokio with threads. If this fails, we got bigger problems")
 });
 #[cfg(not(target_arch = "wasm32"))]
 pub fn connect_to_webtransport_server_native(

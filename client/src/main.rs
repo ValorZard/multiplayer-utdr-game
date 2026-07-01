@@ -107,7 +107,9 @@ async fn main() {
     let _camera = PanZoomCamera2d::new(Vec2::ZERO, 2.0);
     let _scene = SceneNode2d::empty();
 
-    let image_buffer = ASSET_DIR.get_file("background_concept_2.png").unwrap();
+    let image_buffer = ASSET_DIR
+        .get_file("background_concept_2.png")
+        .expect("File should be here");
     let mut texture_manager = TextureManager::new();
     let _image_texture =
         texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
@@ -141,7 +143,8 @@ async fn main() {
 
     // Client config
     let client_config = include_str!("../client_config.toml");
-    let client_config: ClientConfig = toml::from_str(client_config).unwrap();
+    let client_config: ClientConfig =
+        toml::from_str(client_config).expect("Should be able to convert");
     let mut direct_connect_addr = String::new();
     while window.render_2d(&mut scene, &mut camera).await {
         let current_time = OffsetDateTime::now_utc();

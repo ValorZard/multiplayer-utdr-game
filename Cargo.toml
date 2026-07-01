@@ -2,6 +2,10 @@
 resolver = "3"
 members = ["client", "rpc", "server"]
 
+[workspace.lints.clippy]
+unwrap_used = "deny"
+panic = "deny"
+
 [workspace.dependencies]
 rkyv = { version = "0.8.16", features = ["uuid-1"] }
 bytes = "1.11.1"
