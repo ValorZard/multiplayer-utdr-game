@@ -5,9 +5,10 @@ use rpc::{
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
+use tracing::info;
 use uuid::Uuid;
 
-use crate::lobby::{LobbySessionHandle};
+use crate::lobby::LobbySessionHandle;
 
 use crate::lobby::UserSender;
 use rpc::LobbyState;
@@ -77,11 +78,11 @@ impl ServerStateInner {
             UserData {
                 lobby_id: None,
                 player_side: None,
-                sender
+                sender,
             },
         );
 
-        println!("Connected user {addr} setup");
+        info!("Connected user {addr} setup");
 
         Ok(())
     }
@@ -117,13 +118,13 @@ impl ServerStateInner {
             lobby.reset_lobby().await;
             let (player_side, state) = lobby.insert_player((addr, sender)).await?;
             self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
-            println!("Lobby {lobby_id} should now be running: {state:?}");
+            info!("Lobby {lobby_id} should now be running: {state:?}");
             assert_eq!(state, LobbyState::Running);
             (player_side, lobby_id)
         } else {
             let lobby_id = Uuid::new_v4();
             let lobby = LobbySessionHandle::new((addr, sender));
-            println!(
+            info!(
                 "Lobby {lobby_id} should now be waiting: {:?}",
                 lobby.get_current_lobby_state().await
             );
@@ -144,10 +145,12 @@ impl ServerStateInner {
             .get(&lobby_id)
             .expect("Should be in lobby list")
             .session();
-        println!("Lobby {lobby_id} init: {lobby_init:?} session: {lobby_session:?}");
-        lobby_session.send_message_to_user(lobby_init.clone(), addr).await?;
+        info!("Lobby {lobby_id} init: {lobby_init:?} session: {lobby_session:?}");
+        lobby_session
+            .send_message_to_user(lobby_init.clone(), addr)
+            .await?;
 
-        println!("Connected user {addr} to lobby {lobby_init:?}");
+        info!("Connected user {addr} to lobby {lobby_init:?}");
 
         Ok((player_side, lobby_id))
     }
@@ -177,7 +180,7 @@ impl ServerStateInner {
                     match state {
                         LobbyState::Empty => {
                             // delete lobby
-                            println!("Waiting Lobby {lobby_id} is now destroyed, lobby was empty");
+                            info!("Waiting Lobby {lobby_id} is now destroyed, lobby was empty");
                         }
                         _ => unreachable!(
                             "Since we only have two players in lobby {lobby_id:?}, if we remove a player from a waiting lobby, its empty and can be deleted."
@@ -194,7 +197,7 @@ impl ServerStateInner {
                         }
                         LobbyState::Empty => {
                             // delete lobby
-                            println!("Running Lobby {lobby_id} is now destroyed, lobby was empty");
+                            info!("Running Lobby {lobby_id} is now destroyed, lobby was empty");
                         }
                         _ => unreachable!(),
                     }
@@ -210,7 +213,7 @@ impl ServerStateInner {
                         }
                         LobbyState::Empty => {
                             // delete lobby
-                            println!(
+                            info!(
                                 "Lobby {lobby_id} is now destroyed, both players rejected continuing to play"
                             );
                         }
@@ -254,7 +257,7 @@ impl ServerStateInner {
             .ok_or_else(|| anyhow!("user not found"))?;
 
         let lobby_id = user.lobby_id;
-        println!(
+        info!(
             "handle_user_rpc: addr={} lobby_id={:?} message={:?}",
             user_rpc_message.send_addr, lobby_id, user_rpc_message.message
         );
@@ -264,7 +267,7 @@ impl ServerStateInner {
             match lobby_entry {
                 LobbyEntry::Waiting(lobby) => {
                     // ignore most messages while waiting
-                    println!(
+                    info!(
                         "lobby {lobby_id}: waiting; ignoring message from {}",
                         user_rpc_message.send_addr
                     );
@@ -273,13 +276,15 @@ impl ServerStateInner {
 
                 LobbyEntry::Running(mut lobby) => match user_rpc_message.message {
                     RpcClientMessage::GameInput(input) => {
-                        println!(
+                        info!(
                             "Lobby input: {input:?} sent from {:?}",
                             user_rpc_message.send_addr
                         );
-                        println!("Lobby session: {lobby:?}");
+                        info!("Lobby session: {lobby:?}");
 
-                        let current_state = lobby.send_rps_input(user_rpc_message.send_addr, input).await;
+                        let current_state = lobby
+                            .send_rps_input(user_rpc_message.send_addr, input)
+                            .await;
 
                         if let RPSGameState::Win { state, .. } = current_state.clone() {
                             self.lobby_list.insert(
@@ -295,7 +300,7 @@ impl ServerStateInner {
                         }
                     }
                     _ => {
-                        println!(
+                        info!(
                             "lobby {lobby_id}: running; non-game input from {} ignored",
                             user_rpc_message.send_addr
                         );
@@ -316,7 +321,7 @@ impl ServerStateInner {
                                 PlayerSide::Right => finished.right_side_continue = Some(vote),
                             }
 
-                            println!("Finished lobby {lobby_id:?}");
+                            info!("Finished lobby {lobby_id:?}");
 
                             match (
                                 finished.left_side_continue.clone(),
@@ -346,7 +351,7 @@ impl ServerStateInner {
                                             .expect("Should have both players"),
                                     )?;
                                     // delete lobby entirely
-                                    println!(
+                                    info!(
                                         "Finished Lobby {lobby_id} is now destroyed, both players rejected continuing to play"
                                     );
                                 }
@@ -397,7 +402,7 @@ impl ServerStateInner {
                         }
                         _ => {
                             // ignore other messages now that we're finished
-                            println!(
+                            info!(
                                 "lobby {lobby_id}: finished; ignoring message from {}",
                                 user_rpc_message.send_addr
                             );
@@ -409,16 +414,16 @@ impl ServerStateInner {
             }
         } else {
             if user_rpc_message.message == RpcClientMessage::JoinLobby {
-                println!(
+                info!(
                     "addr {} has no lobby yet; processing JoinLobby",
                     user_rpc_message.send_addr
                 );
-                self.put_connected_user_in_lobby(user_rpc_message.send_addr).await?;
+                self.put_connected_user_in_lobby(user_rpc_message.send_addr)
+                    .await?;
             } else {
-                println!(
+                info!(
                     "addr {} has no lobby and sent non-JoinLobby message: {:?}",
-                    user_rpc_message.send_addr,
-                    user_rpc_message.message
+                    user_rpc_message.send_addr, user_rpc_message.message
                 );
             }
         }
@@ -450,6 +455,7 @@ impl ServerState {
         self.server_state
             .lock()
             .await
-            .handle_user_rpc(user_rpc_message).await
+            .handle_user_rpc(user_rpc_message)
+            .await
     }
 }
