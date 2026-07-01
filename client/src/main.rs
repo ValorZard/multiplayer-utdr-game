@@ -1,7 +1,6 @@
 use crate::connection::{ClientRpcSender, ConnectionFinishedReceiver, ServerRpcReceiver};
 use futures_channel::oneshot;
-use futures_util::future::FusedFuture;
-use futures_util::{FutureExt, SinkExt, StreamExt};
+use futures_util::{FutureExt, StreamExt};
 use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
@@ -105,12 +104,12 @@ struct ClientConfig {
 #[kiss3d::main]
 async fn main() {
     let mut window = Window::new("Kiss3d: rectangle").await;
-    let mut camera = PanZoomCamera2d::new(Vec2::ZERO, 2.0);
-    let mut scene = SceneNode2d::empty();
+    let _camera = PanZoomCamera2d::new(Vec2::ZERO, 2.0);
+    let _scene = SceneNode2d::empty();
 
     let image_buffer = ASSET_DIR.get_file("background_concept_2.png").unwrap();
     let mut texture_manager = TextureManager::new();
-    let image_texture =
+    let _image_texture =
         texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
 
     let mut client_rpc_sender: Option<ClientRpcSender> = None;
@@ -168,7 +167,7 @@ async fn main() {
         {
             log!("{rpc_message:?}");
             match rpc_message {
-                RpcServerMessage::Text(text) => {
+                RpcServerMessage::Text(_text) => {
                     // TODO: Do something here I guess
                 }
                 RpcServerMessage::GameState {
@@ -183,10 +182,10 @@ async fn main() {
                             ui_game_state.remote_right_input = None;
                         }
                         RPSGameState::WaitingForLeftInput { right_input } => {
-                            ui_game_state.remote_right_input = Some(right_input.clone());
+                            ui_game_state.remote_right_input = Some(*right_input);
                         }
                         RPSGameState::WaitingForRightInput { left_input } => {
-                            ui_game_state.remote_left_input = Some(left_input.clone());
+                            ui_game_state.remote_left_input = Some(*left_input);
                         }
                         RPSGameState::Win {
                             state,
@@ -194,8 +193,8 @@ async fn main() {
                             right_input,
                         } => {
                             ui_game_state.win_state = Some(state.clone());
-                            ui_game_state.remote_right_input = Some(right_input.clone());
-                            ui_game_state.remote_left_input = Some(left_input.clone());
+                            ui_game_state.remote_right_input = Some(*right_input);
+                            ui_game_state.remote_left_input = Some(*left_input);
                         }
                     }
                     ui_game_state.remote_left_score = left_side_score;
@@ -218,7 +217,7 @@ async fn main() {
                     }
                     ui_game_state.lobby_state = state;
                 }
-                RpcServerMessage::MoveGameState(game_state) => {
+                RpcServerMessage::MoveGameState(_game_state) => {
                     todo!()
                 }
             }
@@ -268,7 +267,7 @@ async fn main() {
         // run actual game logic if we've hit a tick (drain accumulated frames)
         game_time_step_timer += time_since_last_frame;
         while game_time_step_timer >= game_time_step {
-            game_time_step_timer = game_time_step_timer - game_time_step;
+            game_time_step_timer -= game_time_step;
             let new_position = c.position() + (input.as_normalized_vec() * speed * game_delta);
             c.set_position(new_position);
         }
@@ -327,11 +326,7 @@ async fn main() {
                             if let Some(game_state) = &ui_game_state.current_game_state
                                 && let Some(side) = ui_game_state.player_side
                             {
-                                let round_start = if let RPSGameState::StartRound = game_state {
-                                    true
-                                } else {
-                                    false
-                                };
+                                let round_start = matches!(game_state, RPSGameState::StartRound);
                                 let waiting_on_us =
                                     if let RPSGameState::WaitingForLeftInput { .. } = game_state
                                         && side == PlayerSide::Left
