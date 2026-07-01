@@ -100,33 +100,6 @@ struct ClientConfig {
     servers: Vec<String>,
 }
 
-struct Input {
-    up: bool,
-    down: bool,
-    left: bool,
-    right: bool,
-}
-impl Default for Input {
-    fn default() -> Self {
-        Self {
-            up: false,
-            down: false,
-            left: false,
-            right: false,
-        }
-    }
-}
-
-impl Input {
-    fn as_normalized_vec(&self) -> Vec2 {
-        Vec2::new(
-            (self.right as i8 - self.left as i8) as f32,
-            (self.up as i8 - self.down as i8) as f32,
-        )
-        .normalize_or_zero()
-    }
-}
-
 #[kiss3d::main]
 async fn main() {
     let mut window = Window::new("Kiss3d: rectangle").await;
@@ -159,7 +132,7 @@ async fn main() {
     let mut game_time_step_timer = Duration::new(0, 0);
 
     // input state
-    let mut input = Input::default();
+    let mut input = rpc::InputState::default();
 
     // game state
     let speed = 100.;

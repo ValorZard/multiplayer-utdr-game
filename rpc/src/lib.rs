@@ -1,3 +1,4 @@
+use glam::Vec2;
 use rkyv::{Archive, Deserialize, Serialize, rancor, util::AlignedVec};
 use std::net::SocketAddr;
 use uuid::Uuid;
@@ -13,6 +14,41 @@ use uuid::Uuid;
 pub enum YesOrNo {
     Yes,
     No,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub struct InputState {
+    pub up: bool,
+    pub down: bool,
+    pub left: bool,
+    pub right: bool,
+}
+impl Default for InputState {
+    fn default() -> Self {
+        Self {
+            up: false,
+            down: false,
+            left: false,
+            right: false,
+        }
+    }
+}
+
+impl InputState {
+    pub fn as_normalized_vec(&self) -> Vec2 {
+        Vec2::new(
+            (self.right as i8 - self.left as i8) as f32,
+            (self.up as i8 - self.down as i8) as f32,
+        )
+        .normalize_or_zero()
+    }
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]

@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 rkyv = {workspace = true}
 uuid = {workspace = true }
+glam = {workspace = true}
