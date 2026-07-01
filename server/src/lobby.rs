@@ -1,18 +1,29 @@
-use std::sync::mpsc::Receiver;
 use crate::rps::{GameError, GameSession};
 use anyhow::anyhow;
 use rpc::{GameInput, LobbyState, PlayerSide, RPSGameState, RPSWinState, UserId};
 use rpc::{RpcServerMessage, encode_server_message};
+use std::sync::mpsc::Receiver;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot};
+use tracing::warn;
 
 pub type UserSender = UnboundedSender<Vec<u8>>;
 
 pub enum LobbySessionMessage {
-    InsertPlayer((UserId, UserSender), oneshot::Sender<Result<(PlayerSide, LobbyState), LobbyError>>),
-    RemovePlayer(UserId, oneshot::Sender<Result<(PlayerSide, LobbyState), LobbyError>>),
+    InsertPlayer(
+        (UserId, UserSender),
+        oneshot::Sender<Result<(PlayerSide, LobbyState), LobbyError>>,
+    ),
+    RemovePlayer(
+        UserId,
+        oneshot::Sender<Result<(PlayerSide, LobbyState), LobbyError>>,
+    ),
     RPSInput(UserId, GameInput, oneshot::Sender<RPSGameState>),
-    SendMessageToUser(RpcServerMessage, UserId, oneshot::Sender<Result<(), LobbyError>>),
+    SendMessageToUser(
+        RpcServerMessage,
+        UserId,
+        oneshot::Sender<Result<(), LobbyError>>,
+    ),
     SendMessageToLobby(RpcServerMessage, oneshot::Sender<Result<(), LobbyError>>),
     LobbyState(oneshot::Sender<LobbyState>),
     GetPlayerSide(UserId, oneshot::Sender<Result<PlayerSide, LobbyError>>),
@@ -47,10 +58,17 @@ impl std::fmt::Display for LobbyError {
                 "Error! We can't have two players who come from the same addr {addr:?}"
             ),
             LobbyError::AlreadyFull => write!(f, "Error! This lobby is already full!"),
-            LobbyError::NeverExisted(addr) => write!(f, "Error! This player {addr:?} never existed here!"),
-            LobbyError::MessageSendFailed(addr) => write!(f, "Error! Sending a message to this player {addr:?} failed!"),
+            LobbyError::NeverExisted(addr) => {
+                write!(f, "Error! This player {addr:?} never existed here!")
+            }
+            LobbyError::MessageSendFailed(addr) => write!(
+                f,
+                "Error! Sending a message to this player {addr:?} failed!"
+            ),
             LobbyError::GameError(err) => write!(f, "Game Error: {}", err),
-            LobbyError::SideNotFound(side) => write!(f, "UserId for player side not found: {side:?}"),
+            LobbyError::SideNotFound(side) => {
+                write!(f, "UserId for player side not found: {side:?}")
+            }
         }
     }
 }
@@ -127,7 +145,7 @@ impl LobbySession {
         Err(LobbyError::SideNotFound(PlayerSide::Left))
     }
 
-    fn get_right(&self) -> Result<UserId, LobbyError>  {
+    fn get_right(&self) -> Result<UserId, LobbyError> {
         if let Some((player, _)) = self.right_side.as_ref() {
             return Ok(*player);
         }
@@ -227,7 +245,7 @@ impl LobbySession {
         ))
     }
 
-    fn broadcast_game_state(&self) -> Result<(), LobbyError>{
+    fn broadcast_game_state(&self) -> Result<(), LobbyError> {
         let state = self.get_current_game_state();
         let left_side_score = 0;
         let right_side_score = 0;
@@ -252,25 +270,23 @@ impl LobbySession {
                 let result = self.get_player_side(addr);
                 let _ = oneshot.send(result);
             }
-            LobbySessionMessage::GetUserId(side, oneshot) => {
-                match side {
-                    PlayerSide::Left => {
-                        let _ = oneshot.send(self.get_left());
-                    }
-                    PlayerSide::Right => {
-                        let _ = oneshot.send(self.get_right());
-                    }
+            LobbySessionMessage::GetUserId(side, oneshot) => match side {
+                PlayerSide::Left => {
+                    let _ = oneshot.send(self.get_left());
                 }
-            }
+                PlayerSide::Right => {
+                    let _ = oneshot.send(self.get_right());
+                }
+            },
             LobbySessionMessage::RPSInput(player_addr, input, oneshot) => {
                 let player_side = self.get_player_side(player_addr)?;
                 let current_state = match player_side {
-                    PlayerSide::Left => {
-                        self.set_left_input(input).map_err(|e| LobbyError::GameError(e))?
-                    }
-                    PlayerSide::Right => {
-                        self.set_right_input(input).map_err(|e| LobbyError::GameError(e))?
-                    }
+                    PlayerSide::Left => self
+                        .set_left_input(input)
+                        .map_err(|e| LobbyError::GameError(e))?,
+                    PlayerSide::Right => self
+                        .set_right_input(input)
+                        .map_err(|e| LobbyError::GameError(e))?,
                 };
                 let _ = oneshot.send(current_state);
             }
@@ -297,13 +313,13 @@ async fn run_lobby_session(mut lobby: LobbySession) -> Result<(), LobbyError> {
     // loop every 1/30 seconds or deal with incoming messages
     let mut tick = tokio::time::interval(tokio::time::Duration::from_millis(33)); // ~1/30s
 
-    'actor_loop :loop {
+    'actor_loop: loop {
         tokio::select! {
             msg = lobby.receiver.recv() => {
                 match msg {
                     Some(msg) => {
                         if let Err(e) = lobby.handle_message(msg) {
-                            eprintln!("error handling message: {e:?}");
+                            warn!("error handling message: {e:?}");
                             // TODO: For now we just break
                             break 'actor_loop;
                         }
@@ -332,14 +348,17 @@ impl LobbySessionHandle {
         let actor = LobbySession::new(left_side, receiver);
         tokio::spawn(async move {
             if let Err(e) = run_lobby_session(actor).await {
-                eprintln!("error handling lobby session: {e:?}");
+                warn!("error handling lobby session: {e:?}");
             }
         });
 
         Self { sender }
     }
 
-    pub async fn insert_player(&self, new_player: (UserId, UserSender)) -> Result<(PlayerSide, LobbyState), LobbyError> {
+    pub async fn insert_player(
+        &self,
+        new_player: (UserId, UserSender),
+    ) -> Result<(PlayerSide, LobbyState), LobbyError> {
         let (send, recv) = oneshot::channel();
         let msg = LobbySessionMessage::InsertPlayer(new_player, send);
 
@@ -350,7 +369,10 @@ impl LobbySessionHandle {
         recv.await.expect("Actor task has been killed")
     }
 
-    pub async fn remove_player(&self, leaving_player: UserId) -> Result<(PlayerSide, LobbyState), LobbyError> {
+    pub async fn remove_player(
+        &self,
+        leaving_player: UserId,
+    ) -> Result<(PlayerSide, LobbyState), LobbyError> {
         let (send, recv) = oneshot::channel();
         let msg = LobbySessionMessage::RemovePlayer(leaving_player, send);
 
@@ -368,7 +390,11 @@ impl LobbySessionHandle {
         recv.await.expect("Actor task has been killed")
     }
 
-    pub async fn send_message_to_user(&self, message: RpcServerMessage, user_addr: UserId) -> Result<(), LobbyError> {
+    pub async fn send_message_to_user(
+        &self,
+        message: RpcServerMessage,
+        user_addr: UserId,
+    ) -> Result<(), LobbyError> {
         let (send, recv) = oneshot::channel();
         let msg = LobbySessionMessage::SendMessageToUser(message, user_addr, send);
 
