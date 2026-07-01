@@ -1,6 +1,6 @@
 use rpc::{GameInput, RPSGameState, RPSWinState};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum GameError {
     InvalidInput,
     LeftInputAlreadySet,
