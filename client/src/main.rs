@@ -8,7 +8,7 @@ use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
 use rpc::{
     GameInput, LobbyId, LobbyState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage,
-    RpcServerMessage, ScoreSize, YesOrNo,
+    RpcServerMessage, ScoreSize, UserId, YesOrNo,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
@@ -73,6 +73,7 @@ struct UiGameState {
     player_side: Option<PlayerSide>,
     win_state: Option<RPSWinState>,
     current_game_state: Option<RPSGameState>,
+    user_id: Option<UserId>,
 }
 
 impl UiGameState {
@@ -87,6 +88,7 @@ impl UiGameState {
             player_side: None,
             win_state: None,
             current_game_state: None,
+            user_id: None,
         }
     }
 
@@ -200,8 +202,9 @@ async fn main() {
                     ui_game_state.remote_right_score = right_side_score;
                     ui_game_state.current_game_state = Some(state);
                 }
-                RpcServerMessage::LobbyInit(side, id) => {
-                    ui_game_state.lobby_id = Some(id);
+                RpcServerMessage::LobbyInit(side, user_id, lobby_id) => {
+                    ui_game_state.user_id = Some(user_id);
+                    ui_game_state.lobby_id = Some(lobby_id);
                     ui_game_state.player_side = Some(side);
                 }
                 RpcServerMessage::LobbyState(state) => {

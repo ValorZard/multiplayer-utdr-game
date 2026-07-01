@@ -226,7 +226,7 @@ impl ServerStateInner {
         }
 
         // send our lobby id first
-        let lobby_init = RpcServerMessage::LobbyInit(player_side.clone(), lobby_id);
+        let lobby_init = RpcServerMessage::LobbyInit(player_side.clone(), addr, lobby_id);
         self.send_message_to_user(&lobby_init, &addr)?;
 
         self.broadcast_lobby_state(lobby_id)?;

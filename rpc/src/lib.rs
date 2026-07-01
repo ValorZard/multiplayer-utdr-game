@@ -109,7 +109,7 @@ pub enum RpcServerMessage {
         right_side_score: ScoreSize,
     },
     MoveGameState(MoveGameState),
-    LobbyInit(PlayerSide, LobbyId),
+    LobbyInit(PlayerSide, UserId, LobbyId),
     LobbyState(LobbyState),
     Text(String),
 }
