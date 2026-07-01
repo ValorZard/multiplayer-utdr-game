@@ -32,6 +32,7 @@ impl std::error::Error for GameError {
     }
 }
 
+#[derive(Debug)]
 pub struct GameSession {
     left_input: Option<rpc::GameInput>,
     right_input: Option<rpc::GameInput>,
