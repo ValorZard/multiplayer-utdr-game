@@ -1,6 +1,6 @@
 use crate::rps::{GameError, GameSession};
-use anyhow::{anyhow, bail};
-use rpc::{LobbyId, PlayerSideResolver, RpcServerMessage, encode_server_message};
+use anyhow::anyhow;
+use rpc::{RpcServerMessage, encode_server_message};
 use rpc::{LobbyState, PlayerSide, RPSGameState, RPSWinState, UserId};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -58,7 +58,7 @@ impl LobbySession {
 
         let new_player = Some(new_player);
 
-        return if self.left_side.is_none() {
+        if self.left_side.is_none() {
             self.left_side = new_player;
             Ok((PlayerSide::Left, self.get_current_lobby_state()))
         } else if self.right_side.is_none() {
@@ -66,7 +66,7 @@ impl LobbySession {
             Ok((PlayerSide::Right, self.get_current_lobby_state()))
         } else {
             Err(LobbyError::AlreadyFull)
-        };
+        }
     }
 
     pub fn remove_player(
@@ -96,14 +96,12 @@ impl LobbySession {
 
     pub fn get_left(&self) -> Option<UserId> {
         self.left_side
-            .as_ref()
-            .map_or(None, |(user, _)| Some(*user))
+            .as_ref().map(|(user, _)| *user)
     }
 
     pub fn get_right(&self) -> Option<UserId> {
         self.right_side
-            .as_ref()
-            .map_or(None, |(user, _)| Some(*user))
+            .as_ref().map(|(user, _)| *user)
     }
 
     pub fn set_left_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {

@@ -1,31 +1,20 @@
 use anyhow::{Context, bail};
 use clap::Parser;
-use futures_util::{SinkExt, StreamExt, future, pin_mut, stream::TryStreamExt};
-use rkyv::rancor;
-use rkyv::util::AlignedVec;
-use rpc::{HEADER_MESSAGE, RpcClientMessage, RpcServerMessage, decode_client_message};
+use futures_util::{StreamExt, future, pin_mut};
+use rpc::{HEADER_MESSAGE, decode_client_message};
 use std::{
-    cell::{LazyCell, OnceCell},
-    collections::HashMap,
-    hash::Hash,
-    io::Error as IoError,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path,
-    str::FromStr,
-    sync::{Arc, Mutex},
 };
 use tokio::{
     io::AsyncReadExt,
-    net::{TcpListener, TcpStream},
-    sync::{mpsc, oneshot},
+    sync::mpsc,
     task::JoinSet,
 };
-use tokio_stream::wrappers::UnboundedReceiverStream;
 use web_transport_quinn::{
-    RecvStream, Request, SendStream, Server, Session, proto::ConnectResponse,
+    Request, Server, proto::ConnectResponse,
 };
 
-use uuid::Uuid;
 
 use crate::lobby_db::ServerState;
 use crate::lobby_db::UserRPCMessage;

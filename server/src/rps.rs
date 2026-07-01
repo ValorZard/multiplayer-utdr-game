@@ -116,7 +116,7 @@ impl GameSession {
         if self.left_input.is_none() {
             self.left_input = Some(input);
         }
-        return Ok(self.compute_state());
+        Ok(self.compute_state())
     }
 
     // you can only set this once per turn
@@ -124,6 +124,6 @@ impl GameSession {
         if self.right_input.is_none() {
             self.right_input = Some(input);
         }
-        return Ok(self.compute_state());
+        Ok(self.compute_state())
     }
 }
