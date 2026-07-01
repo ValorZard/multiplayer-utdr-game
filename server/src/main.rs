@@ -60,8 +60,7 @@ async fn handle_connection(request: Request, server_state: ServerState) -> anyho
                     .await?
                     .expect("There should be a chunk here we can use");
                 let message = decode_client_message(&chunk.bytes)?;
-
-                println!("message received!");
+                println!("message received from {addr}: {message:?}");
 
                 let user_rpc_message = UserRPCMessage {
                     message,
@@ -92,7 +91,18 @@ async fn handle_connection(request: Request, server_state: ServerState) -> anyho
     });
 
     pin_mut!(broadcast_incoming, receive_from_others);
-    future::select(broadcast_incoming, receive_from_others).await;
+    let race_result = future::select(broadcast_incoming, receive_from_others).await;
+    match race_result {
+        future::Either::Left((join_result, _)) => match join_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => eprintln!("incoming-task error for {addr}: {e:#}"),
+            Err(e) => eprintln!("incoming-task panicked for {addr}: {e}"),
+        },
+        future::Either::Right((join_result, _)) => match join_result {
+            Ok(()) => {}
+            Err(e) => eprintln!("outgoing-task panicked for {addr}: {e}"),
+        },
+    }
 
     println!("{} disconnected", &addr);
     server_state.disconnect_user(addr).await?;
@@ -153,7 +163,12 @@ async fn main() -> anyhow::Result<()> {
     // Let's spawn the handling of each connection in a separate task.
     let mut connection_set = JoinSet::new();
     while let Some(session) = server.accept().await {
-        connection_set.spawn(handle_connection(session, server_state.clone()));
+        let server_state = server_state.clone();
+        connection_set.spawn(async move {
+            if let Err(e) = handle_connection(session, server_state).await {
+                println!("Connection error: {e}");
+            }
+        });
     }
 
     Ok(())

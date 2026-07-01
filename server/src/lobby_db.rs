@@ -254,12 +254,20 @@ impl ServerStateInner {
             .ok_or_else(|| anyhow!("user not found"))?;
 
         let lobby_id = user.lobby_id;
+        println!(
+            "handle_user_rpc: addr={} lobby_id={:?} message={:?}",
+            user_rpc_message.send_addr, lobby_id, user_rpc_message.message
+        );
         if let Some(lobby_id) = lobby_id
             && let Some(lobby_entry) = self.lobby_list.remove(&lobby_id)
         {
             match lobby_entry {
                 LobbyEntry::Waiting(lobby) => {
                     // ignore most messages while waiting
+                    println!(
+                        "lobby {lobby_id}: waiting; ignoring message from {}",
+                        user_rpc_message.send_addr
+                    );
                     self.lobby_list.insert(lobby_id, LobbyEntry::Waiting(lobby));
                 }
 
@@ -287,6 +295,10 @@ impl ServerStateInner {
                         }
                     }
                     _ => {
+                        println!(
+                            "lobby {lobby_id}: running; non-game input from {} ignored",
+                            user_rpc_message.send_addr
+                        );
                         self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
                     }
                 },
@@ -385,6 +397,10 @@ impl ServerStateInner {
                         }
                         _ => {
                             // ignore other messages now that we're finished
+                            println!(
+                                "lobby {lobby_id}: finished; ignoring message from {}",
+                                user_rpc_message.send_addr
+                            );
                             self.lobby_list
                                 .insert(lobby_id, LobbyEntry::Finished(finished));
                         }
@@ -393,7 +409,17 @@ impl ServerStateInner {
             }
         } else {
             if user_rpc_message.message == RpcClientMessage::JoinLobby {
+                println!(
+                    "addr {} has no lobby yet; processing JoinLobby",
+                    user_rpc_message.send_addr
+                );
                 self.put_connected_user_in_lobby(user_rpc_message.send_addr).await?;
+            } else {
+                println!(
+                    "addr {} has no lobby and sent non-JoinLobby message: {:?}",
+                    user_rpc_message.send_addr,
+                    user_rpc_message.message
+                );
             }
         }
         Ok(())
