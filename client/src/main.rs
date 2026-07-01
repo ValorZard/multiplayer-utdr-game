@@ -149,12 +149,21 @@ async fn main() {
     // UI state
     let mut ui_game_state = UiGameState::new();
     let mut is_input_selected = false;
+
+    // timer stuff
     let mut previous_time = OffsetDateTime::now_utc();
-    let mut timer = Duration::new(0, 0);
+    let mut heartbeat_timer = Duration::new(0, 0);
     let max_time_for_heartbeat = Duration::new(1, 0);
+    // deltarune runs on 30 TPS
+    let game_time_step = Duration::seconds_f32(1. / 30.);
+    let mut game_time_step_timer = Duration::new(0, 0);
 
     // input state
     let mut input = Input::default();
+
+    // game state
+    let speed = 100.;
+    let game_delta = game_time_step.as_seconds_f32();
 
     // Client config
     let client_config = include_str!("../client_config.toml");
@@ -163,9 +172,9 @@ async fn main() {
     while window.render_2d(&mut scene, &mut camera).await {
         let current_time = OffsetDateTime::now_utc();
         let time_since_last_frame = current_time - previous_time;
-        timer += time_since_last_frame;
-        if timer >= max_time_for_heartbeat {
-            timer = Duration::new(0, 0);
+        heartbeat_timer += time_since_last_frame;
+        if heartbeat_timer >= max_time_for_heartbeat {
+            heartbeat_timer = Duration::new(0, 0);
             if let Some(client_rpc_sender) = client_rpc_sender.clone() {
                 let _ = client_rpc_sender.unbounded_send(RpcClientMessage::Heartbeat);
             }
@@ -277,10 +286,13 @@ async fn main() {
             }
         }
 
-        let speed = 100.;
-        let delta = time_since_last_frame.as_seconds_f32();
-        let new_position = c.position() + (input.as_normalized_vec() * speed * delta);
-        c.set_position(new_position);
+        // run actual game logic if we've hit a tick (drain accumulated frames)
+        game_time_step_timer += time_since_last_frame;
+        while game_time_step_timer >= game_time_step {
+            game_time_step_timer = game_time_step_timer - game_time_step;
+            let new_position = c.position() + (input.as_normalized_vec() * speed * game_delta);
+            c.set_position(new_position);
+        }
 
         // Draw UI
         window.draw_ui(|ctx| {
