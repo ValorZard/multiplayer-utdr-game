@@ -9,4 +9,4 @@ tokio = {version = "1.52.3", features = ["full"] }
 web-transport = "0.10.6"
 tokio-stream = "0.1"
 uuid = {version = "1.23.2", features = ["v4", "rng-getrandom"] }
-glam = {version = "0.33", features = ["rkyv", "serde"]}
+glam = {version = "0.33", features = ["rkyv", "serde", "bytecheck"]}

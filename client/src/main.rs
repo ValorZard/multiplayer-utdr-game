@@ -132,7 +132,7 @@ async fn main() {
     let mut game_time_step_timer = Duration::new(0, 0);
 
     // input state
-    let mut input = rpc::InputState::default();
+    let mut input = rpc::MoveInputState::default();
 
     // game state
     let speed = 100.;
@@ -214,6 +214,9 @@ async fn main() {
                         }
                     }
                     ui_game_state.lobby_state = state;
+                }
+                RpcServerMessage::MoveGameState(game_state) => {
+                    todo!()
                 }
             }
         }

@@ -1,5 +1,7 @@
 use glam::Vec2;
+use rkyv::net::ArchivedSocketAddr;
 use rkyv::{Archive, Deserialize, Serialize, rancor, util::AlignedVec};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use uuid::Uuid;
 
@@ -24,13 +26,13 @@ pub enum YesOrNo {
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
-pub struct InputState {
+pub struct MoveInputState {
     pub up: bool,
     pub down: bool,
     pub left: bool,
     pub right: bool,
 }
-impl Default for InputState {
+impl Default for MoveInputState {
     fn default() -> Self {
         Self {
             up: false,
@@ -41,7 +43,7 @@ impl Default for InputState {
     }
 }
 
-impl InputState {
+impl MoveInputState {
     pub fn as_normalized_vec(&self) -> Vec2 {
         Vec2::new(
             (self.right as i8 - self.left as i8) as f32,
@@ -65,6 +67,7 @@ pub enum RpcClientMessage {
     ContinueRound(YesOrNo),
     JoinLobby,
     Heartbeat,
+    MoveInput(MoveInputState),
 }
 
 pub type LobbyId = Uuid;
@@ -87,9 +90,15 @@ pub type ScoreSize = u32;
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
-    // This will generate a PartialEq impl between our unarchived
-    // and archived types
-    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub struct MoveGameState {
+    positions: HashMap<UserId, Vec2>,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
@@ -99,6 +108,7 @@ pub enum RpcServerMessage {
         left_side_score: ScoreSize,
         right_side_score: ScoreSize,
     },
+    MoveGameState(MoveGameState),
     LobbyInit(PlayerSide, LobbyId),
     LobbyState(LobbyState),
     Text(String),
