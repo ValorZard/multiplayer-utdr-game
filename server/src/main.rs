@@ -12,6 +12,7 @@ use web_transport_quinn::{Request, Server, proto::ConnectResponse};
 use crate::lobby_db::ServerState;
 use crate::lobby_db::UserRPCMessage;
 use rustls::pki_types::CertificateDer;
+use tracing::{info, warn};
 
 #[deny(clippy::unwrap_used, clippy::panic)]
 
@@ -23,7 +24,7 @@ mod lobby_db;
 mod rps;
 
 async fn handle_connection(request: Request, server_state: ServerState) -> anyhow::Result<()> {
-    println!("WebTransport connection established: {}", request.url);
+    info!("WebTransport connection established: {}", request.url);
 
     // Accept the session.
     let response = ConnectResponse::OK;
@@ -47,7 +48,6 @@ async fn handle_connection(request: Request, server_state: ServerState) -> anyho
             let message_read_result = incoming.read_exact(&mut header_buf).await;
             if let Ok(()) = message_read_result {
                 if header_buf != HEADER_MESSAGE {
-                    println!("Connection has received corrupted header, stopping...");
                     bail!("Connection has received corrupted header, stopping...")
                 }
 
@@ -60,8 +60,7 @@ async fn handle_connection(request: Request, server_state: ServerState) -> anyho
                     .await?
                     .expect("There should be a chunk here we can use");
                 let message = decode_client_message(&chunk.bytes)?;
-
-                println!("message received!");
+                info!("message received from {addr}: {message:?}");
 
                 let user_rpc_message = UserRPCMessage {
                     message,
@@ -73,7 +72,7 @@ async fn handle_connection(request: Request, server_state: ServerState) -> anyho
                     .await
                     .expect("Error handling user rpc");
             } else if let Err(e) = message_read_result {
-                println!("Incoming messages have stopped, error {e}");
+                warn!("Incoming messages have stopped, error {e}");
                 break;
             }
         }
@@ -85,16 +84,27 @@ async fn handle_connection(request: Request, server_state: ServerState) -> anyho
     let receive_from_others = tokio::spawn(async move {
         while let Some(message) = user_receiver.recv().await {
             if let Err(e) = outgoing.write_all(&message).await {
-                println!("{e}");
+                warn!("{e}");
             }
         }
-        println!("Receiver for user messages into outgoing stream stopped");
+        warn!("Receiver for user messages into outgoing stream stopped");
     });
 
     pin_mut!(broadcast_incoming, receive_from_others);
-    future::select(broadcast_incoming, receive_from_others).await;
+    let race_result = future::select(broadcast_incoming, receive_from_others).await;
+    match race_result {
+        future::Either::Left((join_result, _)) => match join_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => warn!("incoming-task error for {addr}: {e:#}"),
+            Err(e) => warn!("incoming-task panicked for {addr}: {e}"),
+        },
+        future::Either::Right((join_result, _)) => match join_result {
+            Ok(()) => {}
+            Err(e) => warn!("outgoing-task panicked for {addr}: {e}"),
+        },
+    }
 
-    println!("{} disconnected", &addr);
+    info!("{} disconnected", &addr);
     server_state.disconnect_user(addr).await?;
     Ok(())
 }
@@ -120,6 +130,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
     // Create the event loop and TCP listener we'll accept connections on.
     let server_builder =
         web_transport_quinn::ServerBuilder::new().with_addr(SERVER_HOSTING_ADDRESS);
@@ -146,14 +157,19 @@ async fn main() -> anyhow::Result<()> {
         .context("missing private key")?;
 
     let mut server: Server = server_builder.with_certificate(chain, key)?;
-    println!("Listening on: {}", SERVER_HOSTING_ADDRESS);
+    info!("Listening on: {}", SERVER_HOSTING_ADDRESS);
     // spawn lobby actor
     let server_state = ServerState::new();
 
     // Let's spawn the handling of each connection in a separate task.
     let mut connection_set = JoinSet::new();
     while let Some(session) = server.accept().await {
-        connection_set.spawn(handle_connection(session, server_state.clone()));
+        let server_state = server_state.clone();
+        connection_set.spawn(async move {
+            if let Err(e) = handle_connection(session, server_state).await {
+                warn!("Connection error: {e}");
+            }
+        });
     }
 
     Ok(())
