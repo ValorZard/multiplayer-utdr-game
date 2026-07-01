@@ -1,14 +1,11 @@
-use futures::select;
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_channel::oneshot;
-use futures_util::FutureExt;
 use futures_util::{SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
-use rkyv::util::AlignedVec;
 use rpc::{
-    GameInput, HEADER_MESSAGE, RPSGameState, RpcClientMessage, RpcServerMessage,
-    decode_client_message, decode_server_message, encode_client_message,
+    HEADER_MESSAGE, RpcClientMessage, RpcServerMessage, decode_server_message,
+    encode_client_message,
 };
 use std::sync::LazyLock;
 use url::Url;
@@ -135,14 +132,12 @@ pub fn connect_to_webtransport_server_native(
     server_rpc_sender: ServerRpcSender,
     connection_finished_sender: ConnectionFinishedSender,
 ) -> anyhow::Result<()> {
-    use web_transport::quinn::proto::ConnectRequest;
-
     RUNTIME.block_on(async {
         let client_builder = ClientBuilder::new();
         let client: Client = client_builder
             .with_system_roots()
             .expect("trying to build client failed");
-        let request_url = Url::parse(&*server_address).expect("should be valid url");
+        let request_url = Url::parse(&server_address).expect("should be valid url");
         let connection_result = client.connect(request_url).await;
         if let Ok(session) = connection_result {
             log!("Connected to the server");
