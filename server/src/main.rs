@@ -31,6 +31,8 @@ use crate::lobby_db::ServerState;
 use crate::lobby_db::UserRPCMessage;
 use rustls::pki_types::CertificateDer;
 
+#[deny(clippy::unwrap_used, clippy::panic)]
+
 const SERVER_HOSTING_ADDRESS: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 12345);
 
