@@ -49,35 +49,64 @@ async fn send_loop(mut client_rpc_receiver: ClientRpcReceiver, mut send_stream: 
     while let Some(rpc_message) = client_rpc_receiver.next().await {
         log!("sending rpc message {rpc_message:?}");
         let bytes = encode_client_message(&rpc_message).expect("should have message encoded");
-        send_stream.write(&bytes).await.expect("send should work");
+        if let Err(error) = send_stream.write(&bytes).await {
+            log!("send stopped while writing message: {error:?}");
+            break;
+        }
     }
 }
 
+async fn read_exact_bytes(recv_stream: &mut RecvStream, len: usize) -> Option<Vec<u8>> {
+    let mut buffer = Vec::with_capacity(len);
+
+    while buffer.len() < len {
+        let remaining = len - buffer.len();
+        let chunk = match recv_stream.read(remaining).await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => return None,
+            Err(error) => {
+                log!("recv stopped while reading {len} bytes: {error:?}");
+                return None;
+            }
+        };
+
+        if chunk.is_empty() {
+            continue;
+        }
+
+        buffer.extend_from_slice(&chunk);
+    }
+
+    Some(buffer)
+}
+
 async fn recv_loop(server_rpc_sender: ServerRpcSender, mut recv_stream: RecvStream) {
-    while let Ok(Some(header_buf)) = recv_stream.read(HEADER_MESSAGE.len()).await {
-        if *header_buf != HEADER_MESSAGE {
+    while let Some(header_buf) = read_exact_bytes(&mut recv_stream, HEADER_MESSAGE.len()).await {
+        if header_buf.as_slice() != HEADER_MESSAGE {
             log!("Connection has received corrupted header, stopping...");
             break;
         }
 
         // read message size, (currently hardcoded to be size u32)
-        let message_size_buf = recv_stream
-            .read(4)
-            .await
-            .expect("Has message size")
-            .expect("Should have chunk ready for message size");
-        let message_size_buf: Vec<u8> = message_size_buf.into();
+        let Some(message_size_buf) = read_exact_bytes(&mut recv_stream, 4).await else {
+            break;
+        };
         let message_size_buf_slice: [u8; 4] = message_size_buf
+            .as_slice()
             .try_into()
             .expect("Should be able to convert this to a 4 byte array.");
         let message_size: u32 = u32::from_be_bytes(message_size_buf_slice);
 
-        let chunk = recv_stream
-            .read(message_size as usize)
-            .await
-            .expect("There should be a chunk here we can use")
-            .expect("Can unwrap option");
-        let message = decode_server_message(&chunk).expect("Should be able to get message");
+        let Some(chunk) = read_exact_bytes(&mut recv_stream, message_size as usize).await else {
+            break;
+        };
+        let message = match decode_server_message(&chunk) {
+            Ok(message) => message,
+            Err(error) => {
+                log!("Failed to decode server message, stopping: {error:?}");
+                break;
+            }
+        };
 
         println!("Received binary: {:?}", message);
         let _ = server_rpc_sender.unbounded_send(message);
