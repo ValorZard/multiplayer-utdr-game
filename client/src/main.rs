@@ -6,10 +6,11 @@ use include_dir::{Dir, include_dir};
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
 use rpc::{
-    GAME_TIME_STEP, GameInput, GameLogic, LobbyId, LobbyState, MoveGameState, PlayerSide,
+    GAME_TIME_STEP, GameInput, GameLogic, InputSequence, LobbyId, LobbyState, PlayerSide,
     RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, TurnInput, UserId,
     YesOrNo,
 };
+use std::collections::VecDeque;
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 use time::{Duration, OffsetDateTime};
@@ -102,6 +103,61 @@ struct ClientConfig {
     servers: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
+struct PendingMoveInput {
+    input: rpc::MoveInputState,
+    sequence: InputSequence,
+}
+
+#[derive(Clone, Copy)]
+struct TimedRemoteSnapshot {
+    received_at: OffsetDateTime,
+    position: Vec2,
+}
+
+const MAX_PENDING_INPUTS: usize = 256;
+const MAX_REMOTE_SNAPSHOTS: usize = 64;
+const REMOTE_INTERPOLATION_DELAY: Duration = Duration::milliseconds(100);
+
+fn interpolate_remote_position(
+    snapshots: &VecDeque<TimedRemoteSnapshot>,
+    target_time: OffsetDateTime,
+) -> Option<Vec2> {
+    if snapshots.is_empty() {
+        return None;
+    }
+    if snapshots.len() == 1 {
+        return snapshots.front().map(|snapshot| snapshot.position);
+    }
+
+    if let Some(first) = snapshots.front()
+        && target_time <= first.received_at
+    {
+        return Some(first.position);
+    }
+
+    for index in 1..snapshots.len() {
+        let previous = snapshots
+            .get(index - 1)
+            .expect("snapshot index should be in bounds");
+        let next = snapshots
+            .get(index)
+            .expect("snapshot index should be in bounds");
+
+        if target_time <= next.received_at {
+            let span = (next.received_at - previous.received_at).as_seconds_f32();
+            if span <= 0.0 {
+                return Some(next.position);
+            }
+            let alpha = ((target_time - previous.received_at).as_seconds_f32() / span)
+                .clamp(0.0, 1.0);
+            return Some(previous.position.lerp(next.position, alpha));
+        }
+    }
+
+    snapshots.back().map(|snapshot| snapshot.position)
+}
+
 #[kiss3d::main]
 async fn main() {
     let mut window = Window::new("Kiss3d: rectangle").await;
@@ -139,8 +195,10 @@ async fn main() {
     let mut input = rpc::MoveInputState::default();
 
     // game state
-    let mut move_game_state = MoveGameState::new();
     let mut game_logic = GameLogic::new();
+    let mut next_input_sequence: InputSequence = 1;
+    let mut pending_inputs: VecDeque<PendingMoveInput> = VecDeque::new();
+    let mut remote_snapshots: VecDeque<TimedRemoteSnapshot> = VecDeque::new();
 
     // Client config
     let client_config = include_str!("../client_config.toml");
@@ -164,6 +222,10 @@ async fn main() {
         {
             log!("Connection dropped.");
             ui_game_state.reset();
+            pending_inputs.clear();
+            remote_snapshots.clear();
+            next_input_sequence = 1;
+            game_logic.setup_game();
         }
         // immediately pool the receiver even if there isn't a value there.
         while let Some(ref mut server_rpc_receiver) = server_rpc_receiver
@@ -193,6 +255,9 @@ async fn main() {
                             remote_player.set_position(Vec2::ZERO);
                             // remove previous players
                             game_logic.setup_game();
+                            pending_inputs.clear();
+                            remote_snapshots.clear();
+                            next_input_sequence = 1;
                         }
                         RPSGameState::WaitingForLeftInput { right_input } => {
                             ui_game_state.remote_right_input = Some(*right_input);
@@ -220,6 +285,9 @@ async fn main() {
                     ui_game_state.player_side = Some(side);
                     // Ensure local simulation entities exist as soon as we know our side.
                     game_logic.setup_game();
+                    pending_inputs.clear();
+                    remote_snapshots.clear();
+                    next_input_sequence = 1;
                 }
                 RpcServerMessage::LobbyState(state) => {
                     // unless lobby state is finished, we really shouldn't have a win state
@@ -233,7 +301,43 @@ async fn main() {
                     ui_game_state.lobby_state = state;
                 }
                 RpcServerMessage::MoveGameState(game_state) => {
-                    move_game_state = game_state;
+                    if let Some(local_side) = ui_game_state.player_side {
+                        let (local_position, remote_position, acknowledged_sequence) =
+                            match local_side {
+                                PlayerSide::Left => (
+                                    game_state.left_position,
+                                    game_state.right_position,
+                                    game_state.left_last_processed_input,
+                                ),
+                                PlayerSide::Right => (
+                                    game_state.right_position,
+                                    game_state.left_position,
+                                    game_state.right_last_processed_input,
+                                ),
+                            };
+
+                        game_logic.update_position_with_vec(local_side, local_position);
+
+                        while let Some(pending) = pending_inputs.front() {
+                            if pending.sequence <= acknowledged_sequence {
+                                let _ = pending_inputs.pop_front();
+                            } else {
+                                break;
+                            }
+                        }
+
+                        for pending in pending_inputs.iter() {
+                            game_logic.update_position_with_input(local_side, &pending.input);
+                        }
+
+                        remote_snapshots.push_back(TimedRemoteSnapshot {
+                            received_at: current_time,
+                            position: remote_position,
+                        });
+                        while remote_snapshots.len() > MAX_REMOTE_SNAPSHOTS {
+                            let _ = remote_snapshots.pop_front();
+                        }
+                    }
                 }
             }
         }
@@ -284,27 +388,34 @@ async fn main() {
         while game_time_step_timer >= GAME_TIME_STEP {
             game_time_step_timer -= GAME_TIME_STEP;
             if let Some(side) = ui_game_state.player_side {
+                let sequence = next_input_sequence;
+                next_input_sequence = next_input_sequence.wrapping_add(1);
+
+                pending_inputs.push_back(PendingMoveInput { input, sequence });
+                while pending_inputs.len() > MAX_PENDING_INPUTS {
+                    let _ = pending_inputs.pop_front();
+                }
+
                 game_logic.update_position_with_input(side, &input);
-            }
-            if let Some(rpc_sender) = client_rpc_sender.as_ref() {
-                let _ =
-                    rpc_sender.unbounded_send(RpcClientMessage::GameInput(GameInput::Move(input)));
+                if let Some(rpc_sender) = client_rpc_sender.as_ref() {
+                    let _ = rpc_sender.unbounded_send(RpcClientMessage::GameInput(
+                        GameInput::Move { input, sequence },
+                    ));
+                }
             }
         }
 
         // make remote player whatever the other side is
         if let Some(side) = ui_game_state.player_side {
-            match side {
-                PlayerSide::Left => {
-                    game_logic.update_position_with_vec(
-                        PlayerSide::Right,
-                        move_game_state.right_position,
-                    );
-                }
-                PlayerSide::Right => {
-                    game_logic
-                        .update_position_with_vec(PlayerSide::Left, move_game_state.left_position);
-                }
+            let remote_side = match side {
+                PlayerSide::Left => PlayerSide::Right,
+                PlayerSide::Right => PlayerSide::Left,
+            };
+            let target_time = current_time - REMOTE_INTERPOLATION_DELAY;
+            if let Some(interpolated_position) =
+                interpolate_remote_position(&remote_snapshots, target_time)
+            {
+                game_logic.update_position_with_vec(remote_side, interpolated_position);
             }
         }
 
