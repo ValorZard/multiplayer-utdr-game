@@ -34,7 +34,6 @@ pub enum LobbySessionMessage {
     ResetLobby,
 }
 
-#[derive(Debug)]
 struct LobbySession {
     left_side: Option<(UserId, UserSender)>,
     right_side: Option<(UserId, UserSender)>,
@@ -248,7 +247,7 @@ impl LobbySession {
         ))
     }
 
-    fn broadcast_game_state(&self) -> Result<(), LobbyError> {
+    fn broadcast_game_state(&mut self) -> Result<(), LobbyError> {
         let state = self.get_current_game_state();
         let left_side_score = 0;
         let right_side_score = 0;
@@ -257,8 +256,9 @@ impl LobbySession {
             left_side_score,
             right_side_score,
         })?;
+        let move_state = self.current_round.get_move_state();
         self.send_message_to_lobby(&RpcServerMessage::MoveGameState(
-            self.current_round.move_game_state.clone(),
+            move_state,
         ))
     }
 

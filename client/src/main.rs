@@ -5,11 +5,7 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{
-    GAME_TIME_STEP, GameInput, LobbyId, LobbyState, MoveGameState, PlayerSide, RPSGameState,
-    RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, TurnInput, UserId, YesOrNo,
-    update_position,
-};
+use rpc::{GAME_TIME_STEP, GameInput, LobbyId, LobbyState, MoveGameState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, TurnInput, UserId, YesOrNo, GameLogic};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 use time::{Duration, OffsetDateTime};
@@ -140,6 +136,7 @@ async fn main() {
 
     // game state
     let mut move_game_state = MoveGameState::new();
+    let mut game_logic = GameLogic::new();
 
     // Client config
     let client_config = include_str!("../client_config.toml");
@@ -188,6 +185,10 @@ async fn main() {
                             ui_game_state.remote_right_input = None;
                             local_player.set_position(Vec2::ZERO);
                             remote_player.set_position(Vec2::ZERO);
+                            // remove previous players
+                            game_logic.remove_all_players();
+                            game_logic.add_player(PlayerSide::Left).expect("We are initalizing the round here");
+                            game_logic.add_player(PlayerSide::Right).expect("We are initalizing the round here");
                         }
                         RPSGameState::WaitingForLeftInput { right_input } => {
                             ui_game_state.remote_right_input = Some(*right_input);
@@ -213,6 +214,14 @@ async fn main() {
                     ui_game_state.user_id = Some(user_id);
                     ui_game_state.lobby_id = Some(lobby_id);
                     ui_game_state.player_side = Some(side);
+                    // Ensure local simulation entities exist as soon as we know our side.
+                    game_logic.remove_all_players();
+                    game_logic
+                        .add_player(PlayerSide::Left)
+                        .expect("Should initialize left player on lobby init");
+                    game_logic
+                        .add_player(PlayerSide::Right)
+                        .expect("Should initialize right player on lobby init");
                 }
                 RpcServerMessage::LobbyState(state) => {
                     // unless lobby state is finished, we really shouldn't have a win state
@@ -276,10 +285,19 @@ async fn main() {
         game_time_step_timer += time_since_last_frame;
         while game_time_step_timer >= GAME_TIME_STEP {
             game_time_step_timer -= GAME_TIME_STEP;
-            local_player.set_position(update_position(local_player.position(), &input));
+            if let Some(side) = ui_game_state.player_side {
+                match game_logic.update_position(side, &input) {
+                    Ok(new_position) => {
+                        local_player.set_position(new_position);
+                    }
+                    Err(err) => {
+                        log!("Failed to update local position: {err}");
+                    }
+                }
+            }
             if let Some(rpc_sender) = client_rpc_sender.as_ref() {
                 let _ = rpc_sender
-                    .unbounded_send(RpcClientMessage::GameInput(GameInput::Move(input.clone())));
+                    .unbounded_send(RpcClientMessage::GameInput(GameInput::Move(input)));
             }
         }
 
