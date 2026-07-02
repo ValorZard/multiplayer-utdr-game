@@ -236,154 +236,116 @@ impl std::error::Error for LogicError {}
 pub struct GameLogic {
     world: hecs::World,
     physics: PhysicsPipeline,
-    left_player: Option<hecs::Entity>,
-    right_player: Option<hecs::Entity>,
+    left_player: hecs::Entity,
+    right_player: hecs::Entity,
 }
 
 impl GameLogic {
     pub fn new() -> Self {
-        let world = hecs::World::new();
+        // TODO: for now, we hardcode left and right side players and require there to be only one of each
+        let mut world = hecs::World::new();
         let physics = PhysicsPipeline::new();
+        let left_player = world.spawn((PlayerSide::Left, Vec2::ZERO));
+        let right_player = world.spawn((PlayerSide::Left, Vec2::ZERO));
         Self {
             world,
             physics,
-            left_player: None,
-            right_player: None,
+            left_player,
+            right_player,
         }
     }
 
-    pub fn add_player(&mut self, player_side: PlayerSide) -> Result<(), LogicError> {
-        // TODO: for now, we hardcode left and right side players and require there to be only one of each
-        match player_side {
-            PlayerSide::Left => {
-                if let Some(_) = self.left_player {
-                    return Err(LogicError::PlayerAlreadyExists(PlayerSide::Left));
-                } else {
-                    let new_player = self.world.spawn((player_side, Vec2::ZERO));
-                    self.left_player = Some(new_player);
-                }
-            }
-            PlayerSide::Right => {
-                if let Some(_) = self.right_player {
-                    return Err(LogicError::PlayerAlreadyExists(PlayerSide::Right));
-                } else {
-                    let new_player = self.world.spawn((player_side, Vec2::ZERO));
-                    self.right_player = Some(new_player);
-                }
-            }
-        }
-        Ok(())
+    pub fn setup_game(&mut self) {
+        // Easier way to do this is to just totally reset all state
+        *self = Self::new();
     }
 
-    pub fn remove_player(&mut self, player_side: PlayerSide) -> Result<(), LogicError> {
-        match player_side {
-            PlayerSide::Left => {
-                if let Some(entity) = self.left_player {
-                    self.world
-                        .despawn(entity)
-                        .map_err(|_| LogicError::PlayerDoesNotExist(player_side))
-                } else {
-                    Err(LogicError::PlayerDoesNotExist(player_side))
-                }
-            }
-            PlayerSide::Right => {
-                if let Some(entity) = self.right_player {
-                    self.world
-                        .despawn(entity)
-                        .map_err(|_| LogicError::PlayerDoesNotExist(player_side))
-                } else {
-                    Err(LogicError::PlayerDoesNotExist(player_side))
-                }
-            }
-        }
-    }
-
-    pub fn remove_all_players(&mut self) {
-        if let Some(player) = self.left_player {
-            let _ = self.world.despawn(player);
-            self.left_player = None;
-        }
-        if let Some(player) = self.right_player {
-            let _ = self.world.despawn(player);
-            self.right_player = None;
-        }
-    }
-
-    pub fn update_position(
+    pub fn update_position_with_input(
         &mut self,
         player_side: PlayerSide,
         input: &MoveInputState,
-    ) -> Result<Vec2, LogicError> {
+    ) -> Vec2 {
         match player_side {
             PlayerSide::Left => {
-                if let Some(entity) = self.left_player {
-                    let position = self
-                        .world
-                        .query_one_mut::<&mut Vec2>(entity)
-                        .expect("Player should exist here");
-                    *position += (input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA);
-                    Ok(position.clone())
-                } else {
-                    return Err(LogicError::PlayerDoesNotExist(player_side));
-                }
+                let entity = self.left_player;
+                let position = self
+                    .world
+                    .query_one_mut::<&mut Vec2>(entity)
+                    .expect("Player should exist here");
+                *position += (input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA);
+                position.clone()
             }
             PlayerSide::Right => {
-                if let Some(entity) = self.right_player {
-                    let position = self
-                        .world
-                        .query_one_mut::<&mut Vec2>(entity)
-                        .expect("Player should exist here");
-                    *position += (input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA);
-                    Ok(position.clone())
-                } else {
-                    return Err(LogicError::PlayerDoesNotExist(player_side));
-                }
+                let entity = self.right_player;
+                let position = self
+                    .world
+                    .query_one_mut::<&mut Vec2>(entity)
+                    .expect("Player should exist here");
+                *position += (input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA);
+                position.clone()
             }
         }
     }
 
-    pub fn get_position(&mut self, player_side: PlayerSide) -> Result<Vec2, LogicError> {
+    pub fn update_position_with_vec(
+        &mut self,
+        player_side: PlayerSide,
+        new_position: Vec2,
+    ) -> Vec2 {
         match player_side {
             PlayerSide::Left => {
-                if let Some(entity) = self.left_player {
-                    self.world
-                        .query_one_mut::<&Vec2>(entity)
-                        .map_err(|_| LogicError::PlayerDoesNotExist(player_side))
-                        .copied()
-                } else {
-                    Err(LogicError::PlayerDoesNotExist(player_side))
-                }
+                let entity = self.left_player;
+                let position = self
+                    .world
+                    .query_one_mut::<&mut Vec2>(entity)
+                    .expect("Player should exist here");
+                *position = new_position;
+                position.clone()
             }
             PlayerSide::Right => {
-                if let Some(entity) = self.right_player {
-                    self.world
-                        .query_one_mut::<&Vec2>(entity)
-                        .map_err(|_| LogicError::PlayerDoesNotExist(player_side))
-                        .copied()
-                } else {
-                    Err(LogicError::PlayerDoesNotExist(player_side))
-                }
+                let entity = self.right_player;
+                let position = self
+                    .world
+                    .query_one_mut::<&mut Vec2>(entity)
+                    .expect("Player should exist here");
+                *position = new_position;
+                position.clone()
+            }
+        }
+    }
+
+    pub fn get_position(&mut self, player_side: PlayerSide) -> Vec2 {
+        match player_side {
+            PlayerSide::Left => {
+                let entity = self.left_player;
+                let position = self
+                    .world
+                    .query_one_mut::<&mut Vec2>(entity)
+                    .expect("Player should exist here");
+                position.clone()
+            }
+            PlayerSide::Right => {
+                let entity = self.right_player;
+                let position = self
+                    .world
+                    .query_one_mut::<&mut Vec2>(entity)
+                    .expect("Player should exist here");
+                position.clone()
             }
         }
     }
 
     pub fn get_state_to_send_to_client(&mut self) -> MoveGameState {
-        let left_position = if let Some(entity) = self.left_player {
-            self.world
-                .query_one_mut::<&Vec2>(entity)
-                .expect("Left Player should exist")
-                .clone()
-        } else {
-            Vec2::ZERO
-        };
-        let right_position = if let Some(entity) = self.right_player {
-            self.world
-                .query_one_mut::<&Vec2>(entity)
-                .expect("Right Player should exist")
-                .clone()
-        } else {
-            Vec2::ZERO
-        };
+        let left_position = self
+            .world
+            .query_one_mut::<&Vec2>(self.left_player)
+            .expect("Left Player should exist")
+            .clone();
+        let right_position = self
+            .world
+            .query_one_mut::<&Vec2>(self.right_player)
+            .expect("Left Player should exist")
+            .clone();
 
         MoveGameState {
             left_position,
