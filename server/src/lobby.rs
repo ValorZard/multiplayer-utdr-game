@@ -1,6 +1,6 @@
 use crate::rps::{GameError, GameSession};
 use anyhow::anyhow;
-use rpc::{GameInput, LobbyState, PlayerSide, RPSGameState, RPSWinState, UserId};
+use rpc::{GameInput, LobbyState, MoveInputState, PlayerSide, RPSGameState, RPSWinState, TurnInput, UserId};
 use rpc::{RpcServerMessage, encode_server_message};
 use std::sync::mpsc::Receiver;
 use tokio::sync::mpsc::UnboundedSender;
@@ -18,7 +18,8 @@ pub enum LobbySessionMessage {
         UserId,
         oneshot::Sender<Result<(PlayerSide, LobbyState), LobbyError>>,
     ),
-    RPSInput(UserId, GameInput, oneshot::Sender<RPSGameState>),
+    RPSInput(UserId, TurnInput, oneshot::Sender<RPSGameState>),
+    MoveInput(UserId, MoveInputState),
     SendMessageToUser(
         RpcServerMessage,
         UserId,
@@ -152,16 +153,16 @@ impl LobbySession {
         Err(LobbyError::SideNotFound(PlayerSide::Right))
     }
 
-    fn set_left_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {
-        let state = self.current_round.set_left_input(input)?;
+    fn set_left_turn_input(&mut self, input: rpc::TurnInput) -> Result<RPSGameState, GameError> {
+        let state = self.current_round.set_left_turn_input(input)?;
         if let RPSGameState::Win { state, .. } = state.clone() {
             self.winner = Some(state);
         }
         Ok(state)
     }
 
-    fn set_right_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {
-        let state = self.current_round.set_right_input(input)?;
+    fn set_right_turn_input(&mut self, input: rpc::TurnInput) -> Result<RPSGameState, GameError> {
+        let state = self.current_round.set_right_turn_input(input)?;
         if let RPSGameState::Win { state, .. } = state.clone() {
             self.winner = Some(state);
         }
@@ -253,7 +254,8 @@ impl LobbySession {
             state,
             left_side_score,
             right_side_score,
-        })
+        })?;
+        self.send_message_to_lobby(&RpcServerMessage::MoveGameState(self.current_round.move_game_state.clone()))
     }
 
     fn handle_message(&mut self, message: LobbySessionMessage) -> Result<(), LobbyError> {
@@ -282,13 +284,22 @@ impl LobbySession {
                 let player_side = self.get_player_side(player_addr)?;
                 let current_state = match player_side {
                     PlayerSide::Left => self
-                        .set_left_input(input)
+                        .set_left_turn_input(input)
                         .map_err(|e| LobbyError::GameError(e))?,
                     PlayerSide::Right => self
-                        .set_right_input(input)
+                        .set_right_turn_input(input)
                         .map_err(|e| LobbyError::GameError(e))?,
                 };
                 let _ = oneshot.send(current_state);
+            }
+            LobbySessionMessage::MoveInput(player_addr, input) => {
+                let player_side = self.get_player_side(player_addr)?;
+                match player_side {
+                    PlayerSide::Left => self
+                        .current_round.set_left_move_input(input),
+                    PlayerSide::Right => self
+                        .current_round.set_right_move_input(input),
+                }
             }
             LobbySessionMessage::SendMessageToUser(message, addr, oneshot) => {
                 let result = self.send_message_to_user(&message, &addr);
@@ -416,11 +427,16 @@ impl LobbySessionHandle {
         recv.await.expect("Actor task has been killed")
     }
 
-    pub async fn send_rps_input(&self, user_addr: UserId, input: GameInput) -> RPSGameState {
+    pub async fn send_rps_input(&self, user_addr: UserId, input: TurnInput) -> RPSGameState {
         let (send, recv) = oneshot::channel();
         let msg = LobbySessionMessage::RPSInput(user_addr, input, send);
         let _ = self.sender.send(msg).await;
         recv.await.expect("Actor task has been killed")
+    }
+
+    pub async fn send_move_input(&self, user_addr: UserId, input: MoveInputState) {
+        let msg = LobbySessionMessage::MoveInput(user_addr, input);
+        let _ = self.sender.send(msg).await;
     }
 
     pub async fn get_current_lobby_state(&self) -> LobbyState {

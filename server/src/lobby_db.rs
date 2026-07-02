@@ -1,11 +1,8 @@
 use anyhow::{anyhow, bail};
-use rpc::{
-    LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize,
-    UserId, YesOrNo, encode_server_message,
-};
+use rpc::{LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, UserId, YesOrNo, encode_server_message, GameInput};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::lobby::LobbySessionHandle;
@@ -282,21 +279,28 @@ impl ServerStateInner {
                         );
                         info!("Lobby session: {lobby:?}");
 
-                        let current_state = lobby
-                            .send_rps_input(user_rpc_message.send_addr, input)
-                            .await;
-
-                        if let RPSGameState::Win { state, .. } = current_state.clone() {
-                            self.lobby_list.insert(
-                                lobby_id,
-                                LobbyEntry::Finished(FinishedLobbySession {
-                                    lobby_session: lobby,
-                                    left_side_continue: None,
-                                    right_side_continue: None,
-                                }),
-                            );
-                        } else {
-                            self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
+                        match input {
+                            GameInput::Turn(input) => {
+                                let current_state = lobby
+                                    .send_rps_input(user_rpc_message.send_addr, input)
+                                    .await;
+                                if let RPSGameState::Win { state, .. } = current_state.clone() {
+                                    self.lobby_list.insert(
+                                        lobby_id,
+                                        LobbyEntry::Finished(FinishedLobbySession {
+                                            lobby_session: lobby,
+                                            left_side_continue: None,
+                                            right_side_continue: None,
+                                        }),
+                                    );
+                                } else {
+                                    self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
+                                }
+                            }
+                            GameInput::Move(input) => {
+                                lobby.send_move_input(user_rpc_message.send_addr, input).await;
+                                self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
+                            }
                         }
                     }
                     _ => {
