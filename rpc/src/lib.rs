@@ -3,6 +3,7 @@ use rkyv::net::ArchivedSocketAddr;
 use rkyv::{Archive, Deserialize, Serialize, rancor, util::AlignedVec};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -18,7 +19,7 @@ pub enum YesOrNo {
     No,
 }
 
-#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 #[rkyv(
     // This will generate a PartialEq impl between our unarchived
     // and archived types
@@ -67,7 +68,6 @@ pub enum RpcClientMessage {
     ContinueRound(YesOrNo),
     JoinLobby,
     Heartbeat,
-    MoveInput(MoveInputState),
 }
 
 pub type LobbyId = Uuid;
@@ -94,7 +94,14 @@ pub type ScoreSize = u32;
     derive(Debug),
 )]
 pub struct MoveGameState {
-    positions: HashMap<UserId, Vec2>,
+    pub left_position: Vec2,
+    pub right_position: Vec2,
+}
+
+impl MoveGameState {
+    pub fn new() -> Self {
+        Self { left_position: Vec2::ZERO, right_position: Vec2::ZERO }
+    }
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -137,10 +144,23 @@ pub enum LobbyState {
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
-pub enum GameInput {
+pub enum TurnInput {
     Rock,
     Paper,
     Scissors,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum GameInput {
+    Turn(TurnInput),
+    Move(MoveInputState)
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -169,19 +189,28 @@ pub enum RPSGameState {
     // waiting on inputs from both players here
     StartRound,
     WaitingForLeftInput {
-        right_input: GameInput,
+        right_input: TurnInput,
     },
     WaitingForRightInput {
-        left_input: GameInput,
+        left_input: TurnInput,
     },
     Win {
         state: RPSWinState,
-        left_input: GameInput,
-        right_input: GameInput,
+        left_input: TurnInput,
+        right_input: TurnInput,
     },
 }
 
 pub const HEADER_MESSAGE: [u8; 4] = [0, 3, 4, 5];
+
+// deltarune runs on 30 TPS
+pub const GAME_TIME_STEP: Duration = Duration::from_millis(33);
+pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
+pub const PLAYER_SPEED : f32 = 100.;
+
+pub fn update_position(position: Vec2, input: &MoveInputState) -> Vec2 {
+    position + (input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA)
+}
 
 // messages sent from a websocket stream might not be aligned to what rkyv wants
 pub fn decode_client_message(bytes: &[u8]) -> Result<RpcClientMessage, rancor::Error> {

@@ -5,10 +5,7 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{
-    GameInput, LobbyId, LobbyState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage,
-    RpcServerMessage, ScoreSize, UserId, YesOrNo,
-};
+use rpc::{update_position, GameInput, LobbyId, LobbyState, MoveGameState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, TurnInput, UserId, YesOrNo, GAME_TIME_STEP};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 use time::{Duration, OffsetDateTime};
@@ -65,8 +62,8 @@ fn get_connection_receivers(
 struct UiGameState {
     lobby_state: LobbyState,
     lobby_id: Option<LobbyId>,
-    remote_right_input: Option<GameInput>,
-    remote_left_input: Option<GameInput>,
+    remote_right_input: Option<TurnInput>,
+    remote_left_input: Option<TurnInput>,
     remote_right_score: ScoreSize,
     remote_left_score: ScoreSize,
     player_side: Option<PlayerSide>,
@@ -120,7 +117,8 @@ async fn main() {
 
     let mut camera = PanZoomCamera2d::new(Vec2::ZERO, 5.0);
     let mut scene = SceneNode2d::empty();
-    let mut c = scene.add_rectangle(10.0, 10.0).set_color(RED);
+    let mut local_player = scene.add_rectangle(10.0, 10.0).set_color(RED);
+    let mut remote_player = scene.add_rectangle(10.0, 10.0).set_color(BLUE);
 
     // UI state
     let mut ui_game_state = UiGameState::new();
@@ -131,15 +129,13 @@ async fn main() {
     let mut heartbeat_timer = Duration::new(0, 0);
     let max_time_for_heartbeat = Duration::new(1, 0);
     // deltarune runs on 30 TPS
-    let game_time_step = Duration::seconds_f32(1. / 30.);
     let mut game_time_step_timer = Duration::new(0, 0);
 
     // input state
     let mut input = rpc::MoveInputState::default();
 
     // game state
-    let speed = 100.;
-    let game_delta = game_time_step.as_seconds_f32();
+    let mut move_game_state = MoveGameState::new();
 
     // Client config
     let client_config = include_str!("../client_config.toml");
@@ -183,6 +179,8 @@ async fn main() {
                             // reset all game state on Start Round
                             ui_game_state.remote_left_input = None;
                             ui_game_state.remote_right_input = None;
+                            local_player.set_position(Vec2::ZERO);
+                            remote_player.set_position(Vec2::ZERO);
                         }
                         RPSGameState::WaitingForLeftInput { right_input } => {
                             ui_game_state.remote_right_input = Some(*right_input);
@@ -220,8 +218,8 @@ async fn main() {
                     }
                     ui_game_state.lobby_state = state;
                 }
-                RpcServerMessage::MoveGameState(_game_state) => {
-                    todo!()
+                RpcServerMessage::MoveGameState(game_state) => {
+                    move_game_state = game_state;
                 }
             }
         }
@@ -269,10 +267,24 @@ async fn main() {
 
         // run actual game logic if we've hit a tick (drain accumulated frames)
         game_time_step_timer += time_since_last_frame;
-        while game_time_step_timer >= game_time_step {
-            game_time_step_timer -= game_time_step;
-            let new_position = c.position() + (input.as_normalized_vec() * speed * game_delta);
-            c.set_position(new_position);
+        while game_time_step_timer >= GAME_TIME_STEP {
+            game_time_step_timer -= GAME_TIME_STEP;
+            local_player.set_position(update_position(local_player.position(), &input));
+            if let Some(rpc_sender) = client_rpc_sender.as_ref() {
+                let _ = rpc_sender.unbounded_send(RpcClientMessage::GameInput(GameInput::Move(input.clone())));
+            }
+        }
+
+        // make remote player whatever the other side is
+        if let Some(side) = ui_game_state.player_side {
+            match side {
+                PlayerSide::Left => {
+                    remote_player.set_position(move_game_state.right_position);
+                }
+                PlayerSide::Right => {
+                    remote_player.set_position(move_game_state.left_position);
+                }
+            }
         }
 
         // Draw UI
@@ -281,7 +293,7 @@ async fn main() {
                 .default_width(300.0)
                 .show(ctx, |ui| {
                     ui.label(format!("Current Frame Time {}", time_since_last_frame));
-                    ui.label(format!("Current player position {}", c.position()));
+                    ui.label(format!("Current player position {}", local_player.position()));
                     ui.label(format!("{ui_game_state:#?}"));
 
                     ui.separator();
@@ -346,17 +358,17 @@ async fn main() {
                                 if round_start || waiting_on_us {
                                     if ui.button("Rock").clicked() {
                                         let _ = client_rpc_sender.unbounded_send(
-                                            RpcClientMessage::GameInput(GameInput::Rock),
+                                            RpcClientMessage::GameInput(GameInput::Turn(TurnInput::Rock)),
                                         );
                                     }
                                     if ui.button("Paper").clicked() {
                                         let _ = client_rpc_sender.unbounded_send(
-                                            RpcClientMessage::GameInput(GameInput::Paper),
+                                            RpcClientMessage::GameInput(GameInput::Turn(TurnInput::Paper)),
                                         );
                                     }
                                     if ui.button("Scissors").clicked() {
                                         let _ = client_rpc_sender.unbounded_send(
-                                            RpcClientMessage::GameInput(GameInput::Scissors),
+                                            RpcClientMessage::GameInput(GameInput::Turn(TurnInput::Scissors)),
                                         );
                                     }
                                 }

@@ -1,4 +1,4 @@
-use rpc::{GameInput, RPSGameState, RPSWinState};
+use rpc::{TurnInput, MoveGameState, RPSGameState, RPSWinState, update_position};
 
 #[derive(Debug, PartialEq)]
 pub enum GameError {
@@ -34,8 +34,9 @@ impl std::error::Error for GameError {
 
 #[derive(Debug)]
 pub struct GameSession {
-    left_input: Option<rpc::GameInput>,
-    right_input: Option<rpc::GameInput>,
+    left_input: Option<rpc::TurnInput>,
+    right_input: Option<rpc::TurnInput>,
+    pub move_game_state: MoveGameState
 }
 
 impl GameSession {
@@ -43,6 +44,7 @@ impl GameSession {
         Self {
             left_input: None,
             right_input: None,
+            move_game_state: MoveGameState::new()
         }
     }
 
@@ -55,52 +57,52 @@ impl GameSession {
             Some(left_input) => match self.right_input {
                 None => RPSGameState::WaitingForRightInput { left_input },
                 Some(right_input) => match left_input {
-                    GameInput::Rock => match right_input {
-                        GameInput::Rock => RPSGameState::Win {
+                    TurnInput::Rock => match right_input {
+                        TurnInput::Rock => RPSGameState::Win {
                             state: RPSWinState::Tie,
                             left_input,
                             right_input,
                         },
-                        GameInput::Paper => RPSGameState::Win {
+                        TurnInput::Paper => RPSGameState::Win {
                             state: RPSWinState::Right,
                             left_input,
                             right_input,
                         },
-                        GameInput::Scissors => RPSGameState::Win {
+                        TurnInput::Scissors => RPSGameState::Win {
                             state: RPSWinState::Left,
                             left_input,
                             right_input,
                         },
                     },
-                    GameInput::Paper => match right_input {
-                        GameInput::Rock => RPSGameState::Win {
+                    TurnInput::Paper => match right_input {
+                        TurnInput::Rock => RPSGameState::Win {
                             state: RPSWinState::Left,
                             left_input,
                             right_input,
                         },
-                        GameInput::Paper => RPSGameState::Win {
+                        TurnInput::Paper => RPSGameState::Win {
                             state: RPSWinState::Tie,
                             left_input,
                             right_input,
                         },
-                        GameInput::Scissors => RPSGameState::Win {
+                        TurnInput::Scissors => RPSGameState::Win {
                             state: RPSWinState::Right,
                             left_input,
                             right_input,
                         },
                     },
-                    GameInput::Scissors => match right_input {
-                        GameInput::Rock => RPSGameState::Win {
+                    TurnInput::Scissors => match right_input {
+                        TurnInput::Rock => RPSGameState::Win {
                             state: RPSWinState::Right,
                             left_input,
                             right_input,
                         },
-                        GameInput::Paper => RPSGameState::Win {
+                        TurnInput::Paper => RPSGameState::Win {
                             state: RPSWinState::Left,
                             left_input,
                             right_input,
                         },
-                        GameInput::Scissors => RPSGameState::Win {
+                        TurnInput::Scissors => RPSGameState::Win {
                             state: RPSWinState::Tie,
                             left_input,
                             right_input,
@@ -112,7 +114,7 @@ impl GameSession {
     }
 
     // you can only set this once per turn
-    pub fn set_left_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {
+    pub fn set_left_turn_input(&mut self, input: rpc::TurnInput) -> Result<RPSGameState, GameError> {
         if self.left_input.is_none() {
             self.left_input = Some(input);
         }
@@ -120,10 +122,20 @@ impl GameSession {
     }
 
     // you can only set this once per turn
-    pub fn set_right_input(&mut self, input: rpc::GameInput) -> Result<RPSGameState, GameError> {
+    pub fn set_right_turn_input(&mut self, input: rpc::TurnInput) -> Result<RPSGameState, GameError> {
         if self.right_input.is_none() {
             self.right_input = Some(input);
         }
         Ok(self.compute_state())
+    }
+
+    pub fn set_left_move_input(&mut self, input: rpc::MoveInputState) {
+        let old_position = self.move_game_state.left_position;
+        self.move_game_state.left_position = update_position(old_position, &input);
+    }
+
+    pub fn set_right_move_input(&mut self, input: rpc::MoveInputState) {
+        let old_position = self.move_game_state.right_position;
+        self.move_game_state.right_position = update_position(old_position, &input);
     }
 }
