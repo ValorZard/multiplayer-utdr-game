@@ -178,6 +178,9 @@ async fn main() {
                     left_side_score,
                     right_side_score,
                 } => {
+                    if let Some(previous_state) = ui_game_state.current_game_state.as_ref() && *previous_state == state {
+                        continue;
+                    }
                     match &state {
                         RPSGameState::StartRound => {
                             // reset all game state on Start Round
