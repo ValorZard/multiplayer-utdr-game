@@ -100,7 +100,10 @@ pub struct MoveGameState {
 
 impl MoveGameState {
     pub fn new() -> Self {
-        Self { left_position: Vec2::ZERO, right_position: Vec2::ZERO }
+        Self {
+            left_position: Vec2::ZERO,
+            right_position: Vec2::ZERO,
+        }
     }
 }
 
@@ -160,7 +163,7 @@ pub enum TurnInput {
 )]
 pub enum GameInput {
     Turn(TurnInput),
-    Move(MoveInputState)
+    Move(MoveInputState),
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -206,7 +209,7 @@ pub const HEADER_MESSAGE: [u8; 4] = [0, 3, 4, 5];
 // deltarune runs on 30 TPS
 pub const GAME_TIME_STEP: Duration = Duration::from_millis(33);
 pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
-pub const PLAYER_SPEED : f32 = 100.;
+pub const PLAYER_SPEED: f32 = 100.;
 
 pub fn update_position(position: Vec2, input: &MoveInputState) -> Vec2 {
     position + (input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA)
