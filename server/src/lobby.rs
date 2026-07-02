@@ -1,6 +1,8 @@
 use crate::rps::{GameError, GameSession};
 use anyhow::anyhow;
-use rpc::{GameInput, LobbyState, MoveInputState, PlayerSide, RPSGameState, RPSWinState, TurnInput, UserId};
+use rpc::{
+    GameInput, LobbyState, MoveInputState, PlayerSide, RPSGameState, RPSWinState, TurnInput, UserId,
+};
 use rpc::{RpcServerMessage, encode_server_message};
 use std::sync::mpsc::Receiver;
 use tokio::sync::mpsc::UnboundedSender;
@@ -255,7 +257,9 @@ impl LobbySession {
             left_side_score,
             right_side_score,
         })?;
-        self.send_message_to_lobby(&RpcServerMessage::MoveGameState(self.current_round.move_game_state.clone()))
+        self.send_message_to_lobby(&RpcServerMessage::MoveGameState(
+            self.current_round.move_game_state.clone(),
+        ))
     }
 
     fn handle_message(&mut self, message: LobbySessionMessage) -> Result<(), LobbyError> {
@@ -295,10 +299,8 @@ impl LobbySession {
             LobbySessionMessage::MoveInput(player_addr, input) => {
                 let player_side = self.get_player_side(player_addr)?;
                 match player_side {
-                    PlayerSide::Left => self
-                        .current_round.set_left_move_input(input),
-                    PlayerSide::Right => self
-                        .current_round.set_right_move_input(input),
+                    PlayerSide::Left => self.current_round.set_left_move_input(input),
+                    PlayerSide::Right => self.current_round.set_right_move_input(input),
                 }
             }
             LobbySessionMessage::SendMessageToUser(message, addr, oneshot) => {

@@ -1,4 +1,4 @@
-use rpc::{TurnInput, MoveGameState, RPSGameState, RPSWinState, update_position};
+use rpc::{MoveGameState, RPSGameState, RPSWinState, TurnInput, update_position};
 
 #[derive(Debug, PartialEq)]
 pub enum GameError {
@@ -36,7 +36,7 @@ impl std::error::Error for GameError {
 pub struct GameSession {
     left_input: Option<rpc::TurnInput>,
     right_input: Option<rpc::TurnInput>,
-    pub move_game_state: MoveGameState
+    pub move_game_state: MoveGameState,
 }
 
 impl GameSession {
@@ -44,7 +44,7 @@ impl GameSession {
         Self {
             left_input: None,
             right_input: None,
-            move_game_state: MoveGameState::new()
+            move_game_state: MoveGameState::new(),
         }
     }
 
@@ -114,7 +114,10 @@ impl GameSession {
     }
 
     // you can only set this once per turn
-    pub fn set_left_turn_input(&mut self, input: rpc::TurnInput) -> Result<RPSGameState, GameError> {
+    pub fn set_left_turn_input(
+        &mut self,
+        input: rpc::TurnInput,
+    ) -> Result<RPSGameState, GameError> {
         if self.left_input.is_none() {
             self.left_input = Some(input);
         }
@@ -122,7 +125,10 @@ impl GameSession {
     }
 
     // you can only set this once per turn
-    pub fn set_right_turn_input(&mut self, input: rpc::TurnInput) -> Result<RPSGameState, GameError> {
+    pub fn set_right_turn_input(
+        &mut self,
+        input: rpc::TurnInput,
+    ) -> Result<RPSGameState, GameError> {
         if self.right_input.is_none() {
             self.right_input = Some(input);
         }

@@ -5,7 +5,11 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{update_position, GameInput, LobbyId, LobbyState, MoveGameState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, TurnInput, UserId, YesOrNo, GAME_TIME_STEP};
+use rpc::{
+    GAME_TIME_STEP, GameInput, LobbyId, LobbyState, MoveGameState, PlayerSide, RPSGameState,
+    RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, TurnInput, UserId, YesOrNo,
+    update_position,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 use time::{Duration, OffsetDateTime};
@@ -271,7 +275,8 @@ async fn main() {
             game_time_step_timer -= GAME_TIME_STEP;
             local_player.set_position(update_position(local_player.position(), &input));
             if let Some(rpc_sender) = client_rpc_sender.as_ref() {
-                let _ = rpc_sender.unbounded_send(RpcClientMessage::GameInput(GameInput::Move(input.clone())));
+                let _ = rpc_sender
+                    .unbounded_send(RpcClientMessage::GameInput(GameInput::Move(input.clone())));
             }
         }
 
@@ -293,7 +298,10 @@ async fn main() {
                 .default_width(300.0)
                 .show(ctx, |ui| {
                     ui.label(format!("Current Frame Time {}", time_since_last_frame));
-                    ui.label(format!("Current player position {}", local_player.position()));
+                    ui.label(format!(
+                        "Current player position {}",
+                        local_player.position()
+                    ));
                     ui.label(format!("{ui_game_state:#?}"));
 
                     ui.separator();
@@ -358,17 +366,23 @@ async fn main() {
                                 if round_start || waiting_on_us {
                                     if ui.button("Rock").clicked() {
                                         let _ = client_rpc_sender.unbounded_send(
-                                            RpcClientMessage::GameInput(GameInput::Turn(TurnInput::Rock)),
+                                            RpcClientMessage::GameInput(GameInput::Turn(
+                                                TurnInput::Rock,
+                                            )),
                                         );
                                     }
                                     if ui.button("Paper").clicked() {
                                         let _ = client_rpc_sender.unbounded_send(
-                                            RpcClientMessage::GameInput(GameInput::Turn(TurnInput::Paper)),
+                                            RpcClientMessage::GameInput(GameInput::Turn(
+                                                TurnInput::Paper,
+                                            )),
                                         );
                                     }
                                     if ui.button("Scissors").clicked() {
                                         let _ = client_rpc_sender.unbounded_send(
-                                            RpcClientMessage::GameInput(GameInput::Turn(TurnInput::Scissors)),
+                                            RpcClientMessage::GameInput(GameInput::Turn(
+                                                TurnInput::Scissors,
+                                            )),
                                         );
                                     }
                                 }

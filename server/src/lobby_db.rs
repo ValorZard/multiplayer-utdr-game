@@ -1,5 +1,8 @@
 use anyhow::{anyhow, bail};
-use rpc::{LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, UserId, YesOrNo, encode_server_message, GameInput};
+use rpc::{
+    GameInput, LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage,
+    ScoreSize, UserId, YesOrNo, encode_server_message,
+};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -298,7 +301,9 @@ impl ServerStateInner {
                                 }
                             }
                             GameInput::Move(input) => {
-                                lobby.send_move_input(user_rpc_message.send_addr, input).await;
+                                lobby
+                                    .send_move_input(user_rpc_message.send_addr, input)
+                                    .await;
                                 self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
                             }
                         }
