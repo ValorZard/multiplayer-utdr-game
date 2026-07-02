@@ -21,6 +21,8 @@ web-transport = {workspace = true}
 url = "2.5.8"
 toml = "1.1.2"
 serde = { version = "1.0.228", features = ["derive"] }
+rapier2d = {workspace = true}
+hecs = {workspace = true}
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = {workspace = true}
