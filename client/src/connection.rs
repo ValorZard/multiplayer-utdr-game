@@ -1,6 +1,6 @@
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_channel::oneshot;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{FutureExt, SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use rpc::{
