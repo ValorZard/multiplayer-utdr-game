@@ -1,7 +1,8 @@
 use crate::rps::{GameError, GameSession};
 use anyhow::anyhow;
 use rpc::{
-    GameInput, LobbyState, MoveInputState, PlayerSide, RPSGameState, RPSWinState, TurnInput, UserId,
+    GameInput, InputSequence, LobbyState, MoveInputState, PlayerSide, RPSGameState, RPSWinState,
+    TurnInput, UserId,
 };
 use rpc::{RpcServerMessage, encode_server_message};
 use std::sync::mpsc::Receiver;
@@ -21,7 +22,7 @@ pub enum LobbySessionMessage {
         oneshot::Sender<Result<(PlayerSide, LobbyState), LobbyError>>,
     ),
     RPSInput(UserId, TurnInput, oneshot::Sender<RPSGameState>),
-    MoveInput(UserId, MoveInputState),
+    MoveInput(UserId, MoveInputState, InputSequence),
     SendMessageToUser(
         RpcServerMessage,
         UserId,
@@ -294,11 +295,13 @@ impl LobbySession {
                 };
                 let _ = oneshot.send(current_state);
             }
-            LobbySessionMessage::MoveInput(player_addr, input) => {
+            LobbySessionMessage::MoveInput(player_addr, input, sequence) => {
                 let player_side = self.get_player_side(player_addr)?;
                 match player_side {
-                    PlayerSide::Left => self.current_round.set_left_move_input(input),
-                    PlayerSide::Right => self.current_round.set_right_move_input(input),
+                    PlayerSide::Left => self.current_round.set_left_move_input(input, sequence),
+                    PlayerSide::Right => {
+                        self.current_round.set_right_move_input(input, sequence)
+                    }
                 }
             }
             LobbySessionMessage::SendMessageToUser(message, addr, oneshot) => {
@@ -434,8 +437,13 @@ impl LobbySessionHandle {
         recv.await.expect("Actor task has been killed")
     }
 
-    pub async fn send_move_input(&self, user_addr: UserId, input: MoveInputState) {
-        let msg = LobbySessionMessage::MoveInput(user_addr, input);
+    pub async fn send_move_input(
+        &self,
+        user_addr: UserId,
+        input: MoveInputState,
+        sequence: InputSequence,
+    ) {
+        let msg = LobbySessionMessage::MoveInput(user_addr, input, sequence);
         let _ = self.sender.send(msg).await;
     }
 

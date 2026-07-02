@@ -300,10 +300,10 @@ impl ServerStateInner {
                                     self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
                                 }
                             }
-                            GameInput::Move(input) => {
-                                lobby
-                                    .send_move_input(user_rpc_message.send_addr, input)
-                                    .await;
+                                GameInput::Move { input, sequence } => {
+                                    lobby
+                                        .send_move_input(user_rpc_message.send_addr, input, sequence)
+                                        .await;
                                 self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
                             }
                         }

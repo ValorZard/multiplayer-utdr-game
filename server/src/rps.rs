@@ -1,4 +1,6 @@
-use rpc::{GameLogic, MoveGameState, PlayerSide, RPSGameState, RPSWinState, TurnInput};
+use rpc::{
+    GameLogic, InputSequence, MoveGameState, PlayerSide, RPSGameState, RPSWinState, TurnInput,
+};
 
 #[derive(Debug, PartialEq)]
 pub enum GameError {
@@ -36,6 +38,8 @@ pub struct GameSession {
     left_input: Option<rpc::TurnInput>,
     right_input: Option<rpc::TurnInput>,
     game_logic: GameLogic,
+    left_last_processed_input: InputSequence,
+    right_last_processed_input: InputSequence,
 }
 
 impl GameSession {
@@ -44,6 +48,8 @@ impl GameSession {
             left_input: None,
             right_input: None,
             game_logic: GameLogic::new(),
+            left_last_processed_input: 0,
+            right_last_processed_input: 0,
         }
     }
 
@@ -134,17 +140,22 @@ impl GameSession {
         Ok(self.compute_state())
     }
 
-    pub fn set_left_move_input(&mut self, input: rpc::MoveInputState) {
+    pub fn set_left_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
         self.game_logic
             .update_position_with_input(PlayerSide::Left, &input);
+        self.left_last_processed_input = sequence;
     }
 
-    pub fn set_right_move_input(&mut self, input: rpc::MoveInputState) {
+    pub fn set_right_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
         self.game_logic
             .update_position_with_input(PlayerSide::Right, &input);
+        self.right_last_processed_input = sequence;
     }
 
     pub fn get_move_state(&mut self) -> MoveGameState {
-        self.game_logic.get_state_to_send_to_client()
+        let mut state = self.game_logic.get_state_to_send_to_client();
+        state.left_last_processed_input = self.left_last_processed_input;
+        state.right_last_processed_input = self.right_last_processed_input;
+        state
     }
 }

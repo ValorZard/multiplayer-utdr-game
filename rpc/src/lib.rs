@@ -89,6 +89,7 @@ pub enum PlayerSide {
 }
 
 pub type ScoreSize = u32;
+pub type InputSequence = u32;
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
@@ -98,6 +99,8 @@ pub type ScoreSize = u32;
 pub struct MoveGameState {
     pub left_position: Vec2,
     pub right_position: Vec2,
+    pub left_last_processed_input: InputSequence,
+    pub right_last_processed_input: InputSequence,
 }
 
 impl MoveGameState {
@@ -105,6 +108,8 @@ impl MoveGameState {
         Self {
             left_position: Vec2::ZERO,
             right_position: Vec2::ZERO,
+            left_last_processed_input: 0,
+            right_last_processed_input: 0,
         }
     }
 }
@@ -165,7 +170,10 @@ pub enum TurnInput {
 )]
 pub enum GameInput {
     Turn(TurnInput),
-    Move(MoveInputState),
+    Move {
+        input: MoveInputState,
+        sequence: InputSequence,
+    },
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -350,6 +358,8 @@ impl GameLogic {
         MoveGameState {
             left_position,
             right_position,
+            left_last_processed_input: 0,
+            right_last_processed_input: 0,
         }
     }
 }
