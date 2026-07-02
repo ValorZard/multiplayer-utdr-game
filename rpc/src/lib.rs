@@ -1,11 +1,11 @@
 use glam::Vec2;
+use hecs::Entity;
+use rapier2d::prelude::PhysicsPipeline;
 use rkyv::net::ArchivedSocketAddr;
 use rkyv::{Archive, Deserialize, Serialize, rancor, util::AlignedVec};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
-use hecs::Entity;
-use rapier2d::prelude::PhysicsPipeline;
 use uuid::Uuid;
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -215,7 +215,7 @@ pub const PLAYER_SPEED: f32 = 100.;
 #[derive(Debug, PartialEq)]
 pub enum LogicError {
     PlayerAlreadyExists(PlayerSide),
-    PlayerDoesNotExist(PlayerSide)
+    PlayerDoesNotExist(PlayerSide),
 }
 
 impl std::fmt::Display for LogicError {
@@ -244,7 +244,12 @@ impl GameLogic {
     pub fn new() -> Self {
         let world = hecs::World::new();
         let physics = PhysicsPipeline::new();
-        Self { world, physics, left_player: None, right_player: None }
+        Self {
+            world,
+            physics,
+            left_player: None,
+            right_player: None,
+        }
     }
 
     pub fn add_player(&mut self, player_side: PlayerSide) -> Result<(), LogicError> {
@@ -274,14 +279,18 @@ impl GameLogic {
         match player_side {
             PlayerSide::Left => {
                 if let Some(entity) = self.left_player {
-                    self.world.despawn(entity).map_err(|_| LogicError::PlayerDoesNotExist(player_side))
+                    self.world
+                        .despawn(entity)
+                        .map_err(|_| LogicError::PlayerDoesNotExist(player_side))
                 } else {
                     Err(LogicError::PlayerDoesNotExist(player_side))
                 }
             }
             PlayerSide::Right => {
                 if let Some(entity) = self.right_player {
-                    self.world.despawn(entity).map_err(|_| LogicError::PlayerDoesNotExist(player_side))
+                    self.world
+                        .despawn(entity)
+                        .map_err(|_| LogicError::PlayerDoesNotExist(player_side))
                 } else {
                     Err(LogicError::PlayerDoesNotExist(player_side))
                 }
@@ -300,11 +309,18 @@ impl GameLogic {
         }
     }
 
-    pub fn update_position(&mut self, player_side: PlayerSide, input: &MoveInputState) -> Result<Vec2, LogicError> {
+    pub fn update_position(
+        &mut self,
+        player_side: PlayerSide,
+        input: &MoveInputState,
+    ) -> Result<Vec2, LogicError> {
         match player_side {
             PlayerSide::Left => {
                 if let Some(entity) = self.left_player {
-                    let position = self.world.query_one_mut::<&mut Vec2>(entity).expect("Player should exist here");
+                    let position = self
+                        .world
+                        .query_one_mut::<&mut Vec2>(entity)
+                        .expect("Player should exist here");
                     *position += (input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA);
                     Ok(position.clone())
                 } else {
@@ -313,7 +329,10 @@ impl GameLogic {
             }
             PlayerSide::Right => {
                 if let Some(entity) = self.right_player {
-                    let position = self.world.query_one_mut::<&mut Vec2>(entity).expect("Player should exist here");
+                    let position = self
+                        .world
+                        .query_one_mut::<&mut Vec2>(entity)
+                        .expect("Player should exist here");
                     *position += (input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA);
                     Ok(position.clone())
                 } else {
@@ -327,14 +346,20 @@ impl GameLogic {
         match player_side {
             PlayerSide::Left => {
                 if let Some(entity) = self.left_player {
-                    self.world.query_one_mut::<&Vec2>(entity).map_err(|_| LogicError::PlayerDoesNotExist(player_side)).copied()
+                    self.world
+                        .query_one_mut::<&Vec2>(entity)
+                        .map_err(|_| LogicError::PlayerDoesNotExist(player_side))
+                        .copied()
                 } else {
                     Err(LogicError::PlayerDoesNotExist(player_side))
                 }
             }
             PlayerSide::Right => {
                 if let Some(entity) = self.right_player {
-                    self.world.query_one_mut::<&Vec2>(entity).map_err(|_| LogicError::PlayerDoesNotExist(player_side)).copied()
+                    self.world
+                        .query_one_mut::<&Vec2>(entity)
+                        .map_err(|_| LogicError::PlayerDoesNotExist(player_side))
+                        .copied()
                 } else {
                     Err(LogicError::PlayerDoesNotExist(player_side))
                 }
@@ -343,13 +368,19 @@ impl GameLogic {
     }
 
     pub fn get_state_to_send_to_client(&mut self) -> MoveGameState {
-        let left_position =  if let Some(entity) = self.left_player {
-            self.world.query_one_mut::<&Vec2>(entity).expect("Left Player should exist").clone()
+        let left_position = if let Some(entity) = self.left_player {
+            self.world
+                .query_one_mut::<&Vec2>(entity)
+                .expect("Left Player should exist")
+                .clone()
         } else {
             Vec2::ZERO
         };
-        let right_position =  if let Some(entity) = self.right_player {
-            self.world.query_one_mut::<&Vec2>(entity).expect("Right Player should exist").clone()
+        let right_position = if let Some(entity) = self.right_player {
+            self.world
+                .query_one_mut::<&Vec2>(entity)
+                .expect("Right Player should exist")
+                .clone()
         } else {
             Vec2::ZERO
         };
