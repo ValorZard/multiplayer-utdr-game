@@ -1,4 +1,4 @@
-use rpc::{MoveGameState, RPSGameState, RPSWinState, TurnInput, GameLogic, PlayerSide};
+use rpc::{GameLogic, MoveGameState, PlayerSide, RPSGameState, RPSWinState, TurnInput};
 
 #[derive(Debug, PartialEq)]
 pub enum GameError {
@@ -41,8 +41,12 @@ pub struct GameSession {
 impl GameSession {
     pub fn new() -> Self {
         let mut game_logic = GameLogic::new();
-        game_logic.add_player(PlayerSide::Left).expect("We only initalize game logic once here server side");
-        game_logic.add_player(PlayerSide::Right).expect("We only initalize game logic once here server side");
+        game_logic
+            .add_player(PlayerSide::Left)
+            .expect("We only initalize game logic once here server side");
+        game_logic
+            .add_player(PlayerSide::Right)
+            .expect("We only initalize game logic once here server side");
         Self {
             left_input: None,
             right_input: None,
@@ -138,11 +142,15 @@ impl GameSession {
     }
 
     pub fn set_left_move_input(&mut self, input: rpc::MoveInputState) {
-        self.game_logic.update_position(PlayerSide::Left, &input).expect("Left Player should exist");
+        self.game_logic
+            .update_position(PlayerSide::Left, &input)
+            .expect("Left Player should exist");
     }
 
     pub fn set_right_move_input(&mut self, input: rpc::MoveInputState) {
-        self.game_logic.update_position(PlayerSide::Right, &input).expect("Left Player should exist");
+        self.game_logic
+            .update_position(PlayerSide::Right, &input)
+            .expect("Left Player should exist");
     }
 
     pub fn get_move_state(&mut self) -> MoveGameState {

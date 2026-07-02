@@ -5,7 +5,11 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{GAME_TIME_STEP, GameInput, LobbyId, LobbyState, MoveGameState, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, TurnInput, UserId, YesOrNo, GameLogic};
+use rpc::{
+    GAME_TIME_STEP, GameInput, GameLogic, LobbyId, LobbyState, MoveGameState, PlayerSide,
+    RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, TurnInput, UserId,
+    YesOrNo,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 use time::{Duration, OffsetDateTime};
@@ -175,7 +179,9 @@ async fn main() {
                     left_side_score,
                     right_side_score,
                 } => {
-                    if let Some(previous_state) = ui_game_state.current_game_state.as_ref() && *previous_state == state {
+                    if let Some(previous_state) = ui_game_state.current_game_state.as_ref()
+                        && *previous_state == state
+                    {
                         continue;
                     }
                     match &state {
@@ -187,8 +193,12 @@ async fn main() {
                             remote_player.set_position(Vec2::ZERO);
                             // remove previous players
                             game_logic.remove_all_players();
-                            game_logic.add_player(PlayerSide::Left).expect("We are initalizing the round here");
-                            game_logic.add_player(PlayerSide::Right).expect("We are initalizing the round here");
+                            game_logic
+                                .add_player(PlayerSide::Left)
+                                .expect("We are initalizing the round here");
+                            game_logic
+                                .add_player(PlayerSide::Right)
+                                .expect("We are initalizing the round here");
                         }
                         RPSGameState::WaitingForLeftInput { right_input } => {
                             ui_game_state.remote_right_input = Some(*right_input);
@@ -296,8 +306,8 @@ async fn main() {
                 }
             }
             if let Some(rpc_sender) = client_rpc_sender.as_ref() {
-                let _ = rpc_sender
-                    .unbounded_send(RpcClientMessage::GameInput(GameInput::Move(input)));
+                let _ =
+                    rpc_sender.unbounded_send(RpcClientMessage::GameInput(GameInput::Move(input)));
             }
         }
 

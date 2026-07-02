@@ -257,9 +257,7 @@ impl LobbySession {
             right_side_score,
         })?;
         let move_state = self.current_round.get_move_state();
-        self.send_message_to_lobby(&RpcServerMessage::MoveGameState(
-            move_state,
-        ))
+        self.send_message_to_lobby(&RpcServerMessage::MoveGameState(move_state))
     }
 
     fn handle_message(&mut self, message: LobbySessionMessage) -> Result<(), LobbyError> {
