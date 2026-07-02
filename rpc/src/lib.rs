@@ -65,11 +65,39 @@ impl MoveInputState {
     derive(Debug),
 )]
 pub enum RpcClientMessage {
+    Reliable(ReliableRpcClientMessage),
+    Unreliable(UnreliableRpcClientMessage),
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum ReliableRpcClientMessage {
     Text(String),
-    GameInput(GameInput),
+    TurnInput(TurnInput),
     ContinueRound(YesOrNo),
     JoinLobby,
     Heartbeat,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum UnreliableRpcClientMessage {
+    MoveInput {
+        input: MoveInputState,
+        sequence: InputSequence,
+    },
 }
 
 pub type LobbyId = Uuid;
@@ -120,15 +148,33 @@ impl MoveGameState {
     derive(Debug),
 )]
 pub enum RpcServerMessage {
+    Reliable(ReliableRpcServerMessage),
+    Unreliable(UnreliableRpcServerMessage),
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum ReliableRpcServerMessage {
     GameState {
         state: RPSGameState,
         left_side_score: ScoreSize,
         right_side_score: ScoreSize,
     },
-    MoveGameState(MoveGameState),
     LobbyInit(PlayerSide, UserId, LobbyId),
     LobbyState(LobbyState),
     Text(String),
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum UnreliableRpcServerMessage {
+    MoveGameState(MoveGameState),
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]
@@ -158,22 +204,6 @@ pub enum TurnInput {
     Rock,
     Paper,
     Scissors,
-}
-
-#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
-#[rkyv(
-    // This will generate a PartialEq impl between our unarchived
-    // and archived types
-    compare(PartialEq),
-    // Derives can be passed through to the generated type:
-    derive(Debug),
-)]
-pub enum GameInput {
-    Turn(TurnInput),
-    Move {
-        input: MoveInputState,
-        sequence: InputSequence,
-    },
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]

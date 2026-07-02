@@ -1,11 +1,12 @@
 use anyhow::{anyhow, bail};
 use rpc::{
-    GameInput, LobbyId, PlayerSide, RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage,
-    ScoreSize, UserId, YesOrNo, encode_server_message,
+    LobbyId, PlayerSide, RPSGameState, RPSWinState, ReliableRpcClientMessage,
+    ReliableRpcServerMessage, RpcClientMessage, RpcServerMessage, ScoreSize,
+    UnreliableRpcClientMessage, UserId, YesOrNo,
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::lobby::LobbySessionHandle;
@@ -139,7 +140,9 @@ impl ServerStateInner {
         }
 
         // send our lobby id first
-        let lobby_init = RpcServerMessage::LobbyInit(player_side, addr, lobby_id);
+        let lobby_init = RpcServerMessage::Reliable(ReliableRpcServerMessage::LobbyInit(
+            player_side, addr, lobby_id,
+        ));
         let lobby_session = self
             .lobby_list
             .get(&lobby_id)
@@ -162,7 +165,9 @@ impl ServerStateInner {
 
         if let Some(lobby_id) = user_data.lobby_id {
             // removed player lobby is now empty
-            let message = encode_server_message(&RpcServerMessage::LobbyState(LobbyState::Empty))?;
+            let message = RpcServerMessage::Reliable(ReliableRpcServerMessage::LobbyState(
+                LobbyState::Empty,
+            ));
             // this can fail if the player totally disconnected
             let _ = user_data.sender.send(message);
             user_data.lobby_id = None;
@@ -242,8 +247,10 @@ impl ServerStateInner {
             user.lobby_id = None;
             user.player_side = None;
             let leaving_message =
-                encode_server_message(&RpcServerMessage::LobbyState(LobbyState::Empty))?;
-            user.sender.send(leaving_message)?;
+                RpcServerMessage::Reliable(ReliableRpcServerMessage::LobbyState(LobbyState::Empty));
+            user.sender
+                .send(leaving_message)
+                .map_err(|_| anyhow!("Failed to send leaving message to user {addr}"))?;
             Ok(())
         } else {
             bail!("User {addr} is not actually connected")
@@ -257,7 +264,7 @@ impl ServerStateInner {
             .ok_or_else(|| anyhow!("user not found"))?;
 
         let lobby_id = user.lobby_id;
-        info!(
+        debug!(
             "handle_user_rpc: addr={} lobby_id={:?} message={:?}",
             user_rpc_message.send_addr, lobby_id, user_rpc_message.message
         );
@@ -266,50 +273,49 @@ impl ServerStateInner {
         {
             match lobby_entry {
                 LobbyEntry::Waiting(lobby) => {
-                    // ignore most messages while waiting
-                    info!(
-                        "lobby {lobby_id}: waiting; ignoring message from {}",
-                        user_rpc_message.send_addr
-                    );
+                    // Ignore high-frequency movement/heartbeat messages while waiting.
                     self.lobby_list.insert(lobby_id, LobbyEntry::Waiting(lobby));
                 }
 
                 LobbyEntry::Running(mut lobby) => match user_rpc_message.message {
-                    RpcClientMessage::GameInput(input) => {
+                    RpcClientMessage::Reliable(ReliableRpcClientMessage::TurnInput(input)) => {
                         info!(
                             "Lobby input: {input:?} sent from {:?}",
                             user_rpc_message.send_addr
                         );
                         info!("Lobby session: {lobby:?}");
 
-                        match input {
-                            GameInput::Turn(input) => {
-                                let current_state = lobby
-                                    .send_rps_input(user_rpc_message.send_addr, input)
-                                    .await;
-                                if let RPSGameState::Win { state, .. } = current_state.clone() {
-                                    self.lobby_list.insert(
-                                        lobby_id,
-                                        LobbyEntry::Finished(FinishedLobbySession {
-                                            lobby_session: lobby,
-                                            left_side_continue: None,
-                                            right_side_continue: None,
-                                        }),
-                                    );
-                                } else {
-                                    self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
-                                }
-                            }
-                                GameInput::Move { input, sequence } => {
-                                    lobby
-                                        .send_move_input(user_rpc_message.send_addr, input, sequence)
-                                        .await;
-                                self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
-                            }
+                        let current_state = lobby
+                            .send_rps_input(user_rpc_message.send_addr, input)
+                            .await;
+                        if let RPSGameState::Win { state, .. } = current_state.clone() {
+                            self.lobby_list.insert(
+                                lobby_id,
+                                LobbyEntry::Finished(FinishedLobbySession {
+                                    lobby_session: lobby,
+                                    left_side_continue: None,
+                                    right_side_continue: None,
+                                }),
+                            );
+                        } else {
+                            self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
                         }
                     }
+                    RpcClientMessage::Unreliable(UnreliableRpcClientMessage::MoveInput {
+                        input,
+                        sequence,
+                    }) => {
+                        lobby
+                            .send_move_input(user_rpc_message.send_addr, input, sequence)
+                            .await;
+                        self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
+                    }
+                    RpcClientMessage::Reliable(ReliableRpcClientMessage::Heartbeat) => {
+                        // heartbeat is expected high-frequency noise; ignore in running state
+                        self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
+                    }
                     _ => {
-                        info!(
+                        debug!(
                             "lobby {lobby_id}: running; non-game input from {} ignored",
                             user_rpc_message.send_addr
                         );
@@ -319,7 +325,7 @@ impl ServerStateInner {
 
                 LobbyEntry::Finished(mut finished) => {
                     match user_rpc_message.message {
-                        RpcClientMessage::ContinueRound(vote) => {
+                        RpcClientMessage::Reliable(ReliableRpcClientMessage::ContinueRound(vote)) => {
                             let side = finished
                                 .lobby_session
                                 .get_player_side(user_rpc_message.send_addr)
@@ -422,7 +428,10 @@ impl ServerStateInner {
                 }
             }
         } else {
-            if user_rpc_message.message == RpcClientMessage::JoinLobby {
+            if matches!(
+                user_rpc_message.message,
+                RpcClientMessage::Reliable(ReliableRpcClientMessage::JoinLobby)
+            ) {
                 info!(
                     "addr {} has no lobby yet; processing JoinLobby",
                     user_rpc_message.send_addr
@@ -430,7 +439,7 @@ impl ServerStateInner {
                 self.put_connected_user_in_lobby(user_rpc_message.send_addr)
                     .await?;
             } else {
-                info!(
+                debug!(
                     "addr {} has no lobby and sent non-JoinLobby message: {:?}",
                     user_rpc_message.send_addr, user_rpc_message.message
                 );
