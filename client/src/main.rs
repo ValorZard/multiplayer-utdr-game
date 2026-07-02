@@ -192,13 +192,7 @@ async fn main() {
                             local_player.set_position(Vec2::ZERO);
                             remote_player.set_position(Vec2::ZERO);
                             // remove previous players
-                            game_logic.remove_all_players();
-                            game_logic
-                                .add_player(PlayerSide::Left)
-                                .expect("We are initalizing the round here");
-                            game_logic
-                                .add_player(PlayerSide::Right)
-                                .expect("We are initalizing the round here");
+                            game_logic.setup_game();
                         }
                         RPSGameState::WaitingForLeftInput { right_input } => {
                             ui_game_state.remote_right_input = Some(*right_input);
@@ -225,13 +219,7 @@ async fn main() {
                     ui_game_state.lobby_id = Some(lobby_id);
                     ui_game_state.player_side = Some(side);
                     // Ensure local simulation entities exist as soon as we know our side.
-                    game_logic.remove_all_players();
-                    game_logic
-                        .add_player(PlayerSide::Left)
-                        .expect("Should initialize left player on lobby init");
-                    game_logic
-                        .add_player(PlayerSide::Right)
-                        .expect("Should initialize right player on lobby init");
+                    game_logic.setup_game();
                 }
                 RpcServerMessage::LobbyState(state) => {
                     // unless lobby state is finished, we really shouldn't have a win state
@@ -296,14 +284,7 @@ async fn main() {
         while game_time_step_timer >= GAME_TIME_STEP {
             game_time_step_timer -= GAME_TIME_STEP;
             if let Some(side) = ui_game_state.player_side {
-                match game_logic.update_position(side, &input) {
-                    Ok(new_position) => {
-                        local_player.set_position(new_position);
-                    }
-                    Err(err) => {
-                        log!("Failed to update local position: {err}");
-                    }
-                }
+                game_logic.update_position_with_input(side, &input);
             }
             if let Some(rpc_sender) = client_rpc_sender.as_ref() {
                 let _ =
@@ -315,11 +296,31 @@ async fn main() {
         if let Some(side) = ui_game_state.player_side {
             match side {
                 PlayerSide::Left => {
-                    remote_player.set_position(move_game_state.right_position);
+                    game_logic.update_position_with_vec(
+                        PlayerSide::Right,
+                        move_game_state.right_position,
+                    );
                 }
                 PlayerSide::Right => {
-                    remote_player.set_position(move_game_state.left_position);
+                    game_logic
+                        .update_position_with_vec(PlayerSide::Left, move_game_state.left_position);
                 }
+            }
+        }
+
+        let render_state = game_logic.get_state_to_send_to_client();
+        match ui_game_state.player_side {
+            Some(PlayerSide::Left) => {
+                local_player.set_position(render_state.left_position);
+                remote_player.set_position(render_state.right_position);
+            }
+            Some(PlayerSide::Right) => {
+                local_player.set_position(render_state.right_position);
+                remote_player.set_position(render_state.left_position);
+            }
+            None => {
+                local_player.set_position(Vec2::ZERO);
+                remote_player.set_position(Vec2::ZERO);
             }
         }
 
