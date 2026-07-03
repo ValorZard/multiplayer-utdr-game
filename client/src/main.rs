@@ -1,5 +1,6 @@
 use crate::connection::{
-    ConnectionFinishedReceiver, ReliableClientRpcSender, ReliableServerRpcReceiver, UnreliableClientRpcSender, UnreliableServerRpcReceiver,
+    ConnectionFinishedReceiver, ReliableClientRpcSender, ReliableServerRpcReceiver,
+    UnreliableClientRpcSender, UnreliableServerRpcReceiver,
 };
 use futures_channel::oneshot;
 use futures_util::{FutureExt, StreamExt};

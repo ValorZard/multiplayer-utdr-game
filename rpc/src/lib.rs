@@ -264,16 +264,8 @@ impl GameLogic {
         let mut world = hecs::World::new();
         let mut physics = PhysicsWorld::new();
 
-        let left_player = Self::spawn_player(
-            &mut world,
-            &mut physics,
-            PlayerSide::Left,
-        );
-        let right_player = Self::spawn_player(
-            &mut world,
-            &mut physics,
-            PlayerSide::Right,
-        );
+        let left_player = Self::spawn_player(&mut world, &mut physics, PlayerSide::Left);
+        let right_player = Self::spawn_player(&mut world, &mut physics, PlayerSide::Right);
 
         Self {
             world,
@@ -298,7 +290,6 @@ impl GameLogic {
 
         world.spawn((side, body_handle, collider_handle))
     }
-
 
     fn physics_handle_for(&mut self, player_side: PlayerSide) -> RigidBodyHandle {
         let entity = match player_side {
@@ -356,12 +347,9 @@ impl GameLogic {
         self.physics.step();
     }
 
-
     pub fn get_state_to_send_to_client(&mut self) -> MoveGameState {
-        let left_position = self
-            .get_position(PlayerSide::Left);
-        let right_position = self
-            .get_position(PlayerSide::Right);
+        let left_position = self.get_position(PlayerSide::Left);
+        let right_position = self.get_position(PlayerSide::Right);
 
         MoveGameState {
             left_position,
