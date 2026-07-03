@@ -1,10 +1,8 @@
 use crate::rps::{GameError, GameSession};
-use anyhow::anyhow;
 use rpc::{
     InputSequence, LobbyState, MoveInputState, PlayerSide, RPSGameState, RPSWinState,
     ReliableRpcServerMessage, TurnInput, UnreliableRpcServerMessage, UserId,
 };
-use std::sync::mpsc::Receiver;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
@@ -226,13 +224,13 @@ impl LobbySession {
         {
             sender
                 .send(message)
-                .map_err(|e| LobbyError::MessageSendFailed(*user_addr))
+                .map_err(|_e| LobbyError::MessageSendFailed(*user_addr))
         } else if let Some((user, sender, _)) = self.right_side.as_ref()
             && *user == *user_addr
         {
             sender
                 .send(message)
-                .map_err(|e| LobbyError::MessageSendFailed(*user_addr))
+                .map_err(|_e| LobbyError::MessageSendFailed(*user_addr))
         } else {
             Err(LobbyError::NeverExisted(*user_addr))
         }
@@ -248,13 +246,13 @@ impl LobbySession {
         {
             sender
                 .send(message)
-                .map_err(|e| LobbyError::MessageSendFailed(*user_addr))
+                .map_err(|_e| LobbyError::MessageSendFailed(*user_addr))
         } else if let Some((user, _, sender)) = self.right_side.as_ref()
             && *user == *user_addr
         {
             sender
                 .send(message)
-                .map_err(|e| LobbyError::MessageSendFailed(*user_addr))
+                .map_err(|_e| LobbyError::MessageSendFailed(*user_addr))
         } else {
             Err(LobbyError::NeverExisted(*user_addr))
         }
@@ -267,13 +265,13 @@ impl LobbySession {
         if let Some((addr, sender, _)) = self.left_side.as_ref() {
             sender
                 .send(message.clone())
-                .map_err(|e| LobbyError::MessageSendFailed(*addr))?;
+                .map_err(|_e| LobbyError::MessageSendFailed(*addr))?;
         }
 
         if let Some((addr, sender, _)) = self.right_side.as_ref() {
             sender
                 .send(message)
-                .map_err(|e| LobbyError::MessageSendFailed(*addr))?;
+                .map_err(|_e| LobbyError::MessageSendFailed(*addr))?;
         }
 
         Ok(())
@@ -286,13 +284,13 @@ impl LobbySession {
         if let Some((addr, _, sender)) = self.left_side.as_ref() {
             sender
                 .send(message.clone())
-                .map_err(|e| LobbyError::MessageSendFailed(*addr))?;
+                .map_err(|_e| LobbyError::MessageSendFailed(*addr))?;
         }
 
         if let Some((addr, _, sender)) = self.right_side.as_ref() {
             sender
                 .send(message)
-                .map_err(|e| LobbyError::MessageSendFailed(*addr))?;
+                .map_err(|_e| LobbyError::MessageSendFailed(*addr))?;
         }
 
         Ok(())
@@ -324,7 +322,7 @@ impl LobbySession {
                 let _ = oneshot.send(result);
             }
             LobbySessionMessage::RemovePlayer(addr, oneshot) => {
-                let result = self.remove_player((addr));
+                let result = self.remove_player(addr);
                 let _ = oneshot.send(result);
             }
             LobbySessionMessage::GetPlayerSide(addr, oneshot) => {
@@ -502,20 +500,6 @@ impl LobbySessionHandle {
     ) -> Result<(), LobbyError> {
         let (send, recv) = oneshot::channel();
         let msg = LobbySessionMessage::SendUnreliableMessageToUser(message, user_addr, send);
-
-        // Ignore send errors. If this send fails, so does the
-        // recv.await below. There's no reason to check for the
-        // same failure twice.
-        let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
-    }
-
-    pub async fn send_message_to_lobby(
-        &self,
-        message: UnreliableRpcServerMessage,
-    ) -> Result<(), LobbyError> {
-        let (send, recv) = oneshot::channel();
-        let msg = LobbySessionMessage::SendUnreliableMessageToLobby(message, send);
 
         // Ignore send errors. If this send fails, so does the
         // recv.await below. There's no reason to check for the
