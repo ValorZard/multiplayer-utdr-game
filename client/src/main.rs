@@ -49,8 +49,10 @@ fn get_connection_receivers(
         spawn_local(async move {
             crate::connection::connect_to_webtransport_server_wasm(
                 server_address,
-                client_rpc_receiver,
-                server_rpc_sender,
+                reliable_client_rpc_receiver,
+                unreliable_client_rpc_receiver,
+                reliable_server_rpc_sender,
+                unreliable_server_rpc_sender,
                 connection_finished_sender,
             )
             .await;

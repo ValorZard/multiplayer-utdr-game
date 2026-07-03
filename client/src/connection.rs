@@ -158,8 +158,10 @@ async fn unreliable_recv_loop(
 #[cfg(target_arch = "wasm32")]
 pub async fn connect_to_webtransport_server_wasm(
     server_address: String,
-    client_rpc_receiver: ClientRpcReceiver,
-    server_rpc_sender: ServerRpcSender,
+    reliable_client_rpc_receiver: ReliableClientRpcReceiver,
+    unreliable_client_rpc_receiver: UnreliableClientRpcReceiver,
+    reliable_server_rpc_sender: ReliableServerRpcSender,
+    unreliable_server_rpc_sender: UnreliableServerRpcSender,
     connection_finished_sender: ConnectionFinishedSender,
 ) {
     let client_builder = ClientBuilder::new();
@@ -175,8 +177,10 @@ pub async fn connect_to_webtransport_server_wasm(
 
         // we want both loops to break if one of them drops
         futures_util::select! {
-            _ = send_loop(client_rpc_receiver, send_stream).fuse() => (),
-            _ = recv_loop(server_rpc_sender, recv_stream).fuse() => (),
+            _ = reliable_send_loop(reliable_client_rpc_receiver, send_stream).fuse() => (),
+            _ = reliable_recv_loop(reliable_server_rpc_sender, recv_stream).fuse() => (),
+            _ = unreliable_send_loop(unreliable_client_rpc_receiver, session.clone()).fuse() => (),
+            _ = unreliable_recv_loop(unreliable_server_rpc_sender, session.clone()).fuse() => (),
         }
     } else if let Err(e) = connection_result {
         eprintln!(
