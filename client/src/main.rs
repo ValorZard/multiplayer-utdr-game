@@ -430,6 +430,7 @@ async fn main() {
                         .unbounded_send(UnreliableRpcClientMessage::MoveInput { input, sequence });
                 }
             }
+            game_logic.step_physics();
         }
 
         // make remote player whatever the other side is

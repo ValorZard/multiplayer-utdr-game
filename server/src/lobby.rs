@@ -312,6 +312,7 @@ impl LobbySession {
             right_side_score,
         })?;
         let move_state = self.current_round.get_move_state();
+        self.current_round.step();
         self.send_unreliable_message_to_lobby(UnreliableRpcServerMessage::MoveGameState(move_state))
     }
 
