@@ -1,6 +1,15 @@
 use rpc::{
     GameLogic, InputSequence, MoveGameState, PlayerSide, RPSGameState, RPSWinState, TurnInput,
 };
+use std::collections::VecDeque;
+
+const MAX_QUEUED_MOVE_INPUTS: usize = 512;
+
+#[derive(Clone, Copy)]
+struct QueuedMoveInput {
+    input: rpc::MoveInputState,
+    sequence: InputSequence,
+}
 
 #[derive(Debug, PartialEq)]
 pub enum GameError {
@@ -40,6 +49,8 @@ pub struct GameSession {
     game_logic: GameLogic,
     left_last_processed_input: InputSequence,
     right_last_processed_input: InputSequence,
+    left_pending_move_inputs: VecDeque<QueuedMoveInput>,
+    right_pending_move_inputs: VecDeque<QueuedMoveInput>,
 }
 
 impl GameSession {
@@ -50,6 +61,8 @@ impl GameSession {
             game_logic: GameLogic::new(),
             left_last_processed_input: 0,
             right_last_processed_input: 0,
+            left_pending_move_inputs: VecDeque::new(),
+            right_pending_move_inputs: VecDeque::new(),
         }
     }
 
@@ -141,15 +154,17 @@ impl GameSession {
     }
 
     pub fn set_left_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
-        self.game_logic
-            .update_position_with_input(PlayerSide::Left, &input);
-        self.left_last_processed_input = sequence;
+        Self::push_move_input(
+            &mut self.left_pending_move_inputs,
+            QueuedMoveInput { input, sequence },
+        );
     }
 
     pub fn set_right_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
-        self.game_logic
-            .update_position_with_input(PlayerSide::Right, &input);
-        self.right_last_processed_input = sequence;
+        Self::push_move_input(
+            &mut self.right_pending_move_inputs,
+            QueuedMoveInput { input, sequence },
+        );
     }
 
     pub fn get_move_state(&mut self) -> MoveGameState {
@@ -160,6 +175,31 @@ impl GameSession {
     }
 
     pub fn step(&mut self) {
+        if let Some(next_input) = self.left_pending_move_inputs.pop_front() {
+            self.game_logic
+                .update_position_with_input(PlayerSide::Left, &next_input.input);
+            self.left_last_processed_input = next_input.sequence;
+        }
+
+        if let Some(next_input) = self.right_pending_move_inputs.pop_front() {
+            self.game_logic
+                .update_position_with_input(PlayerSide::Right, &next_input.input);
+            self.right_last_processed_input = next_input.sequence;
+        }
+
         self.game_logic.step_physics();
+    }
+
+    fn push_move_input(queue: &mut VecDeque<QueuedMoveInput>, next_input: QueuedMoveInput) {
+        if let Some(last) = queue.back()
+            && next_input.sequence <= last.sequence
+        {
+            return;
+        }
+
+        queue.push_back(next_input);
+        while queue.len() > MAX_QUEUED_MOVE_INPUTS {
+            let _ = queue.pop_front();
+        }
     }
 }
