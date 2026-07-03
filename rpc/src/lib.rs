@@ -1,11 +1,8 @@
 use glam::Vec2;
-use hecs::Entity;
 use rapier2d::prelude::PhysicsPipeline;
 use rkyv::api::high::{HighSerializer, HighValidator};
 use rkyv::bytecheck::CheckBytes;
-use rkyv::net::ArchivedSocketAddr;
 use rkyv::{Archive, Deserialize, Serialize, rancor, util::AlignedVec};
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 use uuid::Uuid;
@@ -289,7 +286,7 @@ impl GameLogic {
                     .world
                     .query_one_mut::<&mut Vec2>(entity)
                     .expect("Player should exist here");
-                *position += (input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA);
+                *position += input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA ;
                 position.clone()
             }
             PlayerSide::Right => {
@@ -298,7 +295,7 @@ impl GameLogic {
                     .world
                     .query_one_mut::<&mut Vec2>(entity)
                     .expect("Player should exist here");
-                *position += (input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA);
+                *position += input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA ;
                 position.clone()
             }
         }
