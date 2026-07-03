@@ -85,12 +85,10 @@ async fn handle_connection(request: Request, server_state: ServerState) -> anyho
 
     let server_state_clone = server_state.clone();
     let session_for_datagram = session.clone();
+    // We don't need to parse a header for a datagram since it's a single message
     let datagram_incoming = tokio::spawn(async move {
         let server_state = server_state_clone;
-        let _header_buf = [0_u8; HEADER_MESSAGE.len()];
-        let _message_size_buf = [0_u8; 4]; // u32 is 4 u8
         while let Ok(datagram) = session_for_datagram.recv_datagram().await {
-            let datagram = &datagram[(HEADER_MESSAGE.len() + 4)..];
             let message = decode_message(&datagram).expect("Should be fine");
             let user_rpc_message = UserUnreliableRPCMessage {
                 message,

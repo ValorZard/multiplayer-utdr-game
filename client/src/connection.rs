@@ -144,6 +144,7 @@ async fn unreliable_send_loop(
     }
 }
 
+// We don't need to parse a header for a datagram since it's a single message
 async fn unreliable_recv_loop(
     unreliable_rpc_server_sender: UnreliableServerRpcSender,
     session: web_transport::Session,
