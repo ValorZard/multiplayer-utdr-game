@@ -1,6 +1,6 @@
 use anyhow::{Context, bail};
 use clap::Parser;
-use futures_util::{StreamExt, future, pin_mut};
+use futures_util::StreamExt;
 use rpc::{HEADER_MESSAGE, decode_message, encode_message};
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -87,8 +87,8 @@ async fn handle_connection(request: Request, server_state: ServerState) -> anyho
     let session_for_datagram = session.clone();
     let datagram_incoming = tokio::spawn(async move {
         let server_state = server_state_clone;
-        let mut header_buf = [0_u8; HEADER_MESSAGE.len()];
-        let mut message_size_buf = [0_u8; 4]; // u32 is 4 u8
+        let _header_buf = [0_u8; HEADER_MESSAGE.len()];
+        let _message_size_buf = [0_u8; 4]; // u32 is 4 u8
         while let Ok(datagram) = session_for_datagram.recv_datagram().await {
             let datagram = &datagram[(HEADER_MESSAGE.len() + 4)..];
             let message = decode_message(&datagram).expect("Should be fine");

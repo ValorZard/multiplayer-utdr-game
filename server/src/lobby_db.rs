@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail};
 use rpc::{
-    LobbyId, PlayerSide, RPSGameState, RPSWinState, ReliableRpcClientMessage,
-    ReliableRpcServerMessage, ScoreSize, UnreliableRpcClientMessage, UserId, YesOrNo,
+    LobbyId, PlayerSide, RPSGameState, ReliableRpcClientMessage, ReliableRpcServerMessage,
+    UnreliableRpcClientMessage, UserId, YesOrNo,
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
@@ -107,8 +107,7 @@ impl ServerStateInner {
         let user_data = self
             .connected_user_list
             .get(&addr)
-            .expect("If user is connected, they should be in connected list")
-            .clone();
+            .expect("If user is connected, they should be in connected list");
 
         // TODO: This is O(n), not O(log n)
         let waiting_lobby_id =
@@ -122,7 +121,7 @@ impl ServerStateInner {
         let (player_side, lobby_id) = if let Some(lobby_id) = waiting_lobby_id
             && let Some(lobby_entry) = self.lobby_list.remove(&lobby_id)
         {
-            let LobbyEntry::Waiting(mut lobby) = lobby_entry else {
+            let LobbyEntry::Waiting(lobby) = lobby_entry else {
                 unreachable!(
                     "This should be waiting since we used find map to find something that matched what we want."
                 );
@@ -197,7 +196,7 @@ impl ServerStateInner {
             };
 
             match lobby_entry {
-                LobbyEntry::Waiting(mut lobby) => {
+                LobbyEntry::Waiting(lobby) => {
                     let (_, state) = lobby.remove_player(addr).await?;
 
                     match state {
@@ -211,7 +210,7 @@ impl ServerStateInner {
                     }
                 }
 
-                LobbyEntry::Running(mut lobby) => {
+                LobbyEntry::Running(lobby) => {
                     let (_, state) = lobby.remove_player(addr).await?;
 
                     match state {
@@ -226,7 +225,7 @@ impl ServerStateInner {
                     }
                 }
 
-                LobbyEntry::Finished(mut finished) => {
+                LobbyEntry::Finished(finished) => {
                     let (_, state) = finished.lobby_session.remove_player(addr).await?;
 
                     match state {
@@ -253,7 +252,7 @@ impl ServerStateInner {
             }
         }
 
-        let Some(user_data) = self.connected_user_list.remove(&addr) else {
+        let Some(_user_data) = self.connected_user_list.remove(&addr) else {
             return Ok(());
         };
 
@@ -299,7 +298,7 @@ impl ServerStateInner {
                     self.lobby_list.insert(lobby_id, LobbyEntry::Waiting(lobby));
                 }
 
-                LobbyEntry::Running(mut lobby) => match user_rpc_message.message {
+                LobbyEntry::Running(lobby) => match user_rpc_message.message {
                     ReliableRpcClientMessage::TurnInput(input) => {
                         info!(
                             "Lobby input: {input:?} sent from {:?}",
@@ -310,7 +309,7 @@ impl ServerStateInner {
                         let current_state = lobby
                             .send_rps_input(user_rpc_message.send_addr, input)
                             .await;
-                        if let RPSGameState::Win { state, .. } = current_state.clone() {
+                        if let RPSGameState::Win { state: _, .. } = current_state.clone() {
                             self.lobby_list.insert(
                                 lobby_id,
                                 LobbyEntry::Finished(FinishedLobbySession {
