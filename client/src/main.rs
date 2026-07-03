@@ -1,11 +1,18 @@
-use crate::connection::{ConnectionFinishedReceiver, ReliableClientRpcSender, ReliableServerRpcReceiver, UnreliableClientRpcReceiver, UnreliableClientRpcSender, UnreliableServerRpcReceiver};
+use crate::connection::{
+    ConnectionFinishedReceiver, ReliableClientRpcSender, ReliableServerRpcReceiver,
+    UnreliableClientRpcReceiver, UnreliableClientRpcSender, UnreliableServerRpcReceiver,
+};
 use futures_channel::oneshot;
 use futures_util::{FutureExt, StreamExt};
 use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{GAME_TIME_STEP, GameLogic, InputSequence, LobbyId, LobbyState, PlayerSide, RPSGameState, RPSWinState, ScoreSize, TurnInput, UserId, YesOrNo, ReliableRpcClientMessage, ReliableRpcServerMessage, UnreliableRpcServerMessage, UnreliableRpcClientMessage};
+use rpc::{
+    GAME_TIME_STEP, GameLogic, InputSequence, LobbyId, LobbyState, PlayerSide, RPSGameState,
+    RPSWinState, ReliableRpcClientMessage, ReliableRpcServerMessage, ScoreSize, TurnInput,
+    UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId, YesOrNo,
+};
 use std::collections::VecDeque;
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
@@ -24,9 +31,16 @@ fn get_connection_receivers(
     UnreliableServerRpcReceiver,
     ConnectionFinishedReceiver,
 ) {
-    let (reliable_client_rpc_sender, reliable_client_rpc_receiver, unreliable_client_rpc_sender, unreliable_client_rpc_receiver,
-        reliable_server_rpc_sender, reliable_server_rpc_receiver, unreliable_server_rpc_sender, unreliable_server_rpc_receiver) =
-        connection::make_channels();
+    let (
+        reliable_client_rpc_sender,
+        reliable_client_rpc_receiver,
+        unreliable_client_rpc_sender,
+        unreliable_client_rpc_receiver,
+        reliable_server_rpc_sender,
+        reliable_server_rpc_receiver,
+        unreliable_server_rpc_sender,
+        unreliable_server_rpc_receiver,
+    ) = connection::make_channels();
     let (connection_finished_sender, connection_finished_receiver) = oneshot::channel::<()>();
 
     #[cfg(target_arch = "wasm32")]
@@ -152,8 +166,8 @@ fn interpolate_remote_position(
             if span <= 0.0 {
                 return Some(next.position);
             }
-            let alpha = ((target_time - previous.received_at).as_seconds_f32() / span)
-                .clamp(0.0, 1.0);
+            let alpha =
+                ((target_time - previous.received_at).as_seconds_f32() / span).clamp(0.0, 1.0);
             return Some(previous.position.lerp(next.position, alpha));
         }
     }
@@ -411,7 +425,8 @@ async fn main() {
 
                 game_logic.update_position_with_input(side, &input);
                 if let Some(rpc_sender) = unreliable_client_rpc_sender.as_ref() {
-                    let _ = rpc_sender.unbounded_send(UnreliableRpcClientMessage::MoveInput {input, sequence});
+                    let _ = rpc_sender
+                        .unbounded_send(UnreliableRpcClientMessage::MoveInput { input, sequence });
                 }
             }
         }
@@ -529,12 +544,14 @@ async fn main() {
                                     }
                                     if ui.button("Paper").clicked() {
                                         let _ = client_rpc_sender.unbounded_send(
-                                            ReliableRpcClientMessage::TurnInput(TurnInput::Paper)
+                                            ReliableRpcClientMessage::TurnInput(TurnInput::Paper),
                                         );
                                     }
                                     if ui.button("Scissors").clicked() {
                                         let _ = client_rpc_sender.unbounded_send(
-                                            ReliableRpcClientMessage::TurnInput(TurnInput::Scissors)
+                                            ReliableRpcClientMessage::TurnInput(
+                                                TurnInput::Scissors,
+                                            ),
                                         );
                                     }
                                 }

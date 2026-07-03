@@ -36,7 +36,9 @@ async fn handle_connection(request: Request, server_state: ServerState) -> anyho
 
     // assign this peer to a lobby
     let addr = session.remote_address();
-    server_state.connect_user(addr, user_reliable_sender, user_unreliable_sender).await?;
+    server_state
+        .connect_user(addr, user_reliable_sender, user_unreliable_sender)
+        .await?;
 
     let (mut outgoing, mut incoming) = session.open_bi().await?;
 
@@ -94,7 +96,9 @@ async fn handle_connection(request: Request, server_state: ServerState) -> anyho
                 message,
                 send_addr: addr,
             };
-            let _ = server_state.handle_user_unreliable_rpc(user_rpc_message).await;
+            let _ = server_state
+                .handle_user_unreliable_rpc(user_rpc_message)
+                .await;
         }
     });
 

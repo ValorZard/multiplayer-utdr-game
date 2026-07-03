@@ -1,5 +1,8 @@
 use anyhow::{anyhow, bail};
-use rpc::{LobbyId, PlayerSide, RPSGameState, RPSWinState, ScoreSize, UserId, YesOrNo, ReliableRpcClientMessage, UnreliableRpcClientMessage, ReliableRpcServerMessage};
+use rpc::{
+    LobbyId, PlayerSide, RPSGameState, RPSWinState, ReliableRpcClientMessage,
+    ReliableRpcServerMessage, ScoreSize, UnreliableRpcClientMessage, UserId, YesOrNo,
+};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -72,7 +75,12 @@ impl ServerStateInner {
         }
     }
 
-    fn connect_user(&mut self, addr: UserId, reliable_sender: UserReliableSender, unreliable_sender: UserUnreliableSender) -> anyhow::Result<()> {
+    fn connect_user(
+        &mut self,
+        addr: UserId,
+        reliable_sender: UserReliableSender,
+        unreliable_sender: UserUnreliableSender,
+    ) -> anyhow::Result<()> {
         if let Some(_existing) = self.connected_user_list.get(&addr) {
             bail!("Can't double connect a user to the server");
         }
@@ -120,14 +128,24 @@ impl ServerStateInner {
                 );
             };
             lobby.reset_lobby().await;
-            let (player_side, state) = lobby.insert_player((addr, user_data.reliable_sender.clone(), user_data.unreliable_sender.clone())).await?;
+            let (player_side, state) = lobby
+                .insert_player((
+                    addr,
+                    user_data.reliable_sender.clone(),
+                    user_data.unreliable_sender.clone(),
+                ))
+                .await?;
             self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
             info!("Lobby {lobby_id} should now be running: {state:?}");
             assert_eq!(state, LobbyState::Running);
             (player_side, lobby_id)
         } else {
             let lobby_id = Uuid::new_v4();
-            let lobby = LobbySessionHandle::new((addr, user_data.reliable_sender.clone(), user_data.unreliable_sender.clone()));
+            let lobby = LobbySessionHandle::new((
+                addr,
+                user_data.reliable_sender.clone(),
+                user_data.unreliable_sender.clone(),
+            ));
             info!(
                 "Lobby {lobby_id} should now be waiting: {:?}",
                 lobby.get_current_lobby_state().await
@@ -167,7 +185,9 @@ impl ServerStateInner {
         if let Some(lobby_id) = user_data.lobby_id {
             // removed player lobby is now empty
             // this can fail if the player totally disconnected
-            let _ = user_data.reliable_sender.send(ReliableRpcServerMessage::LobbyState(LobbyState::Empty));
+            let _ = user_data
+                .reliable_sender
+                .send(ReliableRpcServerMessage::LobbyState(LobbyState::Empty));
             user_data.lobby_id = None;
             user_data.player_side = None;
 
@@ -244,14 +264,18 @@ impl ServerStateInner {
         if let Some(user) = self.connected_user_list.get_mut(&addr) {
             user.lobby_id = None;
             user.player_side = None;
-            user.reliable_sender.send(ReliableRpcServerMessage::LobbyState(LobbyState::Empty))?;
+            user.reliable_sender
+                .send(ReliableRpcServerMessage::LobbyState(LobbyState::Empty))?;
             Ok(())
         } else {
             bail!("User {addr} is not actually connected")
         }
     }
 
-    async fn handle_user_reliable_rpc(&mut self, user_rpc_message: UserReliableRPCMessage) -> anyhow::Result<()> {
+    async fn handle_user_reliable_rpc(
+        &mut self,
+        user_rpc_message: UserReliableRPCMessage,
+    ) -> anyhow::Result<()> {
         let user = self
             .connected_user_list
             .get(&user_rpc_message.send_addr)
@@ -430,7 +454,10 @@ impl ServerStateInner {
         Ok(())
     }
 
-    async fn handle_user_unreliable_rpc(&mut self, user_rpc_message: UserUnreliableRPCMessage) -> anyhow::Result<()> {
+    async fn handle_user_unreliable_rpc(
+        &mut self,
+        user_rpc_message: UserUnreliableRPCMessage,
+    ) -> anyhow::Result<()> {
         let user = self
             .connected_user_list
             .get(&user_rpc_message.send_addr)
@@ -447,7 +474,7 @@ impl ServerStateInner {
             match lobby_entry {
                 LobbyEntry::Running(lobby) => {
                     match user_rpc_message.message {
-                        UnreliableRpcClientMessage::MoveInput{input, sequence} => {
+                        UnreliableRpcClientMessage::MoveInput { input, sequence } => {
                             info!(
                                 "Lobby input: {input:?} sent from {:?}",
                                 user_rpc_message.send_addr
@@ -460,7 +487,7 @@ impl ServerStateInner {
                         }
                     }
                     self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
-                },
+                }
                 _ => {
                     self.lobby_list.insert(lobby_id, lobby_entry);
                 }
@@ -484,15 +511,26 @@ impl ServerState {
         }
     }
 
-    pub async fn connect_user(&self, addr: UserId, reliable_sender: UserReliableSender, unreliable_sender: UserUnreliableSender) -> anyhow::Result<()> {
-        self.server_state.lock().await.connect_user(addr, reliable_sender, unreliable_sender)
+    pub async fn connect_user(
+        &self,
+        addr: UserId,
+        reliable_sender: UserReliableSender,
+        unreliable_sender: UserUnreliableSender,
+    ) -> anyhow::Result<()> {
+        self.server_state
+            .lock()
+            .await
+            .connect_user(addr, reliable_sender, unreliable_sender)
     }
 
     pub async fn disconnect_user(&self, addr: UserId) -> anyhow::Result<()> {
         self.server_state.lock().await.disconnect_user(addr).await
     }
 
-    pub async fn handle_user_reliable_rpc(&self, user_rpc_message: UserReliableRPCMessage) -> anyhow::Result<()> {
+    pub async fn handle_user_reliable_rpc(
+        &self,
+        user_rpc_message: UserReliableRPCMessage,
+    ) -> anyhow::Result<()> {
         self.server_state
             .lock()
             .await
@@ -500,7 +538,10 @@ impl ServerState {
             .await
     }
 
-    pub async fn handle_user_unreliable_rpc(&self, user_rpc_message: UserUnreliableRPCMessage) -> anyhow::Result<()> {
+    pub async fn handle_user_unreliable_rpc(
+        &self,
+        user_rpc_message: UserUnreliableRPCMessage,
+    ) -> anyhow::Result<()> {
         self.server_state
             .lock()
             .await
