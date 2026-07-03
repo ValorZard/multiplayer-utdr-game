@@ -220,6 +220,7 @@ async fn main() {
     let mut next_input_sequence: InputSequence = 1;
     let mut pending_inputs: VecDeque<PendingMoveInput> = VecDeque::new();
     let mut remote_snapshots: VecDeque<TimedRemoteSnapshot> = VecDeque::new();
+    let mut last_acknowledged_sequence: InputSequence = 0;
 
     // Client config
     let client_config = include_str!("../client_config.toml");
@@ -246,6 +247,7 @@ async fn main() {
             pending_inputs.clear();
             remote_snapshots.clear();
             next_input_sequence = 1;
+            last_acknowledged_sequence = 0;
             game_logic.setup_game();
         }
         // immediately pool the receiver even if there isn't a value there.
@@ -279,6 +281,7 @@ async fn main() {
                             pending_inputs.clear();
                             remote_snapshots.clear();
                             next_input_sequence = 1;
+                            last_acknowledged_sequence = 0;
                         }
                         RPSGameState::WaitingForLeftInput { right_input } => {
                             ui_game_state.remote_right_input = Some(*right_input);
@@ -309,6 +312,7 @@ async fn main() {
                     pending_inputs.clear();
                     remote_snapshots.clear();
                     next_input_sequence = 1;
+                    last_acknowledged_sequence = 0;
                 }
                 ReliableRpcServerMessage::LobbyState(state) => {
                     // unless lobby state is finished, we really shouldn't have a win state
@@ -344,6 +348,11 @@ async fn main() {
                                     game_state.right_last_processed_input,
                                 ),
                             };
+
+                        if acknowledged_sequence < last_acknowledged_sequence {
+                            continue;
+                        }
+                        last_acknowledged_sequence = acknowledged_sequence;
 
                         game_logic.update_position_with_vec(local_side, local_position);
 
