@@ -1,6 +1,8 @@
 use glam::Vec2;
 use hecs::Entity;
 use rapier2d::prelude::PhysicsPipeline;
+use rkyv::api::high::{HighSerializer, HighValidator};
+use rkyv::bytecheck::CheckBytes;
 use rkyv::net::ArchivedSocketAddr;
 use rkyv::{Archive, Deserialize, Serialize, rancor, util::AlignedVec};
 use std::collections::HashMap;
@@ -64,13 +66,27 @@ impl MoveInputState {
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
-pub enum RpcClientMessage {
+pub enum ReliableRpcClientMessage {
     Text(String),
-    GameInput(GameInput),
+    TurnInput(TurnInput),
     ContinueRound(YesOrNo),
     JoinLobby,
     Heartbeat,
 }
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum UnreliableRpcClientMessage {
+    MoveInput{input: MoveInputState,
+              sequence: InputSequence,}
+}
+
 
 pub type LobbyId = Uuid;
 pub type UserId = SocketAddr;
@@ -119,16 +135,24 @@ impl MoveGameState {
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
-pub enum RpcServerMessage {
+pub enum ReliableRpcServerMessage {
     GameState {
         state: RPSGameState,
         left_side_score: ScoreSize,
         right_side_score: ScoreSize,
     },
-    MoveGameState(MoveGameState),
     LobbyInit(PlayerSide, UserId, LobbyId),
     LobbyState(LobbyState),
     Text(String),
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum UnreliableRpcServerMessage {
+    MoveGameState(MoveGameState),
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]
@@ -158,22 +182,6 @@ pub enum TurnInput {
     Rock,
     Paper,
     Scissors,
-}
-
-#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
-#[rkyv(
-    // This will generate a PartialEq impl between our unarchived
-    // and archived types
-    compare(PartialEq),
-    // Derives can be passed through to the generated type:
-    derive(Debug),
-)]
-pub enum GameInput {
-    Turn(TurnInput),
-    Move {
-        input: MoveInputState,
-        sequence: InputSequence,
-    },
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -364,38 +372,25 @@ impl GameLogic {
     }
 }
 
-// messages sent from a websocket stream might not be aligned to what rkyv wants
-pub fn decode_client_message(bytes: &[u8]) -> Result<RpcClientMessage, rancor::Error> {
-    let mut aligned: rkyv::util::AlignedVec = rkyv::util::AlignedVec::new();
+pub fn decode_message<T>(bytes: &[u8]) -> Result<T, rancor::Error>
+where
+    T: Archive,
+    T::Archived: for<'a> CheckBytes<HighValidator<'a, rancor::Error>>
+        + Deserialize<T, rkyv::rancor::Strategy<rkyv::de::Pool, rancor::Error>>,
+{
+    let mut aligned = AlignedVec::<1>::new();
     aligned.extend_from_slice(bytes);
-    rkyv::from_bytes::<RpcClientMessage, rancor::Error>(aligned.as_ref())
+    rkyv::from_bytes::<T, rancor::Error>(aligned.as_ref())
 }
 
-pub fn encode_server_message(message: &RpcServerMessage) -> Result<Vec<u8>, rancor::Error> {
-    let mut message_byte_vec = Vec::new();
-    message_byte_vec.append(&mut HEADER_MESSAGE.to_vec());
+pub fn encode_message<T>(message: &T) -> Result<Vec<u8>, rancor::Error>
+where
+    T: for<'a> Serialize<HighSerializer<AlignedVec, rkyv::ser::allocator::ArenaHandle<'a>, rancor::Error>>,
+{
+    let mut out = HEADER_MESSAGE.to_vec();
     let message_as_bytes = rkyv::to_bytes::<rancor::Error>(message)?;
     let message_size = message_as_bytes.len() as u32;
-    let message_size_buf = message_size.to_be_bytes();
-    message_byte_vec.append(&mut message_size_buf.to_vec());
-    message_byte_vec.append(&mut message_as_bytes.into_vec());
-    Ok(message_byte_vec)
-}
-
-// messages sent from a websocket stream might not be aligned to what rkyv wants
-pub fn decode_server_message(bytes: &[u8]) -> Result<RpcServerMessage, rkyv::rancor::Error> {
-    let mut aligned: rkyv::util::AlignedVec = rkyv::util::AlignedVec::new();
-    aligned.extend_from_slice(bytes);
-    rkyv::from_bytes::<RpcServerMessage, rkyv::rancor::Error>(aligned.as_ref())
-}
-
-pub fn encode_client_message(message: &RpcClientMessage) -> Result<Vec<u8>, rkyv::rancor::Error> {
-    let mut message_byte_vec = Vec::new();
-    message_byte_vec.append(&mut HEADER_MESSAGE.to_vec());
-    let message_as_bytes = rkyv::to_bytes::<rancor::Error>(message)?;
-    let message_size = message_as_bytes.len() as u32;
-    let message_size_buf = message_size.to_be_bytes();
-    message_byte_vec.append(&mut message_size_buf.to_vec());
-    message_byte_vec.append(&mut message_as_bytes.into_vec());
-    Ok(message_byte_vec)
+    out.extend_from_slice(&message_size.to_be_bytes());
+    out.extend_from_slice(message_as_bytes.as_ref());
+    Ok(out)
 }

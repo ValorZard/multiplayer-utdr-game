@@ -3,35 +3,46 @@ use futures_channel::oneshot;
 use futures_util::{FutureExt, SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
-use rpc::{
-    HEADER_MESSAGE, RpcClientMessage, RpcServerMessage, decode_server_message,
-    encode_client_message,
-};
+use rpc::{HEADER_MESSAGE, ReliableRpcClientMessage, ReliableRpcServerMessage, UnreliableRpcClientMessage, UnreliableRpcServerMessage, encode_message, decode_message};
 use std::sync::LazyLock;
 use url::Url;
 use web_transport::{Client, ClientBuilder, RecvStream, SendStream};
 
-pub type ClientRpcSender = UnboundedSender<RpcClientMessage>;
-pub type ClientRpcReceiver = UnboundedReceiver<RpcClientMessage>;
-pub type ServerRpcSender = UnboundedSender<RpcServerMessage>;
-pub type ServerRpcReceiver = UnboundedReceiver<RpcServerMessage>;
+pub type ReliableClientRpcSender = UnboundedSender<ReliableRpcClientMessage>;
+pub type ReliableClientRpcReceiver = UnboundedReceiver<ReliableRpcClientMessage>;
+pub type UnreliableClientRpcSender = UnboundedSender<UnreliableRpcClientMessage>;
+pub type UnreliableClientRpcReceiver = UnboundedReceiver<UnreliableRpcClientMessage>;
+pub type ReliableServerRpcSender = UnboundedSender<ReliableRpcServerMessage>;
+pub type ReliableServerRpcReceiver = UnboundedReceiver<ReliableRpcServerMessage>;
+pub type UnreliableServerRpcSender = UnboundedSender<UnreliableRpcServerMessage>;
+pub type UnreliableServerRpcReceiver = UnboundedReceiver<UnreliableRpcServerMessage>;
 
 pub type ConnectionFinishedSender = oneshot::Sender<()>;
 pub type ConnectionFinishedReceiver = oneshot::Receiver<()>;
 
 pub fn make_channels() -> (
-    ClientRpcSender,
-    ClientRpcReceiver,
-    ServerRpcSender,
-    ServerRpcReceiver,
+    ReliableClientRpcSender,
+    ReliableClientRpcReceiver,
+    UnreliableClientRpcSender,
+    UnreliableClientRpcReceiver,
+    ReliableServerRpcSender,
+    ReliableServerRpcReceiver,
+    UnreliableServerRpcSender,
+    UnreliableServerRpcReceiver,
 ) {
-    let (client_rpc_sender, client_rpc_receiver) = unbounded();
-    let (server_rpc_sender, server_rpc_receiver) = unbounded();
+    let (reliable_client_rpc_sender, reliable_client_rpc_receiver) = unbounded();
+    let (unreliable_client_rpc_sender, unreliable_client_rpc_receiver) = unbounded();
+    let (reliable_server_rpc_sender, reliable_server_rpc_receiver) = unbounded();
+    let (unreliable_server_rpc_sender, unreliable_server_rpc_receiver) = unbounded();
     (
-        client_rpc_sender,
-        client_rpc_receiver,
-        server_rpc_sender,
-        server_rpc_receiver,
+        reliable_client_rpc_sender,
+        reliable_client_rpc_receiver,
+        unreliable_client_rpc_sender,
+        unreliable_client_rpc_receiver,
+        reliable_server_rpc_sender,
+        reliable_server_rpc_receiver,
+        unreliable_server_rpc_sender,
+        unreliable_server_rpc_receiver,
     )
 }
 
@@ -45,10 +56,10 @@ macro_rules! log {
     };
 }
 
-async fn send_loop(mut client_rpc_receiver: ClientRpcReceiver, mut send_stream: SendStream) {
+async fn reliable_send_loop(mut client_rpc_receiver: ReliableClientRpcReceiver, mut send_stream: SendStream) {
     while let Some(rpc_message) = client_rpc_receiver.next().await {
         log!("sending rpc message {rpc_message:?}");
-        let bytes = encode_client_message(&rpc_message).expect("should have message encoded");
+        let bytes = encode_message(&rpc_message).expect("should have message encoded");
         if let Err(error) = send_stream.write(&bytes).await {
             log!("send stopped while writing message: {error:?}");
             break;
@@ -80,7 +91,7 @@ async fn read_exact_bytes(recv_stream: &mut RecvStream, len: usize) -> Option<Ve
     Some(buffer)
 }
 
-async fn recv_loop(server_rpc_sender: ServerRpcSender, mut recv_stream: RecvStream) {
+async fn reliable_recv_loop(server_rpc_sender: ReliableServerRpcSender, mut recv_stream: RecvStream) {
     while let Some(header_buf) = read_exact_bytes(&mut recv_stream, HEADER_MESSAGE.len()).await {
         if header_buf.as_slice() != HEADER_MESSAGE {
             log!("Connection has received corrupted header, stopping...");
@@ -100,7 +111,7 @@ async fn recv_loop(server_rpc_sender: ServerRpcSender, mut recv_stream: RecvStre
         let Some(chunk) = read_exact_bytes(&mut recv_stream, message_size as usize).await else {
             break;
         };
-        let message = match decode_server_message(&chunk) {
+        let message = match decode_message(&chunk) {
             Ok(message) => message,
             Err(error) => {
                 log!("Failed to decode server message, stopping: {error:?}");
@@ -110,6 +121,27 @@ async fn recv_loop(server_rpc_sender: ServerRpcSender, mut recv_stream: RecvStre
 
         println!("Received binary: {:?}", message);
         let _ = server_rpc_sender.unbounded_send(message);
+    }
+}
+
+async fn unreliable_send_loop(
+    mut unreliable_client_rpc_receiver: UnreliableClientRpcReceiver,
+    session: web_transport::Session,
+) {
+    while let Some(message) = unreliable_client_rpc_receiver.next().await {
+        log!("sending unreliable rpc message {message:?}");
+        let bytes = encode_message(&message).expect("should have message encoded");
+        let _ = session.send_datagram(bytes.into()).await;
+    }
+}
+
+async fn unreliable_recv_loop(
+    unreliable_rpc_server_sender: UnreliableServerRpcSender,
+    session: web_transport::Session,
+) {
+    while let Ok(datagram) = session.recv_datagram().await {
+        let rpc_message = decode_message(&datagram).expect("should have message decoded");
+        let _ = unreliable_rpc_server_sender.unbounded_send(rpc_message);
     }
 }
 
@@ -157,8 +189,10 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn connect_to_webtransport_server_native(
     server_address: String,
-    client_rpc_receiver: ClientRpcReceiver,
-    server_rpc_sender: ServerRpcSender,
+    reliable_client_rpc_receiver: ReliableClientRpcReceiver,
+    unreliable_client_rpc_receiver: UnreliableClientRpcReceiver,
+    reliable_server_rpc_sender: ReliableServerRpcSender,
+    unreliable_server_rpc_sender: UnreliableServerRpcSender,
     connection_finished_sender: ConnectionFinishedSender,
 ) -> anyhow::Result<()> {
     RUNTIME.block_on(async {
@@ -175,8 +209,10 @@ pub fn connect_to_webtransport_server_native(
 
             // we want both loops to break if one of them drops
             tokio::select! {
-                _ = send_loop(client_rpc_receiver, send_stream) => (),
-                _ = recv_loop(server_rpc_sender, recv_stream) => (),
+                _ = reliable_send_loop(reliable_client_rpc_receiver, send_stream) => (),
+                _ = reliable_recv_loop(reliable_server_rpc_sender, recv_stream) => (),
+                _ = unreliable_send_loop(unreliable_client_rpc_receiver, session.clone()) => (),
+                _ = unreliable_recv_loop(unreliable_server_rpc_sender, session.clone()) => (),
             }
         } else if let Err(e) = connection_result {
             eprintln!(
