@@ -1,6 +1,9 @@
 use crate::rps::{GameError, GameSession};
 use anyhow::anyhow;
-use rpc::{InputSequence, LobbyState, MoveInputState, PlayerSide, RPSGameState, RPSWinState, ReliableRpcServerMessage, TurnInput, UnreliableRpcServerMessage, UserId};
+use rpc::{
+    InputSequence, LobbyState, MoveInputState, PlayerSide, RPSGameState, RPSWinState,
+    ReliableRpcServerMessage, TurnInput, UnreliableRpcServerMessage, UserId,
+};
 use std::sync::mpsc::Receiver;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot};
@@ -30,8 +33,14 @@ pub enum LobbySessionMessage {
         UserId,
         oneshot::Sender<Result<(), LobbyError>>,
     ),
-    SendReliableMessageToLobby(ReliableRpcServerMessage, oneshot::Sender<Result<(), LobbyError>>),
-    SendUnreliableMessageToLobby(UnreliableRpcServerMessage, oneshot::Sender<Result<(), LobbyError>>),
+    SendReliableMessageToLobby(
+        ReliableRpcServerMessage,
+        oneshot::Sender<Result<(), LobbyError>>,
+    ),
+    SendUnreliableMessageToLobby(
+        UnreliableRpcServerMessage,
+        oneshot::Sender<Result<(), LobbyError>>,
+    ),
     LobbyState(oneshot::Sender<LobbyState>),
     GetPlayerSide(UserId, oneshot::Sender<Result<PlayerSide, LobbyError>>),
     GetUserId(PlayerSide, oneshot::Sender<Result<UserId, LobbyError>>),
@@ -251,7 +260,10 @@ impl LobbySession {
         }
     }
 
-    fn send_reliable_message_to_lobby(&self, message: ReliableRpcServerMessage) -> Result<(), LobbyError> {
+    fn send_reliable_message_to_lobby(
+        &self,
+        message: ReliableRpcServerMessage,
+    ) -> Result<(), LobbyError> {
         if let Some((addr, sender, _)) = self.left_side.as_ref() {
             sender
                 .send(message.clone())
@@ -267,7 +279,10 @@ impl LobbySession {
         Ok(())
     }
 
-    fn send_unreliable_message_to_lobby(&self, message: UnreliableRpcServerMessage) -> Result<(), LobbyError> {
+    fn send_unreliable_message_to_lobby(
+        &self,
+        message: UnreliableRpcServerMessage,
+    ) -> Result<(), LobbyError> {
         if let Some((addr, _, sender)) = self.left_side.as_ref() {
             sender
                 .send(message.clone())
@@ -340,9 +355,7 @@ impl LobbySession {
                 let player_side = self.get_player_side(player_addr)?;
                 match player_side {
                     PlayerSide::Left => self.current_round.set_left_move_input(input, sequence),
-                    PlayerSide::Right => {
-                        self.current_round.set_right_move_input(input, sequence)
-                    }
+                    PlayerSide::Right => self.current_round.set_right_move_input(input, sequence),
                 }
             }
             LobbySessionMessage::SendReliableMessageToUser(message, addr, oneshot) => {
@@ -468,7 +481,10 @@ impl LobbySessionHandle {
         recv.await.expect("Actor task has been killed")
     }
 
-    pub async fn send_reliable_message_to_lobby(&self, message: ReliableRpcServerMessage) -> Result<(), LobbyError> {
+    pub async fn send_reliable_message_to_lobby(
+        &self,
+        message: ReliableRpcServerMessage,
+    ) -> Result<(), LobbyError> {
         let (send, recv) = oneshot::channel();
         let msg = LobbySessionMessage::SendReliableMessageToLobby(message, send);
 
@@ -494,7 +510,10 @@ impl LobbySessionHandle {
         recv.await.expect("Actor task has been killed")
     }
 
-    pub async fn send_message_to_lobby(&self, message: UnreliableRpcServerMessage) -> Result<(), LobbyError> {
+    pub async fn send_message_to_lobby(
+        &self,
+        message: UnreliableRpcServerMessage,
+    ) -> Result<(), LobbyError> {
         let (send, recv) = oneshot::channel();
         let msg = LobbySessionMessage::SendUnreliableMessageToLobby(message, send);
 

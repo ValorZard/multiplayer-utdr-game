@@ -3,7 +3,10 @@ use futures_channel::oneshot;
 use futures_util::{FutureExt, SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
-use rpc::{HEADER_MESSAGE, ReliableRpcClientMessage, ReliableRpcServerMessage, UnreliableRpcClientMessage, UnreliableRpcServerMessage, encode_message, decode_message};
+use rpc::{
+    HEADER_MESSAGE, ReliableRpcClientMessage, ReliableRpcServerMessage, UnreliableRpcClientMessage,
+    UnreliableRpcServerMessage, decode_message, encode_message,
+};
 use std::sync::LazyLock;
 use url::Url;
 use web_transport::{Client, ClientBuilder, RecvStream, SendStream};
@@ -56,7 +59,10 @@ macro_rules! log {
     };
 }
 
-async fn reliable_send_loop(mut client_rpc_receiver: ReliableClientRpcReceiver, mut send_stream: SendStream) {
+async fn reliable_send_loop(
+    mut client_rpc_receiver: ReliableClientRpcReceiver,
+    mut send_stream: SendStream,
+) {
     while let Some(rpc_message) = client_rpc_receiver.next().await {
         log!("sending rpc message {rpc_message:?}");
         let bytes = encode_message(&rpc_message).expect("should have message encoded");
@@ -91,7 +97,10 @@ async fn read_exact_bytes(recv_stream: &mut RecvStream, len: usize) -> Option<Ve
     Some(buffer)
 }
 
-async fn reliable_recv_loop(server_rpc_sender: ReliableServerRpcSender, mut recv_stream: RecvStream) {
+async fn reliable_recv_loop(
+    server_rpc_sender: ReliableServerRpcSender,
+    mut recv_stream: RecvStream,
+) {
     while let Some(header_buf) = read_exact_bytes(&mut recv_stream, HEADER_MESSAGE.len()).await {
         if header_buf.as_slice() != HEADER_MESSAGE {
             log!("Connection has received corrupted header, stopping...");

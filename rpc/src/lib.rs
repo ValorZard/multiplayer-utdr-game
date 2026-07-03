@@ -83,10 +83,11 @@ pub enum ReliableRpcClientMessage {
     derive(Debug),
 )]
 pub enum UnreliableRpcClientMessage {
-    MoveInput{input: MoveInputState,
-              sequence: InputSequence,}
+    MoveInput {
+        input: MoveInputState,
+        sequence: InputSequence,
+    },
 }
-
 
 pub type LobbyId = Uuid;
 pub type UserId = SocketAddr;
@@ -385,7 +386,9 @@ where
 
 pub fn encode_message<T>(message: &T) -> Result<Vec<u8>, rancor::Error>
 where
-    T: for<'a> Serialize<HighSerializer<AlignedVec, rkyv::ser::allocator::ArenaHandle<'a>, rancor::Error>>,
+    T: for<'a> Serialize<
+        HighSerializer<AlignedVec, rkyv::ser::allocator::ArenaHandle<'a>, rancor::Error>,
+    >,
 {
     let mut out = HEADER_MESSAGE.to_vec();
     let message_as_bytes = rkyv::to_bytes::<rancor::Error>(message)?;
