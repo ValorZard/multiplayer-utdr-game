@@ -158,4 +158,8 @@ impl GameSession {
         state.right_last_processed_input = self.right_last_processed_input;
         state
     }
+
+    pub fn step(&mut self) {
+        self.game_logic.step_physics();
+    }
 }

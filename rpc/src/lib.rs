@@ -1,5 +1,5 @@
 use glam::Vec2;
-use rapier2d::prelude::PhysicsPipeline;
+use rapier2d::prelude::*;
 use rkyv::api::high::{HighSerializer, HighValidator};
 use rkyv::bytecheck::CheckBytes;
 use rkyv::{Archive, Deserialize, Serialize, rancor, util::AlignedVec};
@@ -249,24 +249,66 @@ impl std::error::Error for LogicError {}
 
 pub struct GameLogic {
     world: hecs::World,
-    physics: PhysicsPipeline,
+    physics: PhysicsWorld,
     left_player: hecs::Entity,
     right_player: hecs::Entity,
 }
+
+pub const PHYSICS_TO_PIXEL_SCALE: f32 = 50.0; // 1 meter in physics engine equals 50 pixels
+pub const PIXEL_TO_PHYSICS_SCALE: f32 = 1.0 / PHYSICS_TO_PIXEL_SCALE;
+pub const PLAYER_PHYSICS_RADIUS: f32 = 1.0; // in physics scale
 
 impl GameLogic {
     pub fn new() -> Self {
         // TODO: for now, we hardcode left and right side players and require there to be only one of each
         let mut world = hecs::World::new();
-        let physics = PhysicsPipeline::new();
-        let left_player = world.spawn((PlayerSide::Left, Vec2::ZERO));
-        let right_player = world.spawn((PlayerSide::Left, Vec2::ZERO));
+        let mut physics = PhysicsWorld::new();
+
+        let left_player = Self::spawn_player(
+            &mut world,
+            &mut physics,
+            PlayerSide::Left,
+        );
+        let right_player = Self::spawn_player(
+            &mut world,
+            &mut physics,
+            PlayerSide::Right,
+        );
+
         Self {
             world,
-            physics,
             left_player,
             right_player,
+            physics,
         }
+    }
+
+    fn spawn_player(
+        world: &mut hecs::World,
+        physics: &mut PhysicsWorld,
+        side: PlayerSide,
+    ) -> hecs::Entity {
+        let rigid_body = RigidBodyBuilder::kinematic_position_based()
+            .translation(Vec2::ZERO)
+            .build();
+
+        let collider = ColliderBuilder::ball(PLAYER_PHYSICS_RADIUS).build();
+
+        let (body_handle, collider_handle) = physics.insert(rigid_body, collider);
+
+        world.spawn((side, body_handle, collider_handle))
+    }
+
+
+    fn physics_handle_for(&mut self, player_side: PlayerSide) -> RigidBodyHandle {
+        let entity = match player_side {
+            PlayerSide::Left => self.left_player,
+            PlayerSide::Right => self.right_player,
+        };
+        *self
+            .world
+            .query_one_mut::<&RigidBodyHandle>(entity)
+            .expect("Player should exist here")
     }
 
     pub fn setup_game(&mut self) {
@@ -279,26 +321,16 @@ impl GameLogic {
         player_side: PlayerSide,
         input: &MoveInputState,
     ) -> Vec2 {
-        match player_side {
-            PlayerSide::Left => {
-                let entity = self.left_player;
-                let position = self
-                    .world
-                    .query_one_mut::<&mut Vec2>(entity)
-                    .expect("Player should exist here");
-                *position += input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA ;
-                position.clone()
-            }
-            PlayerSide::Right => {
-                let entity = self.right_player;
-                let position = self
-                    .world
-                    .query_one_mut::<&mut Vec2>(entity)
-                    .expect("Player should exist here");
-                *position += input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA ;
-                position.clone()
-            }
-        }
+        let handle = self.physics_handle_for(player_side);
+        let body = &mut self.physics.bodies[handle];
+        let current_position = body.translation();
+        let delta = input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA;
+        let new_pos = Vec2::new(current_position.x + delta.x, current_position.y + delta.y);
+
+        // Kinematic bodies don't move until you tell the physics step
+        // where they're going next.
+        body.set_next_kinematic_translation(new_pos);
+        Vec2::new(new_pos.x, new_pos.y)
     }
 
     pub fn update_position_with_vec(
@@ -306,60 +338,30 @@ impl GameLogic {
         player_side: PlayerSide,
         new_position: Vec2,
     ) -> Vec2 {
-        match player_side {
-            PlayerSide::Left => {
-                let entity = self.left_player;
-                let position = self
-                    .world
-                    .query_one_mut::<&mut Vec2>(entity)
-                    .expect("Player should exist here");
-                *position = new_position;
-                position.clone()
-            }
-            PlayerSide::Right => {
-                let entity = self.right_player;
-                let position = self
-                    .world
-                    .query_one_mut::<&mut Vec2>(entity)
-                    .expect("Player should exist here");
-                *position = new_position;
-                position.clone()
-            }
-        }
+        let handle = self.physics_handle_for(player_side);
+        let body = &mut self.physics.bodies[handle];
+        body.set_next_kinematic_translation(new_position);
+        new_position
     }
 
     pub fn get_position(&mut self, player_side: PlayerSide) -> Vec2 {
-        match player_side {
-            PlayerSide::Left => {
-                let entity = self.left_player;
-                let position = self
-                    .world
-                    .query_one_mut::<&mut Vec2>(entity)
-                    .expect("Player should exist here");
-                position.clone()
-            }
-            PlayerSide::Right => {
-                let entity = self.right_player;
-                let position = self
-                    .world
-                    .query_one_mut::<&mut Vec2>(entity)
-                    .expect("Player should exist here");
-                position.clone()
-            }
-        }
+        let handle = self.physics_handle_for(player_side);
+        let t = self.physics.bodies[handle].translation();
+        Vec2::new(t.x, t.y)
     }
+
+    /// Advances the physics simulation. Call once per tick, after inputs
+    /// have been applied via update_position_with_input/_vec.
+    pub fn step_physics(&mut self) {
+        self.physics.step();
+    }
+
 
     pub fn get_state_to_send_to_client(&mut self) -> MoveGameState {
         let left_position = self
-            .world
-            .query_one_mut::<&Vec2>(self.left_player)
-            .expect("Left Player should exist")
-            .clone();
+            .get_position(PlayerSide::Left);
         let right_position = self
-            .world
-            .query_one_mut::<&Vec2>(self.right_player)
-            .expect("Left Player should exist")
-            .clone();
+            .get_position(PlayerSide::Right);
 
         MoveGameState {
             left_position,
