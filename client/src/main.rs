@@ -1,15 +1,11 @@
-use crate::connection::{ClientRpcSender, ConnectionFinishedReceiver, ServerRpcReceiver};
+use crate::connection::{ConnectionFinishedReceiver, ReliableClientRpcSender, ReliableServerRpcReceiver, UnreliableClientRpcReceiver, UnreliableClientRpcSender, UnreliableServerRpcReceiver};
 use futures_channel::oneshot;
 use futures_util::{FutureExt, StreamExt};
 use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{
-    GAME_TIME_STEP, GameInput, GameLogic, InputSequence, LobbyId, LobbyState, PlayerSide,
-    RPSGameState, RPSWinState, RpcClientMessage, RpcServerMessage, ScoreSize, TurnInput, UserId,
-    YesOrNo,
-};
+use rpc::{GAME_TIME_STEP, GameLogic, InputSequence, LobbyId, LobbyState, PlayerSide, RPSGameState, RPSWinState, ScoreSize, TurnInput, UserId, YesOrNo, ReliableRpcClientMessage, ReliableRpcServerMessage, UnreliableRpcServerMessage, UnreliableRpcClientMessage};
 use std::collections::VecDeque;
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
@@ -22,11 +18,14 @@ static ASSET_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets");
 fn get_connection_receivers(
     server_address: String,
 ) -> (
-    ClientRpcSender,
-    ServerRpcReceiver,
+    ReliableClientRpcSender,
+    UnreliableClientRpcSender,
+    ReliableServerRpcReceiver,
+    UnreliableServerRpcReceiver,
     ConnectionFinishedReceiver,
 ) {
-    let (client_rpc_sender, client_rpc_receiver, server_rpc_sender, server_rpc_receiver) =
+    let (reliable_client_rpc_sender, reliable_client_rpc_receiver, unreliable_client_rpc_sender, unreliable_client_rpc_receiver,
+        reliable_server_rpc_sender, reliable_server_rpc_receiver, unreliable_server_rpc_sender, unreliable_server_rpc_receiver) =
         connection::make_channels();
     let (connection_finished_sender, connection_finished_receiver) = oneshot::channel::<()>();
 
@@ -49,16 +48,20 @@ fn get_connection_receivers(
         let _connection_handle = thread::spawn(move || {
             crate::connection::connect_to_webtransport_server_native(
                 server_address,
-                client_rpc_receiver,
-                server_rpc_sender,
+                reliable_client_rpc_receiver,
+                unreliable_client_rpc_receiver,
+                reliable_server_rpc_sender,
+                unreliable_server_rpc_sender,
                 connection_finished_sender,
             )
         });
     }
 
     (
-        client_rpc_sender,
-        server_rpc_receiver,
+        reliable_client_rpc_sender,
+        unreliable_client_rpc_sender,
+        reliable_server_rpc_receiver,
+        unreliable_server_rpc_receiver,
         connection_finished_receiver,
     )
 }
@@ -171,8 +174,10 @@ async fn main() {
     let _image_texture =
         texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
 
-    let mut client_rpc_sender: Option<ClientRpcSender> = None;
-    let mut server_rpc_receiver: Option<ServerRpcReceiver> = None;
+    let mut reliable_client_rpc_sender: Option<ReliableClientRpcSender> = None;
+    let mut unreliable_client_rpc_sender: Option<UnreliableClientRpcSender> = None;
+    let mut reliable_server_rpc_receiver: Option<ReliableServerRpcReceiver> = None;
+    let mut unreliable_server_rpc_receiver: Option<UnreliableServerRpcReceiver> = None;
     let mut connection_finished_receiver: Option<ConnectionFinishedReceiver> = None;
 
     let mut camera = PanZoomCamera2d::new(Vec2::ZERO, 5.0);
@@ -211,8 +216,8 @@ async fn main() {
         heartbeat_timer += time_since_last_frame;
         if heartbeat_timer >= max_time_for_heartbeat {
             heartbeat_timer = Duration::new(0, 0);
-            if let Some(client_rpc_sender) = client_rpc_sender.clone() {
-                let _ = client_rpc_sender.unbounded_send(RpcClientMessage::Heartbeat);
+            if let Some(client_rpc_sender) = reliable_client_rpc_sender.clone() {
+                let _ = client_rpc_sender.unbounded_send(ReliableRpcClientMessage::Heartbeat);
             }
         }
         previous_time = current_time;
@@ -228,15 +233,15 @@ async fn main() {
             game_logic.setup_game();
         }
         // immediately pool the receiver even if there isn't a value there.
-        while let Some(ref mut server_rpc_receiver) = server_rpc_receiver
+        while let Some(ref mut server_rpc_receiver) = reliable_server_rpc_receiver
             && let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten()
         {
             log!("{rpc_message:?}");
             match rpc_message {
-                RpcServerMessage::Text(_text) => {
+                ReliableRpcServerMessage::Text(_text) => {
                     // TODO: Do something here I guess
                 }
-                RpcServerMessage::GameState {
+                ReliableRpcServerMessage::GameState {
                     state,
                     left_side_score,
                     right_side_score,
@@ -279,7 +284,7 @@ async fn main() {
                     ui_game_state.remote_right_score = right_side_score;
                     ui_game_state.current_game_state = Some(state);
                 }
-                RpcServerMessage::LobbyInit(side, user_id, lobby_id) => {
+                ReliableRpcServerMessage::LobbyInit(side, user_id, lobby_id) => {
                     ui_game_state.user_id = Some(user_id);
                     ui_game_state.lobby_id = Some(lobby_id);
                     ui_game_state.player_side = Some(side);
@@ -289,7 +294,7 @@ async fn main() {
                     remote_snapshots.clear();
                     next_input_sequence = 1;
                 }
-                RpcServerMessage::LobbyState(state) => {
+                ReliableRpcServerMessage::LobbyState(state) => {
                     // unless lobby state is finished, we really shouldn't have a win state
                     match state {
                         LobbyState::Finished => {}
@@ -300,7 +305,15 @@ async fn main() {
                     }
                     ui_game_state.lobby_state = state;
                 }
-                RpcServerMessage::MoveGameState(game_state) => {
+            }
+        }
+
+        // unreliable message
+        while let Some(ref mut server_rpc_receiver) = unreliable_server_rpc_receiver
+            && let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten()
+        {
+            match rpc_message {
+                UnreliableRpcServerMessage::MoveGameState(game_state) => {
                     if let Some(local_side) = ui_game_state.player_side {
                         let (local_position, remote_position, acknowledged_sequence) =
                             match local_side {
@@ -397,10 +410,8 @@ async fn main() {
                 }
 
                 game_logic.update_position_with_input(side, &input);
-                if let Some(rpc_sender) = client_rpc_sender.as_ref() {
-                    let _ = rpc_sender.unbounded_send(RpcClientMessage::GameInput(
-                        GameInput::Move { input, sequence },
-                    ));
+                if let Some(rpc_sender) = unreliable_client_rpc_sender.as_ref() {
+                    let _ = rpc_sender.unbounded_send(UnreliableRpcClientMessage::MoveInput {input, sequence});
                 }
             }
         }
@@ -457,13 +468,15 @@ async fn main() {
                                     // reset the connection
                                     let parts =
                                         get_connection_receivers(server_address.to_string());
-                                    client_rpc_sender = Some(parts.0);
-                                    server_rpc_receiver = Some(parts.1);
-                                    connection_finished_receiver = Some(parts.2);
-                                    let _ = client_rpc_sender
+                                    reliable_client_rpc_sender = Some(parts.0);
+                                    unreliable_client_rpc_sender = Some(parts.1);
+                                    reliable_server_rpc_receiver = Some(parts.2);
+                                    unreliable_server_rpc_receiver = Some(parts.3);
+                                    connection_finished_receiver = Some(parts.4);
+                                    let _ = reliable_client_rpc_sender
                                         .clone()
                                         .expect("should be set")
-                                        .unbounded_send(RpcClientMessage::JoinLobby);
+                                        .unbounded_send(ReliableRpcClientMessage::JoinLobby);
                                 }
                             }
                             let response =
@@ -475,18 +488,20 @@ async fn main() {
                                 // reset the connection
                                 let parts =
                                     get_connection_receivers(direct_connect_addr.to_string());
-                                client_rpc_sender = Some(parts.0);
-                                server_rpc_receiver = Some(parts.1);
-                                connection_finished_receiver = Some(parts.2);
-                                let _ = client_rpc_sender
+                                reliable_client_rpc_sender = Some(parts.0);
+                                unreliable_client_rpc_sender = Some(parts.1);
+                                reliable_server_rpc_receiver = Some(parts.2);
+                                unreliable_server_rpc_receiver = Some(parts.3);
+                                connection_finished_receiver = Some(parts.4);
+                                let _ = reliable_client_rpc_sender
                                     .clone()
                                     .expect("should be set")
-                                    .unbounded_send(RpcClientMessage::JoinLobby);
+                                    .unbounded_send(ReliableRpcClientMessage::JoinLobby);
                             }
                         }
                         LobbyState::Waiting => {}
                         LobbyState::Running => {
-                            let client_rpc_sender = client_rpc_sender
+                            let client_rpc_sender = reliable_client_rpc_sender
                                 .clone()
                                 .expect("should be setup by this point since the lobby is running");
                             if let Some(game_state) = &ui_game_state.current_game_state
@@ -509,42 +524,36 @@ async fn main() {
                                 if round_start || waiting_on_us {
                                     if ui.button("Rock").clicked() {
                                         let _ = client_rpc_sender.unbounded_send(
-                                            RpcClientMessage::GameInput(GameInput::Turn(
-                                                TurnInput::Rock,
-                                            )),
+                                            ReliableRpcClientMessage::TurnInput(TurnInput::Rock),
                                         );
                                     }
                                     if ui.button("Paper").clicked() {
                                         let _ = client_rpc_sender.unbounded_send(
-                                            RpcClientMessage::GameInput(GameInput::Turn(
-                                                TurnInput::Paper,
-                                            )),
+                                            ReliableRpcClientMessage::TurnInput(TurnInput::Paper)
                                         );
                                     }
                                     if ui.button("Scissors").clicked() {
                                         let _ = client_rpc_sender.unbounded_send(
-                                            RpcClientMessage::GameInput(GameInput::Turn(
-                                                TurnInput::Scissors,
-                                            )),
+                                            ReliableRpcClientMessage::TurnInput(TurnInput::Scissors)
                                         );
                                     }
                                 }
                             }
                         }
                         LobbyState::Finished => {
-                            let client_rpc_sender = client_rpc_sender.clone().expect(
+                            let client_rpc_sender = reliable_client_rpc_sender.clone().expect(
                                 "should be setup by this point since the lobby is finished",
                             );
                             if !is_input_selected {
                                 if ui.button("Yes").clicked() {
                                     let _ = client_rpc_sender.unbounded_send(
-                                        RpcClientMessage::ContinueRound(YesOrNo::Yes),
+                                        ReliableRpcClientMessage::ContinueRound(YesOrNo::Yes),
                                     );
                                     is_input_selected = true;
                                 }
                                 if ui.button("No").clicked() {
                                     let _ = client_rpc_sender.unbounded_send(
-                                        RpcClientMessage::ContinueRound(YesOrNo::No),
+                                        ReliableRpcClientMessage::ContinueRound(YesOrNo::No),
                                     );
                                     is_input_selected = true;
                                 }
