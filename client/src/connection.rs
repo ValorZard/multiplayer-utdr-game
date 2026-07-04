@@ -164,6 +164,7 @@ pub async fn connect_to_webtransport_server_wasm(
     unreliable_server_rpc_sender: UnreliableServerRpcSender,
     connection_finished_sender: ConnectionFinishedSender,
 ) {
+    use futures_util::FutureExt;
     let client_builder = ClientBuilder::new();
     let client: Client = client_builder
         .with_system_roots()
