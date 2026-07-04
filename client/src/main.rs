@@ -243,12 +243,6 @@ async fn main() {
             && let Ok(Some(_)) = connection_finished_receiver.try_recv()
         {
             log!("Connection dropped.");
-            ui_game_state.reset();
-            pending_inputs.clear();
-            remote_snapshots.clear();
-            next_input_sequence = 1;
-            last_acknowledged_sequence = 0;
-            game_logic.setup_game();
         }
         // immediately pool the receiver even if there isn't a value there.
         while let Some(ref mut server_rpc_receiver) = reliable_server_rpc_receiver
@@ -272,11 +266,9 @@ async fn main() {
                     match &state {
                         RPSGameState::StartRound => {
                             // reset all game state on Start Round
-                            ui_game_state.remote_left_input = None;
-                            ui_game_state.remote_right_input = None;
+                            // Ensure local simulation entities exist as soon as we know our side.
                             local_player.set_position(Vec2::ZERO);
                             remote_player.set_position(Vec2::ZERO);
-                            // remove previous players
                             game_logic.setup_game();
                             pending_inputs.clear();
                             remote_snapshots.clear();
@@ -304,15 +296,10 @@ async fn main() {
                     ui_game_state.current_game_state = Some(state);
                 }
                 ReliableRpcServerMessage::LobbyInit(side, user_id, lobby_id) => {
+                    ui_game_state.reset();
                     ui_game_state.user_id = Some(user_id);
                     ui_game_state.lobby_id = Some(lobby_id);
                     ui_game_state.player_side = Some(side);
-                    // Ensure local simulation entities exist as soon as we know our side.
-                    game_logic.setup_game();
-                    pending_inputs.clear();
-                    remote_snapshots.clear();
-                    next_input_sequence = 1;
-                    last_acknowledged_sequence = 0;
                 }
                 ReliableRpcServerMessage::LobbyState(state) => {
                     // unless lobby state is finished, we really shouldn't have a win state
