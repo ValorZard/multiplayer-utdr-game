@@ -1,7 +1,7 @@
 use anyhow::{Context, bail};
 use clap::Parser;
-use futures_util::{StreamExt, future, pin_mut};
-use rpc::{HEADER_MESSAGE, decode_client_message};
+use futures_util::StreamExt;
+use rpc::{HEADER_MESSAGE, decode_message, encode_message};
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path,
@@ -9,10 +9,10 @@ use std::{
 use tokio::{io::AsyncReadExt, sync::mpsc, task::JoinSet};
 use web_transport_quinn::{Request, Server, proto::ConnectResponse};
 
-use crate::lobby_db::ServerState;
-use crate::lobby_db::UserRPCMessage;
+use crate::lobby_db::{ServerState, UserReliableRPCMessage, UserUnreliableRPCMessage};
 use rustls::pki_types::CertificateDer;
 use tracing::{info, warn};
+use web_transport_quinn::generic::Session;
 
 #[deny(clippy::unwrap_used, clippy::panic)]
 
@@ -31,11 +31,14 @@ async fn handle_connection(request: Request, server_state: ServerState) -> anyho
     let session = request.respond(response).await?;
 
     // Insert the write part of this peer to the peer map.
-    let (user_sender, mut user_receiver) = mpsc::unbounded_channel();
+    let (user_reliable_sender, mut user_reliable_receiver) = mpsc::unbounded_channel();
+    let (user_unreliable_sender, mut user_unreliable_receiver) = mpsc::unbounded_channel();
 
     // assign this peer to a lobby
     let addr = session.remote_address();
-    server_state.connect_user(addr, user_sender).await?;
+    server_state
+        .connect_user(addr, user_reliable_sender, user_unreliable_sender)
+        .await?;
 
     let (mut outgoing, mut incoming) = session.open_bi().await?;
 
@@ -59,16 +62,16 @@ async fn handle_connection(request: Request, server_state: ServerState) -> anyho
                     .read_chunk(message_size as usize, true)
                     .await?
                     .expect("There should be a chunk here we can use");
-                let message = decode_client_message(&chunk.bytes)?;
+                let message = decode_message(&chunk.bytes)?;
                 info!("message received from {addr}: {message:?}");
 
-                let user_rpc_message = UserRPCMessage {
+                let user_rpc_message = UserReliableRPCMessage {
                     message,
                     send_addr: addr,
                 };
 
                 server_state
-                    .handle_user_rpc(user_rpc_message)
+                    .handle_user_reliable_rpc(user_rpc_message)
                     .await
                     .expect("Error handling user rpc");
             } else if let Err(e) = message_read_result {
@@ -80,28 +83,48 @@ async fn handle_connection(request: Request, server_state: ServerState) -> anyho
         Ok(())
     });
 
-    // forward the binary websocket messages from user receiver into the web socket stream itself
-    let receive_from_others = tokio::spawn(async move {
-        while let Some(message) = user_receiver.recv().await {
+    let server_state_clone = server_state.clone();
+    let session_for_datagram = session.clone();
+    // We don't need to parse a header for a datagram since it's a single message
+    let datagram_incoming = tokio::spawn(async move {
+        let server_state = server_state_clone;
+        while let Ok(datagram) = session_for_datagram.recv_datagram().await {
+            let message = decode_message(&datagram).expect("Should be fine");
+            let user_rpc_message = UserUnreliableRPCMessage {
+                message,
+                send_addr: addr,
+            };
+            let _ = server_state
+                .handle_user_unreliable_rpc(user_rpc_message)
+                .await;
+        }
+    });
+
+    // forward the binary web transport messages from user receiver into the web transport stream itself
+    let send_reliable_to_clients = tokio::spawn(async move {
+        while let Some(message) = user_reliable_receiver.recv().await {
+            let message = encode_message(&message).expect("this should be fine");
             if let Err(e) = outgoing.write_all(&message).await {
                 warn!("{e}");
             }
         }
         warn!("Receiver for user messages into outgoing stream stopped");
     });
-
-    pin_mut!(broadcast_incoming, receive_from_others);
-    let race_result = future::select(broadcast_incoming, receive_from_others).await;
-    match race_result {
-        future::Either::Left((join_result, _)) => match join_result {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => warn!("incoming-task error for {addr}: {e:#}"),
-            Err(e) => warn!("incoming-task panicked for {addr}: {e}"),
-        },
-        future::Either::Right((join_result, _)) => match join_result {
-            Ok(()) => {}
-            Err(e) => warn!("outgoing-task panicked for {addr}: {e}"),
-        },
+    let session_for_unreliable = session.clone();
+    let send_unreliable_to_clients = tokio::spawn(async move {
+        while let Some(message) = user_unreliable_receiver.recv().await {
+            let message = encode_message(&message).expect("this should be fine");
+            if let Err(e) = session_for_unreliable.send_datagram(message.into()) {
+                warn!("{e}");
+            }
+        }
+        warn!("Receiver for user messages into outgoing stream stopped");
+    });
+    tokio::select! {
+        _ = broadcast_incoming => {},
+        _ = datagram_incoming => {},
+        _ = send_reliable_to_clients => {},
+        _ = send_unreliable_to_clients => {},
     }
 
     info!("{} disconnected", &addr);
