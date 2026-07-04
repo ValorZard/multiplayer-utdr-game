@@ -1,6 +1,6 @@
 use crate::rps::{GameError, GameSession};
 use rpc::{
-    InputSequence, LobbyState, MoveInputState, PlayerSide, RPSGameState, RPSWinState,
+    InputSequence, LobbyId, LobbyState, MoveInputState, PlayerSide, RPSGameState, RPSWinState,
     ReliableRpcServerMessage, TurnInput, UnreliableRpcServerMessage, UserId,
 };
 use tokio::sync::mpsc::UnboundedSender;
@@ -48,6 +48,7 @@ pub enum LobbySessionMessage {
 type PlayerDataTuple = (UserId, UserReliableSender, UserUnreliableSender);
 
 struct LobbySession {
+    id: LobbyId,
     left_side: Option<PlayerDataTuple>,
     right_side: Option<PlayerDataTuple>,
     current_round: GameSession,
@@ -91,8 +92,18 @@ impl std::fmt::Display for LobbyError {
 impl std::error::Error for LobbyError {}
 
 impl LobbySession {
-    fn new(left_side: PlayerDataTuple, receiver: mpsc::Receiver<LobbySessionMessage>) -> Self {
+    fn new(
+        id: LobbyId,
+        left_side: PlayerDataTuple,
+        receiver: mpsc::Receiver<LobbySessionMessage>,
+    ) -> Self {
+        let _ = left_side.1.send(ReliableRpcServerMessage::LobbyInit(
+            PlayerSide::Left,
+            left_side.0,
+            id,
+        ));
         Self {
+            id,
             left_side: Some(left_side),
             right_side: None,
             winner: None,
@@ -115,13 +126,31 @@ impl LobbySession {
             return Err(LobbyError::SameAddr(*player));
         }
 
-        let new_player = Some(new_player);
-
         if self.left_side.is_none() {
-            self.left_side = new_player;
+            let _ = new_player.1.send(ReliableRpcServerMessage::LobbyInit(
+                PlayerSide::Left,
+                new_player.0,
+                self.id,
+            ));
+            self.left_side = Some(new_player);
+            let _ = self.send_reliable_message_to_lobby(ReliableRpcServerMessage::GameState {
+                state: self.current_round.compute_state(),
+                left_side_score: 0,
+                right_side_score: 0,
+            });
             Ok((PlayerSide::Left, self.get_current_lobby_state()))
         } else if self.right_side.is_none() {
-            self.right_side = new_player;
+            let _ = new_player.1.send(ReliableRpcServerMessage::LobbyInit(
+                PlayerSide::Right,
+                new_player.0,
+                self.id,
+            ));
+            self.right_side = Some(new_player);
+            let _ = self.send_reliable_message_to_lobby(ReliableRpcServerMessage::GameState {
+                state: self.current_round.compute_state(),
+                left_side_score: 0,
+                right_side_score: 0,
+            });
             Ok((PlayerSide::Right, self.get_current_lobby_state()))
         } else {
             Err(LobbyError::AlreadyFull)
@@ -418,9 +447,9 @@ pub struct LobbySessionHandle {
 }
 
 impl LobbySessionHandle {
-    pub fn new(left_side: PlayerDataTuple) -> Self {
+    pub fn new(id: LobbyId, left_side: PlayerDataTuple) -> Self {
         let (sender, receiver) = mpsc::channel(32);
-        let actor = LobbySession::new(left_side, receiver);
+        let actor = LobbySession::new(id, left_side, receiver);
         tokio::spawn(async move {
             if let Err(e) = run_lobby_session(actor).await {
                 warn!("error handling lobby session: {e:?}");

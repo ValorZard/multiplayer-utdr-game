@@ -100,6 +100,7 @@ impl ServerStateInner {
         Ok(())
     }
 
+    // Note: We are assuming once we fill a lobby, we can't add any more users to it.
     async fn put_connected_user_in_lobby(
         &mut self,
         addr: UserId,
@@ -140,11 +141,14 @@ impl ServerStateInner {
             (player_side, lobby_id)
         } else {
             let lobby_id = Uuid::new_v4();
-            let lobby = LobbySessionHandle::new((
-                addr,
-                user_data.reliable_sender.clone(),
-                user_data.unreliable_sender.clone(),
-            ));
+            let lobby = LobbySessionHandle::new(
+                lobby_id,
+                (
+                    addr,
+                    user_data.reliable_sender.clone(),
+                    user_data.unreliable_sender.clone(),
+                ),
+            );
             info!(
                 "Lobby {lobby_id} should now be waiting: {:?}",
                 lobby.get_current_lobby_state().await
@@ -158,20 +162,6 @@ impl ServerStateInner {
             user.player_side = Some(player_side);
             user.lobby_id = Some(lobby_id);
         }
-
-        // send our lobby id first
-        let lobby_init = ReliableRpcServerMessage::LobbyInit(player_side, addr, lobby_id);
-        let lobby_session = self
-            .lobby_list
-            .get(&lobby_id)
-            .expect("Should be in lobby list")
-            .session();
-        info!("Lobby {lobby_id} init: {lobby_init:?} session: {lobby_session:?}");
-        lobby_session
-            .send_reliable_message_to_user(lobby_init.clone(), addr)
-            .await?;
-
-        info!("Connected user {addr} to lobby {lobby_init:?}");
 
         Ok((player_side, lobby_id))
     }
