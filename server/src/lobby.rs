@@ -581,29 +581,3 @@ impl LobbySessionHandle {
         recv.await.expect("Actor task has been killed")
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::str::FromStr;
-
-    /*
-    #[test]
-    fn lobby_tests() {
-        let dummy_left = UserId::from_str("127.0.0.1:1234").unwrap();
-        let dummy_right = UserId::from_str("127.0.0.1:12342").unwrap();
-
-        let mut lobby = LobbySession::new(dummy_left);
-        assert_eq!(lobby.get_current_lobby_state(), LobbyState::Waiting);
-
-        lobby.insert_player(dummy_right).unwrap();
-        assert_eq!(lobby.get_current_lobby_state(), LobbyState::Running);
-
-        lobby.remove_player(dummy_left).unwrap();
-        assert_eq!(lobby.get_current_lobby_state(), LobbyState::Waiting);
-
-        lobby.remove_player(dummy_right).unwrap();
-        assert_eq!(lobby.get_current_lobby_state(), LobbyState::Empty);
-    }
-    */
-}
