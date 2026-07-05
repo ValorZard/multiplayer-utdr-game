@@ -249,6 +249,10 @@ impl ServerStateInner {
         Ok(())
     }
 
+    fn check_if_lobby_exists(&self, lobby_id: LobbyId) -> bool {
+        self.lobby_list.contains_key(&lobby_id)
+    }
+
     fn remove_connected_user_from_lobby(&mut self, addr: UserId) -> anyhow::Result<()> {
         if let Some(user) = self.connected_user_list.get_mut(&addr) {
             user.lobby_id = None;
@@ -527,6 +531,13 @@ impl ServerState {
             .await
     }
 
+    pub async fn check_if_lobby_exists(&self, lobby_id: LobbyId) -> bool {
+        self.server_state
+            .lock()
+            .await
+            .check_if_lobby_exists(lobby_id)
+    }
+
     pub async fn handle_user_unreliable_rpc(
         &self,
         user_rpc_message: UserUnreliableRPCMessage,
@@ -555,7 +566,8 @@ mod tests {
 
         let left_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3001);
         let right_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3002);
-        let replacement_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3003);
+        let replacement_left_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3003);
+        let replacement_right_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3004);
 
         let (left_reliable_sender, mut left_reliable_receiver) = mpsc::unbounded_channel();
         let (left_unreliable_sender, left_unreliable_receiver) = mpsc::unbounded_channel();
@@ -587,7 +599,7 @@ mod tests {
         };
 
         let (right_reliable_sender, mut right_reliable_receiver) = mpsc::unbounded_channel();
-        let (right_unreliable_sender, _right_unreliable_receiver) = mpsc::unbounded_channel();
+        let (right_unreliable_sender, right_unreliable_receiver) = mpsc::unbounded_channel();
         server_state
             .connect_user(right_addr, right_reliable_sender, right_unreliable_sender)
             .await
@@ -636,15 +648,15 @@ mod tests {
         }
         assert!(saw_waiting);
 
-        let (replacement_reliable_sender, mut replacement_reliable_receiver) =
+        let (replacement_left_reliable_sender, mut replacement_left_reliable_receiver) =
             mpsc::unbounded_channel();
-        let (replacement_unreliable_sender, _replacement_unreliable_receiver) =
+        let (replacement_left_unreliable_sender, replacement_left_unreliable_receiver) =
             mpsc::unbounded_channel();
         server_state
             .connect_user(
-                replacement_addr,
-                replacement_reliable_sender,
-                replacement_unreliable_sender,
+                replacement_left_addr,
+                replacement_left_reliable_sender,
+                replacement_left_unreliable_sender,
             )
             .await
             .expect("replacement connect should succeed");
@@ -652,18 +664,92 @@ mod tests {
         server_state
             .handle_user_reliable_rpc(UserReliableRPCMessage {
                 message: ReliableRpcClientMessage::JoinLobby,
-                send_addr: replacement_addr,
+                send_addr: replacement_left_addr,
             })
             .await
             .expect("replacement join should succeed");
 
         assert!(matches!(
-            timeout(Duration::from_secs(1), replacement_reliable_receiver.recv()).await,
+            timeout(Duration::from_secs(1), replacement_left_reliable_receiver.recv()).await,
             Ok(Some(ReliableRpcServerMessage::LobbyInit(
                 PlayerSide::Left,
                 user_id,
                 received_lobby_id,
-            ))) if user_id == replacement_addr && received_lobby_id == lobby_id
+            ))) if user_id == replacement_left_addr && received_lobby_id == lobby_id
         ));
+
+        // disconnect right user so now lobby has to fill in right user
+
+        server_state
+            .disconnect_user(right_addr)
+            .await
+            .expect("right disconnect should succeed");
+
+        // drop old right receivers
+        drop(right_reliable_receiver);
+        drop(right_unreliable_receiver);
+
+        // check if left side saw that the lobby is now waiting
+
+        let mut saw_waiting = false;
+        for _ in 0..8 {
+            match timeout(
+                Duration::from_secs(1),
+                replacement_left_reliable_receiver.recv(),
+            )
+            .await
+            {
+                Ok(Some(ReliableRpcServerMessage::LobbyState(LobbyState::Waiting))) => {
+                    saw_waiting = true
+                }
+                Ok(Some(_)) => continue,
+                Ok(None) => break,
+                Err(_elapsed) => continue,
+            }
+        }
+        assert!(saw_waiting);
+
+        let (replacement_right_reliable_sender, mut replacement_right_reliable_receiver) =
+            mpsc::unbounded_channel();
+        let (replacement_right_unreliable_sender, replacement_right_unreliable_receiver) =
+            mpsc::unbounded_channel();
+        server_state
+            .connect_user(
+                replacement_right_addr,
+                replacement_right_reliable_sender,
+                replacement_right_unreliable_sender,
+            )
+            .await
+            .expect("replacement connect should succeed");
+
+        server_state
+            .handle_user_reliable_rpc(UserReliableRPCMessage {
+                message: ReliableRpcClientMessage::JoinLobby,
+                send_addr: replacement_right_addr,
+            })
+            .await
+            .expect("replacement join should succeed");
+
+        assert!(matches!(
+            timeout(Duration::from_secs(1), replacement_right_reliable_receiver.recv()).await,
+            Ok(Some(ReliableRpcServerMessage::LobbyInit(
+                PlayerSide::Right,
+                user_id,
+                received_lobby_id,
+            ))) if user_id == replacement_right_addr && received_lobby_id == lobby_id
+        ));
+
+        // disconnect both clients now and check that lobby is now gone
+        server_state
+            .disconnect_user(replacement_left_addr)
+            .await
+            .expect("left replacement disconnect should succeed");
+        server_state
+            .disconnect_user(replacement_right_addr)
+            .await
+            .expect("right disconnect should succeed");
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(server_state.check_if_lobby_exists(lobby_id).await, false);
     }
 }
