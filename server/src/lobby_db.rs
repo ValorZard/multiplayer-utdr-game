@@ -275,20 +275,24 @@ impl ServerStateInner {
             .ok_or_else(|| anyhow!("user not found"))?;
 
         let lobby_id = user.lobby_id;
+        /*
         info!(
             "handle_user_rpc: addr={} lobby_id={:?} message={:?}",
             user_rpc_message.send_addr, lobby_id, user_rpc_message.message
         );
+         */
         if let Some(lobby_id) = lobby_id
             && let Some(lobby_entry) = self.lobby_list.remove(&lobby_id)
         {
             match lobby_entry {
                 LobbyEntry::Waiting(lobby) => {
                     // ignore most messages while waiting
+                    /*
                     info!(
                         "lobby {lobby_id}: waiting; ignoring message from {}",
                         user_rpc_message.send_addr
                     );
+                    */
                     self.lobby_list.insert(lobby_id, LobbyEntry::Waiting(lobby));
                 }
 
@@ -457,10 +461,12 @@ impl ServerStateInner {
             .ok_or_else(|| anyhow!("user not found"))?;
 
         let lobby_id = user.lobby_id;
+        /*
         info!(
             "handle_user_rpc: addr={} lobby_id={:?} message={:?}",
             user_rpc_message.send_addr, lobby_id, user_rpc_message.message
         );
+         */
         if let Some(lobby_id) = lobby_id
             && let Some(lobby_entry) = self.lobby_list.remove(&lobby_id)
         {
@@ -468,12 +474,13 @@ impl ServerStateInner {
                 LobbyEntry::Running(lobby) => {
                     match user_rpc_message.message {
                         UnreliableRpcClientMessage::MoveInput { input, sequence } => {
+                            /*
                             info!(
                                 "Lobby input: {input:?} sent from {:?}",
                                 user_rpc_message.send_addr
                             );
                             info!("Lobby session: {lobby:?}");
-
+                            */
                             lobby
                                 .send_move_input(user_rpc_message.send_addr, input, sequence)
                                 .await;

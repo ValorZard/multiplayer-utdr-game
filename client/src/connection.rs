@@ -64,7 +64,7 @@ async fn reliable_send_loop(
     mut send_stream: SendStream,
 ) {
     while let Some(rpc_message) = client_rpc_receiver.next().await {
-        log!("sending rpc message {rpc_message:?}");
+        //log!("sending rpc message {rpc_message:?}");
         let bytes = encode_message(&rpc_message).expect("should have message encoded");
         if let Err(error) = send_stream.write(&bytes).await {
             log!("send stopped while writing message: {error:?}");
@@ -128,7 +128,7 @@ async fn reliable_recv_loop(
             }
         };
 
-        println!("Received binary: {:?}", message);
+        //println!("Received binary: {:?}", message);
         let _ = server_rpc_sender.unbounded_send(message);
     }
 }
@@ -138,7 +138,7 @@ async fn unreliable_send_loop(
     session: web_transport::Session,
 ) {
     while let Some(message) = unreliable_client_rpc_receiver.next().await {
-        log!("sending unreliable rpc message {message:?}");
+        //log!("sending unreliable rpc message {message:?}");
         let bytes = encode_message(&message).expect("should have message encoded");
         let _ = session.send_datagram(bytes.into()).await;
     }
