@@ -23,6 +23,7 @@ toml = "1.1.2"
 serde = { version = "1.0.228", features = ["derive"] }
 rapier2d = {workspace = true}
 hecs = {workspace = true}
+webbrowser = "1.2.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = {workspace = true}

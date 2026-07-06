@@ -82,6 +82,27 @@ fn get_connection_receivers(
     )
 }
 
+fn reset_connection_and_join_lobby(
+    server_address: String,
+    reliable_client_rpc_sender: &mut Option<ReliableClientRpcSender>,
+    unreliable_client_rpc_sender: &mut Option<UnreliableClientRpcSender>,
+    reliable_server_rpc_receiver: &mut Option<ReliableServerRpcReceiver>,
+    unreliable_server_rpc_receiver: &mut Option<UnreliableServerRpcReceiver>,
+    connection_finished_receiver: &mut Option<ConnectionFinishedReceiver>,
+) {
+    let parts = get_connection_receivers(server_address);
+    *reliable_client_rpc_sender = Some(parts.0);
+    *unreliable_client_rpc_sender = Some(parts.1);
+    *reliable_server_rpc_receiver = Some(parts.2);
+    *unreliable_server_rpc_receiver = Some(parts.3);
+    *connection_finished_receiver = Some(parts.4);
+
+    let _ = reliable_client_rpc_sender
+        .as_ref()
+        .expect("should be set")
+        .unbounded_send(ReliableRpcClientMessage::JoinLobby);
+}
+
 #[derive(Debug)]
 struct UiGameState {
     lobby_state: LobbyState,
@@ -479,18 +500,14 @@ async fn main() {
                             ui.label("Server List");
                             for server_address in &client_config.servers {
                                 if ui.button(server_address).clicked() {
-                                    // reset the connection
-                                    let parts =
-                                        get_connection_receivers(server_address.to_string());
-                                    reliable_client_rpc_sender = Some(parts.0);
-                                    unreliable_client_rpc_sender = Some(parts.1);
-                                    reliable_server_rpc_receiver = Some(parts.2);
-                                    unreliable_server_rpc_receiver = Some(parts.3);
-                                    connection_finished_receiver = Some(parts.4);
-                                    let _ = reliable_client_rpc_sender
-                                        .clone()
-                                        .expect("should be set")
-                                        .unbounded_send(ReliableRpcClientMessage::JoinLobby);
+                                    reset_connection_and_join_lobby(
+                                        server_address.to_string(),
+                                        &mut reliable_client_rpc_sender,
+                                        &mut unreliable_client_rpc_sender,
+                                        &mut reliable_server_rpc_receiver,
+                                        &mut unreliable_server_rpc_receiver,
+                                        &mut connection_finished_receiver,
+                                    );
                                 }
                             }
                             let response =
@@ -499,18 +516,14 @@ async fn main() {
                                 log!("Edit response {}", &direct_connect_addr);
                             }
                             if ui.button("Direct Connect").clicked() {
-                                // reset the connection
-                                let parts =
-                                    get_connection_receivers(direct_connect_addr.to_string());
-                                reliable_client_rpc_sender = Some(parts.0);
-                                unreliable_client_rpc_sender = Some(parts.1);
-                                reliable_server_rpc_receiver = Some(parts.2);
-                                unreliable_server_rpc_receiver = Some(parts.3);
-                                connection_finished_receiver = Some(parts.4);
-                                let _ = reliable_client_rpc_sender
-                                    .clone()
-                                    .expect("should be set")
-                                    .unbounded_send(ReliableRpcClientMessage::JoinLobby);
+                                reset_connection_and_join_lobby(
+                                    direct_connect_addr.to_string(),
+                                    &mut reliable_client_rpc_sender,
+                                    &mut unreliable_client_rpc_sender,
+                                    &mut reliable_server_rpc_receiver,
+                                    &mut unreliable_server_rpc_receiver,
+                                    &mut connection_finished_receiver,
+                                );
                             }
                         }
                         LobbyState::Waiting => {}
