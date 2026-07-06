@@ -22,30 +22,28 @@ mod connection;
 
 static ASSET_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets");
 
-fn get_connection_receivers(
+fn reset_connection_and_join_lobby(
     server_address: String,
-) -> (
-    ReliableClientRpcSender,
-    UnreliableClientRpcSender,
-    ReliableServerRpcReceiver,
-    UnreliableServerRpcReceiver,
-    ConnectionFinishedReceiver,
+    reliable_client_rpc_sender: &mut Option<ReliableClientRpcSender>,
+    unreliable_client_rpc_sender: &mut Option<UnreliableClientRpcSender>,
+    reliable_server_rpc_receiver: &mut Option<ReliableServerRpcReceiver>,
+    unreliable_server_rpc_receiver: &mut Option<UnreliableServerRpcReceiver>,
+    connection_finished_receiver: &mut Option<ConnectionFinishedReceiver>,
 ) {
     let (
-        reliable_client_rpc_sender,
+        new_reliable_client_rpc_sender,
         reliable_client_rpc_receiver,
-        unreliable_client_rpc_sender,
+        new_unreliable_client_rpc_sender,
         unreliable_client_rpc_receiver,
         reliable_server_rpc_sender,
-        reliable_server_rpc_receiver,
+        new_reliable_server_rpc_receiver,
         unreliable_server_rpc_sender,
-        unreliable_server_rpc_receiver,
+        new_unreliable_server_rpc_receiver,
     ) = connection::make_channels();
-    let (connection_finished_sender, connection_finished_receiver) = oneshot::channel::<()>();
+    let (connection_finished_sender, new_connection_finished_receiver) = oneshot::channel::<()>();
 
     #[cfg(target_arch = "wasm32")]
     {
-        console_error_panic_hook::set_once();
         spawn_local(async move {
             crate::connection::connect_to_webtransport_server_wasm(
                 server_address,
@@ -73,29 +71,11 @@ fn get_connection_receivers(
         });
     }
 
-    (
-        reliable_client_rpc_sender,
-        unreliable_client_rpc_sender,
-        reliable_server_rpc_receiver,
-        unreliable_server_rpc_receiver,
-        connection_finished_receiver,
-    )
-}
-
-fn reset_connection_and_join_lobby(
-    server_address: String,
-    reliable_client_rpc_sender: &mut Option<ReliableClientRpcSender>,
-    unreliable_client_rpc_sender: &mut Option<UnreliableClientRpcSender>,
-    reliable_server_rpc_receiver: &mut Option<ReliableServerRpcReceiver>,
-    unreliable_server_rpc_receiver: &mut Option<UnreliableServerRpcReceiver>,
-    connection_finished_receiver: &mut Option<ConnectionFinishedReceiver>,
-) {
-    let parts = get_connection_receivers(server_address);
-    *reliable_client_rpc_sender = Some(parts.0);
-    *unreliable_client_rpc_sender = Some(parts.1);
-    *reliable_server_rpc_receiver = Some(parts.2);
-    *unreliable_server_rpc_receiver = Some(parts.3);
-    *connection_finished_receiver = Some(parts.4);
+    *reliable_client_rpc_sender = Some(new_reliable_client_rpc_sender);
+    *unreliable_client_rpc_sender = Some(new_unreliable_client_rpc_sender);
+    *reliable_server_rpc_receiver = Some(new_reliable_server_rpc_receiver);
+    *unreliable_server_rpc_receiver = Some(new_unreliable_server_rpc_receiver);
+    *connection_finished_receiver = Some(new_connection_finished_receiver);
 
     let _ = reliable_client_rpc_sender
         .as_ref()
@@ -200,6 +180,10 @@ fn interpolate_remote_position(
 
 #[kiss3d::main]
 async fn main() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        console_error_panic_hook::set_once();
+    }
     let mut window = Window::new("Kiss3d: rectangle").await;
     let _camera = PanZoomCamera2d::new(Vec2::ZERO, 2.0);
     let _scene = SceneNode2d::empty();
