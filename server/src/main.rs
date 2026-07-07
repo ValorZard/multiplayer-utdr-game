@@ -56,7 +56,7 @@ const THIS_SERVER_IP: LazyLock<Ipv4Addr> = LazyLock::new(|| {
 const OAUTH_BIND_PORT: u16 = 34567;
 const OAUTH_START_ENDPOINT: &str = "/oauth/start";
 // this endpoint has to be set in itch.io itself when you create the OAuth thing on their end.
-const REDIRECT_ENDPOINT: &str = "/oauth/callback?a=b";
+const REDIRECT_ENDPOINT: &str = "/oauth/callback";
 const FRAGMENT_CAPTURE_ENDPOINT: &str = "/oauth/fragment";
 // basically, when we do the redirect back to our redirect endpoint, we need a way of actually getting the info stored in the as hash (stored as a fragment)
 // so, we use a tiny bit of javascript to grab the hash from the URI, and then do another request, this time sending the hash
