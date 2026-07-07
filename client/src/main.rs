@@ -253,7 +253,7 @@ async fn main() {
         while let Some(ref mut server_rpc_receiver) = reliable_server_rpc_receiver
             && let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten()
         {
-            log!("{rpc_message:?}");
+            //log!("{rpc_message:?}");
             match rpc_message {
                 ReliableRpcServerMessage::Text(_text) => {
                     // TODO: Do something here I guess
@@ -299,6 +299,11 @@ async fn main() {
                     ui_game_state.remote_left_score = left_side_score;
                     ui_game_state.remote_right_score = right_side_score;
                     ui_game_state.current_game_state = Some(state);
+                }
+                ReliableRpcServerMessage::ConnectionInit(oauth_url) => {
+                    if webbrowser::open(&oauth_url.0).is_err() {
+                        log!("{:?}", oauth_url);
+                    }
                 }
                 ReliableRpcServerMessage::LobbyInit(side, user_id, lobby_id) => {
                     ui_game_state.reset();

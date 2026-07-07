@@ -5,6 +5,7 @@ use rkyv::bytecheck::CheckBytes;
 use rkyv::{Archive, Deserialize, Serialize, rancor, util::AlignedVec};
 use std::net::SocketAddr;
 use std::time::Duration;
+use url::Url;
 use uuid::Uuid;
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -67,6 +68,7 @@ pub enum ReliableRpcClientMessage {
     Text(String),
     TurnInput(TurnInput),
     ContinueRound(YesOrNo),
+    JoinServer,
     JoinLobby,
     Heartbeat,
 }
@@ -87,7 +89,7 @@ pub enum UnreliableRpcClientMessage {
 }
 
 pub type LobbyId = Uuid;
-pub type UserId = SocketAddr;
+pub type UserId = u64;
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 #[rkyv(
@@ -130,6 +132,50 @@ impl MoveGameState {
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub struct RpcUrl(pub String);
+
+impl From<Url> for RpcUrl {
+    fn from(value: Url) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl From<String> for RpcUrl {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl Into<String> for RpcUrl {
+    fn into(self) -> String {
+        self.0
+    }
+}
+
+impl TryFrom<RpcUrl> for Url {
+    type Error = url::ParseError;
+
+    fn try_from(value: RpcUrl) -> Result<Self, Self::Error> {
+        Url::parse(&value.0)
+    }
+}
+
+impl TryFrom<&RpcUrl> for Url {
+    type Error = url::ParseError;
+
+    fn try_from(value: &RpcUrl) -> Result<Self, Self::Error> {
+        Url::parse(&value.0)
+    }
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
@@ -139,6 +185,8 @@ pub enum ReliableRpcServerMessage {
         left_side_score: ScoreSize,
         right_side_score: ScoreSize,
     },
+    // send oauth url for client to open up
+    ConnectionInit(RpcUrl),
     LobbyInit(PlayerSide, UserId, LobbyId),
     LobbyState(LobbyState),
     Text(String),

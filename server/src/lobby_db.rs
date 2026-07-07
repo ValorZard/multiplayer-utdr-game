@@ -275,20 +275,24 @@ impl ServerStateInner {
             .ok_or_else(|| anyhow!("user not found"))?;
 
         let lobby_id = user.lobby_id;
+        /*
         info!(
             "handle_user_rpc: addr={} lobby_id={:?} message={:?}",
             user_rpc_message.send_addr, lobby_id, user_rpc_message.message
         );
+         */
         if let Some(lobby_id) = lobby_id
             && let Some(lobby_entry) = self.lobby_list.remove(&lobby_id)
         {
             match lobby_entry {
                 LobbyEntry::Waiting(lobby) => {
                     // ignore most messages while waiting
+                    /*
                     info!(
                         "lobby {lobby_id}: waiting; ignoring message from {}",
                         user_rpc_message.send_addr
                     );
+                    */
                     self.lobby_list.insert(lobby_id, LobbyEntry::Waiting(lobby));
                 }
 
@@ -457,10 +461,12 @@ impl ServerStateInner {
             .ok_or_else(|| anyhow!("user not found"))?;
 
         let lobby_id = user.lobby_id;
+        /*
         info!(
             "handle_user_rpc: addr={} lobby_id={:?} message={:?}",
             user_rpc_message.send_addr, lobby_id, user_rpc_message.message
         );
+         */
         if let Some(lobby_id) = lobby_id
             && let Some(lobby_entry) = self.lobby_list.remove(&lobby_id)
         {
@@ -468,12 +474,13 @@ impl ServerStateInner {
                 LobbyEntry::Running(lobby) => {
                     match user_rpc_message.message {
                         UnreliableRpcClientMessage::MoveInput { input, sequence } => {
+                            /*
                             info!(
                                 "Lobby input: {input:?} sent from {:?}",
                                 user_rpc_message.send_addr
                             );
                             info!("Lobby session: {lobby:?}");
-
+                            */
                             lobby
                                 .send_move_input(user_rpc_message.send_addr, input, sequence)
                                 .await;
@@ -554,7 +561,7 @@ impl ServerState {
 mod tests {
     use super::*;
     use std::{
-        net::{IpAddr, Ipv4Addr, SocketAddr},
+        net::{IpAddr, Ipv4Addr},
         time::Duration,
     };
     use tokio::sync::mpsc;
@@ -564,10 +571,10 @@ mod tests {
     async fn server_state_reuses_waiting_lobby_after_disconnect() {
         let server_state = ServerState::new();
 
-        let left_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3001);
-        let right_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3002);
-        let replacement_left_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3003);
-        let replacement_right_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3004);
+        let left_addr = 3001;
+        let right_addr = 3002;
+        let replacement_left_addr = 3003;
+        let replacement_right_addr = 3004;
 
         let (left_reliable_sender, mut left_reliable_receiver) = mpsc::unbounded_channel();
         let (left_unreliable_sender, left_unreliable_receiver) = mpsc::unbounded_channel();
