@@ -1,5 +1,4 @@
 use anyhow::{Context, bail};
-use axum_server::tls_rustls::RustlsConfig;
 use axum::routing::post;
 use axum::{
     Router,
@@ -8,6 +7,7 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
+use axum_server::tls_rustls::RustlsConfig;
 use clap::Parser;
 use futures_util::StreamExt;
 use oauth2::basic::{
@@ -274,8 +274,7 @@ async fn handle_connection(
     http_client: reqwest::Client,
     pending_oauth_requests: PendingOAuthRequests,
 ) -> anyhow::Result<()> {
-    let this_server_ip = env::var("THIS_SERVER_IP")?
-        .parse::<Ipv4Addr>()?;
+    let this_server_ip = env::var("THIS_SERVER_IP")?.parse::<Ipv4Addr>()?;
     info!("WebTransport connection established: {}", request.url);
 
     // Accept the session.
@@ -410,11 +409,11 @@ async fn handle_connection(
 async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     dotenvy::dotenv()?;
-    let this_server_ip = env::var("THIS_SERVER_IP")?
-        .parse::<Ipv4Addr>()?;
+    let this_server_ip = env::var("THIS_SERVER_IP")?.parse::<Ipv4Addr>()?;
     tracing_subscriber::fmt::init();
     // Create the event loop and TCP listener we'll accept connections on.
-    let server_hosting_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), SERVER_HOSTING_PORT);
+    let server_hosting_address =
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), SERVER_HOSTING_PORT);
     let server_builder =
         web_transport_quinn::ServerBuilder::new().with_addr(server_hosting_address);
 
