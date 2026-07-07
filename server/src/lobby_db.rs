@@ -561,7 +561,7 @@ impl ServerState {
 mod tests {
     use super::*;
     use std::{
-        net::{IpAddr, Ipv4Addr, SocketAddr},
+        net::{IpAddr, Ipv4Addr},
         time::Duration,
     };
     use tokio::sync::mpsc;
@@ -571,10 +571,10 @@ mod tests {
     async fn server_state_reuses_waiting_lobby_after_disconnect() {
         let server_state = ServerState::new();
 
-        let left_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3001);
-        let right_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3002);
-        let replacement_left_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3003);
-        let replacement_right_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3004);
+        let left_addr =  3001;
+        let right_addr = 3002;
+        let replacement_left_addr = 3003;
+        let replacement_right_addr = 3004;
 
         let (left_reliable_sender, mut left_reliable_receiver) = mpsc::unbounded_channel();
         let (left_unreliable_sender, left_unreliable_receiver) = mpsc::unbounded_channel();

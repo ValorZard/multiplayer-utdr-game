@@ -10,7 +10,7 @@ use clap::Parser;
 use futures_util::StreamExt;
 use oauth2::basic::{BasicClient, BasicErrorResponse, BasicRevocationErrorResponse, BasicTokenIntrospectionResponse, BasicTokenResponse};
 use oauth2::{AuthUrl, ClientId, CsrfToken, EndpointSet, RedirectUrl, Scope, StandardRevocableToken};
-use rpc::{HEADER_MESSAGE, decode_message, encode_message, ReliableRpcServerMessage};
+use rpc::{HEADER_MESSAGE, decode_message, encode_message, ReliableRpcServerMessage, UserId};
 use std::{
     collections::HashMap,
     env,
@@ -30,6 +30,7 @@ use crate::lobby_db::{ServerState, UserReliableRPCMessage, UserUnreliableRPCMess
 use rustls::pki_types::CertificateDer;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
+use url::Url;
 use web_transport_quinn::generic::Session;
 
 #[deny(clippy::unwrap_used, clippy::panic)]
@@ -54,9 +55,9 @@ const FRAGMENT_CAPTURE_ENDPOINT: &str = "/oauth/fragment";
 // https://itch.io/docs/api/oauth
 // https://developer.mozilla.org/en-US/docs/Web/API/URL/hash
 const FRAGMENT_FORWARDER_HTML: &str = r#"<!doctype html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-    <meta charset=\"utf-8\">
+    <meta charset="utf-8">
     <title>itch.io OAuth</title>
 </head>
 <body>
@@ -70,29 +71,74 @@ const FRAGMENT_FORWARDER_HTML: &str = r#"<!doctype html>
 </html>
 "#;
 
-#[derive(Debug)]
-struct OAuthFragmentResult {
-    access_token: String,
-    state: String,
-    scope: String,
-    token_type: String,
-    expires_in: String,
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+struct ItchProfileResponse {
+    user: ItchUser,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+struct ItchUser {
+    id: UserId,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct OAuthRequest {
+    authorize_url: Url,
+    csrf_state: CsrfToken,
+}
+
+impl From<(Url, CsrfToken)> for OAuthRequest {
+    fn from((authorize_url, csrf): (Url, CsrfToken)) -> Self {
+        Self {
+            authorize_url,
+            csrf_state: csrf,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PendingOAuthRequests {
+    map: Arc<tokio::sync::Mutex<HashMap<String, oneshot::Sender<ItchUser>>>>,
+}
+
+impl PendingOAuthRequests {
+    fn new() -> Self {
+        Self {
+            map: Arc::new(tokio::sync::Mutex::new(HashMap::new()))
+        }
+    }
+
+    async fn get_receiver(&self, csrf_token: &CsrfToken) -> oneshot::Receiver<ItchUser> {
+        let (sender, receiver) = oneshot::channel();
+        self.map.lock().await.insert(csrf_token.secret().clone(), sender);
+        receiver
+    }
+
+    async fn submit_oauth_result(&self, csrf: &str, oauth_answer: ItchUser) -> Option<()>{
+        let mut map = self.map.lock().await;
+        let sender = map.remove(csrf)?;
+        sender.send(oauth_answer).ok()
+    }
 }
 
 #[derive(Clone)]
 struct OAuthCallbackState{
     oauth_client: oauth2::Client<BasicErrorResponse, BasicTokenResponse, BasicTokenIntrospectionResponse, StandardRevocableToken, BasicRevocationErrorResponse, EndpointSet>,
     http_client : reqwest::Client,
+    pending_oauth_requests: PendingOAuthRequests,
 }
+
 
 async fn start_oauth(State(state): State<OAuthCallbackState>) -> impl IntoResponse {
     // Generate the authorization URL to which we'll redirect the user.
-    let (authorize_url, csrf_state) = state.oauth_client
+    let oauth_request : OAuthRequest = state.oauth_client
         .authorize_url(CsrfToken::new_random)
         .use_implicit_flow()
         .add_scope(Scope::new("profile:me".to_string()))
-        .url();
-    format!("{authorize_url}")
+        .url()
+        .into();
+    serde_json::to_string(&oauth_request).expect("failed to serialize oauth request")
 }
 async fn oauth_callback_handler() -> impl IntoResponse {
     Html(FRAGMENT_FORWARDER_HTML)
@@ -113,7 +159,7 @@ async fn oauth_fragment_handler(
     };
 
     let returned_state = match params.get("state") {
-        Some(csrf) if !csrf.is_empty() => csrf.clone(),
+        Some(csrf) if !csrf.is_empty() => CsrfToken::new(csrf.to_string()),
         _ => {
             return (StatusCode::BAD_REQUEST, "Missing state in fragment relay");
         }
@@ -131,7 +177,7 @@ async fn oauth_fragment_handler(
 
     info!("itch.io returned the following access token:\n{access_token}\n");
     info!(
-        "itch.io returned the following state:\n{}",
+        "itch.io returned the following state:\n{:?}",
         returned_state
     );
 
@@ -145,41 +191,94 @@ async fn oauth_fragment_handler(
     };
     info!("itch.io returned the following scopes:\n{scopes:?}\n");
 
-    let profile_response = state.http_client
+    let profile_response = match state.http_client
         .get("https://api.itch.io/profile")
         .header("Authorization", format!("Bearer {access_token}"))
         .header("Accept", "application/json")
         .send()
-        .await.expect("Should be able to connect to itch.io");
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            warn!("Failed to fetch itch.io profile: {error}");
+            return (StatusCode::BAD_GATEWAY, "Failed to fetch itch.io profile");
+        }
+    };
 
     let profile_status = profile_response.status();
-    let profile_body = profile_response.text().await.expect("Should have a body containing the information we need");
+    let profile_body = match profile_response.text().await {
+        Ok(body) => body,
+        Err(error) => {
+            warn!("Failed to read itch.io profile response body: {error}");
+            return (StatusCode::BAD_GATEWAY, "Failed to read itch.io profile response");
+        }
+    };
+
+    if !profile_status.is_success() {
+        warn!(
+            "itch.io profile request returned non-success status {} with body: {}",
+            profile_status,
+            profile_body
+        );
+        return (StatusCode::BAD_GATEWAY, "itch.io profile request failed");
+    }
+
+    let profile = match serde_json::from_str::<ItchProfileResponse>(&profile_body) {
+        Ok(response) => response,
+        Err(error) => {
+            warn!(
+                "Failed to parse itch.io profile response: {error}. Raw body: {}",
+                profile_body
+            );
+            return (
+                StatusCode::BAD_GATEWAY,
+                "Invalid itch.io profile response format",
+            );
+        }
+    };
 
     info!("itch.io profile response status:\n{profile_status}\n");
     // we use the "id" field as a unique username
-    info!("itch.io profile response body:\n{profile_body}\n");
+    info!("itch.io profile response body:\n{profile:?}\n");
 
-    (StatusCode::OK, "You can return to the game client.")
+    if let None = state.pending_oauth_requests.submit_oauth_result(returned_state.secret(), profile.user).await {
+        (StatusCode::UNAUTHORIZED, "CSRF Token did not match!")
+    } else {
+        (StatusCode::OK, "You can return to the game client.")
+    }
 }
 
-async fn handle_connection(request: Request, server_state: ServerState, http_client: reqwest::Client) -> anyhow::Result<()> {
+async fn handle_connection(request: Request, server_state: ServerState, http_client: reqwest::Client, pending_oauth_requests: PendingOAuthRequests) -> anyhow::Result<()> {
     info!("WebTransport connection established: {}", request.url);
 
     // Accept the session.
     let response = ConnectResponse::OK;
     let session = request.respond(response).await?;
 
+    let (mut outgoing, mut incoming) = session.open_bi().await?;
+
+    // assign this peer to a lobby
+    // get oauth redirect url
+    let oauth_request = http_client.post(OAUTH_PUBLIC_BASE_URL.to_owned() + OAUTH_START_ENDPOINT)
+        .send()
+        .await?
+        .json::<OAuthRequest>()
+        .await?;
+    // wait until we receive an authorization response from itch.io's OAuth server
+    let oauth_receiver = pending_oauth_requests.get_receiver(&oauth_request.csrf_state).await;
+    let message = encode_message(&ReliableRpcServerMessage::ConnectionInit(oauth_request.authorize_url.into()))?;
+    outgoing.write_all(&message).await?;
+    // TODO: add timeout here
+    let oauth_answer = oauth_receiver.await?;
+    let addr = oauth_answer.id;
+
     // Insert the write part of this peer to the peer map.
     let (user_reliable_sender, mut user_reliable_receiver) = mpsc::unbounded_channel();
     let (user_unreliable_sender, mut user_unreliable_receiver) = mpsc::unbounded_channel();
 
-    // assign this peer to a lobby
-    let addr = session.remote_address();
     server_state
-        .connect_user(addr, user_reliable_sender.clone(), user_unreliable_sender)
+        .connect_user(addr, user_reliable_sender, user_unreliable_sender)
         .await?;
-
-    let (mut outgoing, mut incoming) = session.open_bi().await?;
 
     let server_state_clone = server_state.clone();
     let broadcast_incoming = tokio::spawn(async move {
@@ -260,11 +359,6 @@ async fn handle_connection(request: Request, server_state: ServerState, http_cli
         warn!("Receiver for user messages into outgoing stream stopped");
     });
 
-    // get oauth redirect url
-    let redirect_url_response = http_client.post(OAUTH_PUBLIC_BASE_URL.to_owned() + OAUTH_START_ENDPOINT).send().await?;
-    let redirect_url = redirect_url_response.text().await?;
-    let _ = user_reliable_sender.send(ReliableRpcServerMessage::ConnectionInit(redirect_url.into()));
-
     tokio::select! {
         _ = broadcast_incoming => {},
         _ = datagram_incoming => {},
@@ -328,6 +422,9 @@ async fn main() -> anyhow::Result<()> {
     let mut server: Server = server_builder.with_certificate(chain, key)?;
     info!("Listening on: {}", SERVER_HOSTING_ADDRESS);
 
+    let pending_oauth_requests = PendingOAuthRequests::new();
+
+    let pending_oauth_for_main_server = pending_oauth_requests.clone();
     let main_server_loop = tokio::spawn(async move {
         // spawn lobby actor
         let server_state = ServerState::new();
@@ -337,11 +434,15 @@ async fn main() -> anyhow::Result<()> {
 
         // http request client for oauth
         let http_client = reqwest::Client::new();
+
+        let pending_oauth_requests = pending_oauth_for_main_server;
+
         while let Some(session) = server.accept().await {
             let server_state = server_state.clone();
             let http_client = http_client.clone();
+            let pending_oauth_requests = pending_oauth_requests.clone();
             connection_set.spawn(async move {
-                if let Err(e) = handle_connection(session, server_state, http_client).await {
+                if let Err(e) = handle_connection(session, server_state, http_client, pending_oauth_requests).await {
                     warn!("Connection error: {e}");
                 }
             });
@@ -363,7 +464,8 @@ async fn main() -> anyhow::Result<()> {
 
         let app_state = OAuthCallbackState {
             oauth_client : client,
-            http_client: reqwest::Client::new()
+            http_client: reqwest::Client::new(),
+            pending_oauth_requests
         };
 
         let app = Router::new()

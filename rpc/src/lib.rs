@@ -89,7 +89,7 @@ pub enum UnreliableRpcClientMessage {
 }
 
 pub type LobbyId = Uuid;
-pub type UserId = SocketAddr;
+pub type UserId = u64;
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 #[rkyv(
