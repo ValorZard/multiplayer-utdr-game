@@ -1,4 +1,5 @@
 use anyhow::{Context, bail};
+use axum_server::tls_rustls::RustlsConfig;
 use axum::routing::post;
 use axum::{
     Router,
@@ -46,13 +47,7 @@ const SERVER_HOSTING_PORT: u16 = 12345;
 mod lobby;
 mod lobby_db;
 mod rps;
-const THIS_SERVER_IP: LazyLock<Ipv4Addr> = LazyLock::new(|| {
-    dotenvy::dotenv().expect(".env file should exist");
-    env::var("THIS_SERVER_IP")
-        .expect("Should be set in .env file")
-        .parse::<Ipv4Addr>()
-        .expect("Should be a valid IPv4 address")
-});
+
 const OAUTH_BIND_PORT: u16 = 34567;
 const OAUTH_START_ENDPOINT: &str = "/oauth/start";
 // this endpoint has to be set in itch.io itself when you create the OAuth thing on their end.
@@ -279,6 +274,8 @@ async fn handle_connection(
     http_client: reqwest::Client,
     pending_oauth_requests: PendingOAuthRequests,
 ) -> anyhow::Result<()> {
+    let this_server_ip = env::var("THIS_SERVER_IP")?
+        .parse::<Ipv4Addr>()?;
     info!("WebTransport connection established: {}", request.url);
 
     // Accept the session.
@@ -291,8 +288,8 @@ async fn handle_connection(
     // get oauth redirect url
     let oauth_request = http_client
         .post(format!(
-            "http://{}:{OAUTH_BIND_PORT}{OAUTH_START_ENDPOINT}",
-            THIS_SERVER_IP.to_string()
+            "https://{}:{OAUTH_BIND_PORT}{OAUTH_START_ENDPOINT}",
+            this_server_ip.to_string()
         ))
         .send()
         .await?
@@ -411,19 +408,19 @@ async fn handle_connection(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    info!("This server ip {:?}", THIS_SERVER_IP);
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    dotenvy::dotenv()?;
+    let this_server_ip = env::var("THIS_SERVER_IP")?
+        .parse::<Ipv4Addr>()?;
     tracing_subscriber::fmt::init();
     // Create the event loop and TCP listener we'll accept connections on.
-    let server_hosting_address = SocketAddr::new(
-        std::net::IpAddr::V4(THIS_SERVER_IP.clone()),
-        SERVER_HOSTING_PORT,
-    );
+    let server_hosting_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), SERVER_HOSTING_PORT);
     let server_builder =
         web_transport_quinn::ServerBuilder::new().with_addr(server_hosting_address);
 
     // Read the PEM certificate chain
     let tls_cert = env::var("TLS_CERT")?;
-    let chain = std::fs::File::open(tls_cert)?;
+    let chain = std::fs::File::open(&tls_cert)?;
     let mut chain = std::io::BufReader::new(chain);
 
     let chain: Vec<CertificateDer> = rustls_pemfile::certs(&mut chain)
@@ -434,7 +431,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Read the PEM private key
     let tls_key = env::var("TLS_KEY")?;
-    let keys = std::fs::File::open(tls_key)?;
+    let keys = std::fs::File::open(&tls_key)?;
 
     // Try to parse a PKCS#8 key
     // -----BEGIN PRIVATE KEY-----
@@ -446,6 +443,12 @@ async fn main() -> anyhow::Result<()> {
     info!("Listening on: {}", server_hosting_address);
 
     let pending_oauth_requests = PendingOAuthRequests::new();
+    let oauth_tls_cert = tls_cert.clone();
+    let oauth_tls_key = tls_key.clone();
+    let internal_oauth_http_client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .context("failed to construct internal OAuth HTTP client")?;
 
     let pending_oauth_for_main_server = pending_oauth_requests.clone();
     let main_server_loop = tokio::spawn(async move {
@@ -456,7 +459,7 @@ async fn main() -> anyhow::Result<()> {
         let mut connection_set = JoinSet::new();
 
         // http request client for oauth
-        let http_client = reqwest::Client::new();
+        let http_client = internal_oauth_http_client;
 
         let pending_oauth_requests = pending_oauth_for_main_server;
 
@@ -469,7 +472,7 @@ async fn main() -> anyhow::Result<()> {
                     handle_connection(session, server_state, http_client, pending_oauth_requests)
                         .await
                 {
-                    warn!("Connection error: {e}");
+                    warn!("Connection error: {e:#}");
                 }
             });
         }
@@ -482,10 +485,10 @@ async fn main() -> anyhow::Result<()> {
             .expect("Invalid authorization endpoint URL");
 
         let redirect_address = SocketAddr::new(
-            std::net::IpAddr::V4(THIS_SERVER_IP.clone()),
+            std::net::IpAddr::V4(this_server_ip.clone()),
             OAUTH_BIND_PORT,
         );
-        let redirect_url_raw = format!("http://{redirect_address}{REDIRECT_ENDPOINT}");
+        let redirect_url_raw = format!("https://{redirect_address}{REDIRECT_ENDPOINT}");
         let redirect_url =
             RedirectUrl::new(redirect_url_raw).expect("Invalid ITCH_REDIRECT_URI value");
         info!("Using itch OAuth redirect URI: {redirect_url}");
@@ -507,10 +510,13 @@ async fn main() -> anyhow::Result<()> {
             .route(FRAGMENT_CAPTURE_ENDPOINT, get(oauth_fragment_handler))
             .with_state(app_state);
 
-        let listener = tokio::net::TcpListener::bind(redirect_address).await?;
-        info!("OAuth callback server listening on {redirect_address}");
+        let bind_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), OAUTH_BIND_PORT);
+        let tls_config = RustlsConfig::from_pem_file(oauth_tls_cert, oauth_tls_key).await?;
+        info!("OAuth callback server listening on {bind_address}");
 
-        axum::serve(listener, app).await
+        axum_server::bind_rustls(bind_address, tls_config)
+            .serve(app.into_make_service())
+            .await
     });
 
     let _ = main_server_loop.await;
