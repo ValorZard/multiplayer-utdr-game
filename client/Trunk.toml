@@ -1,0 +1,3 @@
+[build]
+# Itch.io serves HTML games from a subpath, so assets must be relative.
+public_url = "."
