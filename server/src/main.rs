@@ -83,6 +83,7 @@ struct ItchProfileResponse {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 struct ItchUser {
     id: UserId,
+    username: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
