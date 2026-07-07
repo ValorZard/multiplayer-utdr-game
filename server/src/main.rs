@@ -17,6 +17,7 @@ use oauth2::{
     AuthUrl, ClientId, CsrfToken, EndpointSet, RedirectUrl, Scope, StandardRevocableToken,
 };
 use rpc::{HEADER_MESSAGE, ReliableRpcServerMessage, UserId, decode_message, encode_message};
+use std::sync::LazyLock;
 use std::{
     collections::HashMap,
     env,
@@ -40,15 +41,19 @@ use web_transport_quinn::generic::Session;
 
 #[deny(clippy::unwrap_used, clippy::panic)]
 
-const SERVER_HOSTING_ADDRESS: SocketAddr =
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 12345);
+const SERVER_HOSTING_PORT: u16 = 12345;
 
 mod lobby;
 mod lobby_db;
 mod rps;
-
-const OAUTH_BIND_ADDRESS: &str = "127.0.0.1:34567";
-const OAUTH_PUBLIC_BASE_URL: &str = "http://127.0.0.1:34567";
+const THIS_SERVER_IP: LazyLock<Ipv4Addr> = LazyLock::new(|| {
+    dotenvy::dotenv().expect(".env file should exist");
+    env::var("THIS_SERVER_IP")
+        .expect("Should be set in .env file")
+        .parse::<Ipv4Addr>()
+        .expect("Should be a valid IPv4 address")
+});
+const OAUTH_BIND_PORT: u16 = 34567;
 const OAUTH_START_ENDPOINT: &str = "/oauth/start";
 // this endpoint has to be set in itch.io itself when you create the OAuth thing on their end.
 const REDIRECT_ENDPOINT: &str = "/oauth/callback?a=b";
@@ -285,7 +290,10 @@ async fn handle_connection(
     // assign this peer to a lobby
     // get oauth redirect url
     let oauth_request = http_client
-        .post(OAUTH_PUBLIC_BASE_URL.to_owned() + OAUTH_START_ENDPOINT)
+        .post(format!(
+            "http://{}:{OAUTH_BIND_PORT}{OAUTH_START_ENDPOINT}",
+            THIS_SERVER_IP.to_string()
+        ))
         .send()
         .await?
         .json::<OAuthRequest>()
@@ -422,11 +430,15 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv()?;
+    info!("This server ip {:?}", THIS_SERVER_IP);
     tracing_subscriber::fmt::init();
     // Create the event loop and TCP listener we'll accept connections on.
+    let server_hosting_address = SocketAddr::new(
+        std::net::IpAddr::V4(THIS_SERVER_IP.clone()),
+        SERVER_HOSTING_PORT,
+    );
     let server_builder =
-        web_transport_quinn::ServerBuilder::new().with_addr(SERVER_HOSTING_ADDRESS);
+        web_transport_quinn::ServerBuilder::new().with_addr(server_hosting_address);
 
     let args = Args::parse();
 
@@ -450,7 +462,7 @@ async fn main() -> anyhow::Result<()> {
         .context("missing private key")?;
 
     let mut server: Server = server_builder.with_certificate(chain, key)?;
-    info!("Listening on: {}", SERVER_HOSTING_ADDRESS);
+    info!("Listening on: {}", server_hosting_address);
 
     let pending_oauth_requests = PendingOAuthRequests::new();
 
@@ -488,8 +500,14 @@ async fn main() -> anyhow::Result<()> {
         let auth_url = AuthUrl::new("https://itch.io/user/oauth".to_string())
             .expect("Invalid authorization endpoint URL");
 
-        let redirect_url = RedirectUrl::new(OAUTH_PUBLIC_BASE_URL.to_string() + REDIRECT_ENDPOINT)
-            .expect("Should be able to generate a proper redirect url");
+        let redirect_address = SocketAddr::new(
+            std::net::IpAddr::V4(THIS_SERVER_IP.clone()),
+            OAUTH_BIND_PORT,
+        );
+        let redirect_url_raw = format!("http://{redirect_address}{REDIRECT_ENDPOINT}");
+        let redirect_url =
+            RedirectUrl::new(redirect_url_raw).expect("Invalid ITCH_REDIRECT_URI value");
+        info!("Using itch OAuth redirect URI: {redirect_url}");
 
         // Set up the config for the itch.io OAuth2 process.
         let client = BasicClient::new(itch_client_id)
@@ -508,8 +526,8 @@ async fn main() -> anyhow::Result<()> {
             .route(FRAGMENT_CAPTURE_ENDPOINT, get(oauth_fragment_handler))
             .with_state(app_state);
 
-        let listener = tokio::net::TcpListener::bind(OAUTH_BIND_ADDRESS).await?;
-        info!("OAuth callback server listening on {OAUTH_BIND_ADDRESS}");
+        let listener = tokio::net::TcpListener::bind(redirect_address).await?;
+        info!("OAuth callback server listening on {redirect_address}");
 
         axum::serve(listener, app).await
     });
