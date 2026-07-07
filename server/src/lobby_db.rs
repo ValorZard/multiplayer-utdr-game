@@ -571,7 +571,7 @@ mod tests {
     async fn server_state_reuses_waiting_lobby_after_disconnect() {
         let server_state = ServerState::new();
 
-        let left_addr =  3001;
+        let left_addr = 3001;
         let right_addr = 3002;
         let replacement_left_addr = 3003;
         let replacement_right_addr = 3004;

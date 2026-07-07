@@ -1,4 +1,5 @@
 use anyhow::{Context, bail};
+use axum::routing::post;
 use axum::{
     Router,
     extract::{Query, State},
@@ -8,9 +9,14 @@ use axum::{
 };
 use clap::Parser;
 use futures_util::StreamExt;
-use oauth2::basic::{BasicClient, BasicErrorResponse, BasicRevocationErrorResponse, BasicTokenIntrospectionResponse, BasicTokenResponse};
-use oauth2::{AuthUrl, ClientId, CsrfToken, EndpointSet, RedirectUrl, Scope, StandardRevocableToken};
-use rpc::{HEADER_MESSAGE, decode_message, encode_message, ReliableRpcServerMessage, UserId};
+use oauth2::basic::{
+    BasicClient, BasicErrorResponse, BasicRevocationErrorResponse, BasicTokenIntrospectionResponse,
+    BasicTokenResponse,
+};
+use oauth2::{
+    AuthUrl, ClientId, CsrfToken, EndpointSet, RedirectUrl, Scope, StandardRevocableToken,
+};
+use rpc::{HEADER_MESSAGE, ReliableRpcServerMessage, UserId, decode_message, encode_message};
 use std::{
     collections::HashMap,
     env,
@@ -18,7 +24,6 @@ use std::{
     path,
     sync::Arc,
 };
-use axum::routing::post;
 use tokio::{
     io::AsyncReadExt,
     sync::{Mutex, mpsc, oneshot},
@@ -37,7 +42,6 @@ use web_transport_quinn::generic::Session;
 
 const SERVER_HOSTING_ADDRESS: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 12345);
-
 
 mod lobby;
 mod lobby_db;
@@ -70,7 +74,6 @@ const FRAGMENT_FORWARDER_HTML: &str = r#"<!doctype html>
 </body>
 </html>
 "#;
-
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 struct ItchProfileResponse {
@@ -105,17 +108,20 @@ struct PendingOAuthRequests {
 impl PendingOAuthRequests {
     fn new() -> Self {
         Self {
-            map: Arc::new(tokio::sync::Mutex::new(HashMap::new()))
+            map: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
     async fn get_receiver(&self, csrf_token: &CsrfToken) -> oneshot::Receiver<ItchUser> {
         let (sender, receiver) = oneshot::channel();
-        self.map.lock().await.insert(csrf_token.secret().clone(), sender);
+        self.map
+            .lock()
+            .await
+            .insert(csrf_token.secret().clone(), sender);
         receiver
     }
 
-    async fn submit_oauth_result(&self, csrf: &str, oauth_answer: ItchUser) -> Option<()>{
+    async fn submit_oauth_result(&self, csrf: &str, oauth_answer: ItchUser) -> Option<()> {
         let mut map = self.map.lock().await;
         let sender = map.remove(csrf)?;
         sender.send(oauth_answer).ok()
@@ -123,16 +129,23 @@ impl PendingOAuthRequests {
 }
 
 #[derive(Clone)]
-struct OAuthCallbackState{
-    oauth_client: oauth2::Client<BasicErrorResponse, BasicTokenResponse, BasicTokenIntrospectionResponse, StandardRevocableToken, BasicRevocationErrorResponse, EndpointSet>,
-    http_client : reqwest::Client,
+struct OAuthCallbackState {
+    oauth_client: oauth2::Client<
+        BasicErrorResponse,
+        BasicTokenResponse,
+        BasicTokenIntrospectionResponse,
+        StandardRevocableToken,
+        BasicRevocationErrorResponse,
+        EndpointSet,
+    >,
+    http_client: reqwest::Client,
     pending_oauth_requests: PendingOAuthRequests,
 }
 
-
 async fn start_oauth(State(state): State<OAuthCallbackState>) -> impl IntoResponse {
     // Generate the authorization URL to which we'll redirect the user.
-    let oauth_request : OAuthRequest = state.oauth_client
+    let oauth_request: OAuthRequest = state
+        .oauth_client
         .authorize_url(CsrfToken::new_random)
         .use_implicit_flow()
         .add_scope(Scope::new("profile:me".to_string()))
@@ -191,7 +204,8 @@ async fn oauth_fragment_handler(
     };
     info!("itch.io returned the following scopes:\n{scopes:?}\n");
 
-    let profile_response = match state.http_client
+    let profile_response = match state
+        .http_client
         .get("https://api.itch.io/profile")
         .header("Authorization", format!("Bearer {access_token}"))
         .header("Accept", "application/json")
@@ -210,15 +224,17 @@ async fn oauth_fragment_handler(
         Ok(body) => body,
         Err(error) => {
             warn!("Failed to read itch.io profile response body: {error}");
-            return (StatusCode::BAD_GATEWAY, "Failed to read itch.io profile response");
+            return (
+                StatusCode::BAD_GATEWAY,
+                "Failed to read itch.io profile response",
+            );
         }
     };
 
     if !profile_status.is_success() {
         warn!(
             "itch.io profile request returned non-success status {} with body: {}",
-            profile_status,
-            profile_body
+            profile_status, profile_body
         );
         return (StatusCode::BAD_GATEWAY, "itch.io profile request failed");
     }
@@ -241,14 +257,23 @@ async fn oauth_fragment_handler(
     // we use the "id" field as a unique username
     info!("itch.io profile response body:\n{profile:?}\n");
 
-    if let None = state.pending_oauth_requests.submit_oauth_result(returned_state.secret(), profile.user).await {
+    if let None = state
+        .pending_oauth_requests
+        .submit_oauth_result(returned_state.secret(), profile.user)
+        .await
+    {
         (StatusCode::UNAUTHORIZED, "CSRF Token did not match!")
     } else {
         (StatusCode::OK, "You can return to the game client.")
     }
 }
 
-async fn handle_connection(request: Request, server_state: ServerState, http_client: reqwest::Client, pending_oauth_requests: PendingOAuthRequests) -> anyhow::Result<()> {
+async fn handle_connection(
+    request: Request,
+    server_state: ServerState,
+    http_client: reqwest::Client,
+    pending_oauth_requests: PendingOAuthRequests,
+) -> anyhow::Result<()> {
     info!("WebTransport connection established: {}", request.url);
 
     // Accept the session.
@@ -259,14 +284,19 @@ async fn handle_connection(request: Request, server_state: ServerState, http_cli
 
     // assign this peer to a lobby
     // get oauth redirect url
-    let oauth_request = http_client.post(OAUTH_PUBLIC_BASE_URL.to_owned() + OAUTH_START_ENDPOINT)
+    let oauth_request = http_client
+        .post(OAUTH_PUBLIC_BASE_URL.to_owned() + OAUTH_START_ENDPOINT)
         .send()
         .await?
         .json::<OAuthRequest>()
         .await?;
     // wait until we receive an authorization response from itch.io's OAuth server
-    let oauth_receiver = pending_oauth_requests.get_receiver(&oauth_request.csrf_state).await;
-    let message = encode_message(&ReliableRpcServerMessage::ConnectionInit(oauth_request.authorize_url.into()))?;
+    let oauth_receiver = pending_oauth_requests
+        .get_receiver(&oauth_request.csrf_state)
+        .await;
+    let message = encode_message(&ReliableRpcServerMessage::ConnectionInit(
+        oauth_request.authorize_url.into(),
+    ))?;
     outgoing.write_all(&message).await?;
     // TODO: add timeout here
     let oauth_answer = oauth_receiver.await?;
@@ -442,7 +472,10 @@ async fn main() -> anyhow::Result<()> {
             let http_client = http_client.clone();
             let pending_oauth_requests = pending_oauth_requests.clone();
             connection_set.spawn(async move {
-                if let Err(e) = handle_connection(session, server_state, http_client, pending_oauth_requests).await {
+                if let Err(e) =
+                    handle_connection(session, server_state, http_client, pending_oauth_requests)
+                        .await
+                {
                     warn!("Connection error: {e}");
                 }
             });
@@ -450,12 +483,13 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let oauth_server_loop: JoinHandle<std::io::Result<()>> = tokio::spawn(async move {
-        let itch_client_id = ClientId::new(env::var("ITCH_CLIENT_ID").expect("Should be set in .env file"));
+        let itch_client_id =
+            ClientId::new(env::var("ITCH_CLIENT_ID").expect("Should be set in .env file"));
         let auth_url = AuthUrl::new("https://itch.io/user/oauth".to_string())
             .expect("Invalid authorization endpoint URL");
 
-        let redirect_url =
-            RedirectUrl::new(OAUTH_PUBLIC_BASE_URL.to_string() + REDIRECT_ENDPOINT).expect("Should be able to generate a proper redirect url");
+        let redirect_url = RedirectUrl::new(OAUTH_PUBLIC_BASE_URL.to_string() + REDIRECT_ENDPOINT)
+            .expect("Should be able to generate a proper redirect url");
 
         // Set up the config for the itch.io OAuth2 process.
         let client = BasicClient::new(itch_client_id)
@@ -463,9 +497,9 @@ async fn main() -> anyhow::Result<()> {
             .set_redirect_uri(redirect_url);
 
         let app_state = OAuthCallbackState {
-            oauth_client : client,
+            oauth_client: client,
             http_client: reqwest::Client::new(),
-            pending_oauth_requests
+            pending_oauth_requests,
         };
 
         let app = Router::new()
