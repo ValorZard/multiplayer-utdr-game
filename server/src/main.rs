@@ -409,25 +409,6 @@ async fn handle_connection(
     Ok(())
 }
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    #[arg(short, long, default_value = "0.0.0.0:12345")]
-    addr: std::net::SocketAddr,
-
-    /// Use the certificates at this path, encoded as PEM.
-    #[arg(long)]
-    pub tls_cert: path::PathBuf,
-
-    /// Use the private key at this path, encoded as PEM.
-    #[arg(long)]
-    pub tls_key: path::PathBuf,
-
-    /// Optional WebTransport subprotocol to support.
-    #[arg(long)]
-    pub protocol: Option<String>,
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     info!("This server ip {:?}", THIS_SERVER_IP);
@@ -440,10 +421,9 @@ async fn main() -> anyhow::Result<()> {
     let server_builder =
         web_transport_quinn::ServerBuilder::new().with_addr(server_hosting_address);
 
-    let args = Args::parse();
-
     // Read the PEM certificate chain
-    let chain = std::fs::File::open(args.tls_cert)?;
+    let tls_cert = env::var("TLS_CERT")?;
+    let chain = std::fs::File::open(tls_cert)?;
     let mut chain = std::io::BufReader::new(chain);
 
     let chain: Vec<CertificateDer> = rustls_pemfile::certs(&mut chain)
@@ -453,7 +433,8 @@ async fn main() -> anyhow::Result<()> {
     anyhow::ensure!(!chain.is_empty(), "could not find certificate");
 
     // Read the PEM private key
-    let keys = std::fs::File::open(args.tls_key).expect("failed to open key file");
+    let tls_key = env::var("TLS_KEY")?;
+    let keys = std::fs::File::open(tls_key)?;
 
     // Try to parse a PKCS#8 key
     // -----BEGIN PRIVATE KEY-----
