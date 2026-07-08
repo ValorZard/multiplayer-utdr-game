@@ -69,7 +69,6 @@ pub enum ReliableRpcClientMessage {
     TurnInput(TurnInput),
     ContinueRound(YesOrNo),
     JoinServer,
-    Heartbeat,
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]

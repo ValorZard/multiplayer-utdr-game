@@ -212,8 +212,6 @@ async fn main() {
 
     // timer stuff
     let mut previous_time = OffsetDateTime::now_utc();
-    let mut heartbeat_timer = Duration::new(0, 0);
-    let max_time_for_heartbeat = Duration::new(1, 0);
     // deltarune runs on 30 TPS
     let mut game_time_step_timer = Duration::new(0, 0);
 
@@ -235,13 +233,6 @@ async fn main() {
     while window.render_2d(&mut scene, &mut camera).await {
         let current_time = OffsetDateTime::now_utc();
         let time_since_last_frame = current_time - previous_time;
-        heartbeat_timer += time_since_last_frame;
-        if heartbeat_timer >= max_time_for_heartbeat {
-            heartbeat_timer = Duration::new(0, 0);
-            if let Some(client_rpc_sender) = reliable_client_rpc_sender.clone() {
-                let _ = client_rpc_sender.unbounded_send(ReliableRpcClientMessage::Heartbeat);
-            }
-        }
         previous_time = current_time;
         // set lobby state to empty if connection lost
         if let Some(ref mut connection_finished_receiver) = connection_finished_receiver
