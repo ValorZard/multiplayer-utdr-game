@@ -2,3 +2,7 @@ target
 /.idea
 *.pem
 *.env
+*.db
+*.db-shm
+*.db-wal
+*.sqlite

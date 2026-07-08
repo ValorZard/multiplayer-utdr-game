@@ -7,7 +7,7 @@ The connection setup for a client looks like this:
 2. Server sends back ConnectionAuthentication with the authentication url, and waits for the client to finish.
 (There should be like a timeout of like a minute before the server disconnects you, sending a message like Disconnect(Reason))
 3. Once client finishes authenticating with itch.io, the server then send a ConnectionInit message, containing basic connection information.
-The server will also check with the postgres database if this specific user has already connected, and send back any important data the client needs to know with the ConnectionInit message. (Or, we could just say "Nice to see you again, [username!]")
+The server will also check with the sqlite database if this specific user has already connected, and send back any important data the client needs to know with the ConnectionInit message. (Or, we could just say "Nice to see you again, [username!]")
 4. Then, the server will put the client in the  "searching for lobby" queue 
 
 When a user joins the "searching for lobby" queue, one of two things will happen.

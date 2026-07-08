@@ -27,6 +27,7 @@ use std::{
     env,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path,
+    str::FromStr,
     sync::Arc,
 };
 use tokio::{
@@ -38,9 +39,8 @@ use web_transport_quinn::{Request, Server, proto::ConnectResponse};
 
 use crate::lobby_db::{ServerState, UserReliableRPCMessage, UserUnreliableRPCMessage};
 use rustls::pki_types::CertificateDer;
-use sqlx::migrate::MigrateDatabase;
-use sqlx::postgres::PgPoolOptions;
-use sqlx::{PgPool, Postgres};
+use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use url::Url;
@@ -280,7 +280,7 @@ async fn handle_connection(
     server_state: ServerState,
     http_client: reqwest::Client,
     pending_oauth_requests: PendingOAuthRequests,
-    pool: PgPool,
+    pool: SqlitePool,
 ) -> anyhow::Result<()> {
     let this_server_ip = env::var("THIS_SERVER_IP")?.parse::<Ipv4Addr>()?;
     info!("WebTransport connection established: {}", request.url);
@@ -317,7 +317,7 @@ async fn handle_connection(
 
     info!("Inserting user {itch_id} into database");
     let insert_result = sqlx::query(
-        "INSERT INTO users (id, username) VALUES ($1, $2)
+        "INSERT INTO users (id, username) VALUES (?, ?)
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(itch_id)
@@ -330,11 +330,11 @@ async fn handle_connection(
     if already_exists {
         sqlx::query(
             "UPDATE users
-             SET username = $2
-             WHERE id = $1",
+               SET username = ?
+               WHERE id = ?",
         )
-        .bind(itch_id)
         .bind(&oauth_answer.username)
+                .bind(itch_id)
         .execute(&pool)
         .await?;
         info!(
@@ -458,15 +458,10 @@ async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     dotenvy::dotenv()?;
     let database_url = env::var("DATABASE_URL").context("DATABASE_URL missing")?;
-    // check if database has been created yet, and if not, create it
-    // this is really only useful for debugging, but still, it couldn't hurt
-    // TODO: Check if this is safe?
-    if !Postgres::database_exists(&database_url).await? {
-        warn!("The database we need does not exist, creating it now...");
-        Postgres::create_database(&database_url).await?;
-    } else {
-        info!("Database at {database_url} exists!");
-    }
+    let sqlite_options = SqliteConnectOptions::from_str(&database_url)
+        .context("invalid DATABASE_URL for sqlite")?
+        .create_if_missing(true);
+    info!("Configured sqlite database at {database_url}");
     let this_server_ip = env::var("THIS_SERVER_IP")?.parse::<Ipv4Addr>()?;
     // Create the event loop and TCP listener we'll accept connections on.
     let server_hosting_address =
@@ -519,11 +514,11 @@ async fn main() -> anyhow::Result<()> {
 
         let pending_oauth_requests = pending_oauth_for_main_server;
 
-        let db_pool = PgPoolOptions::new()
+        let db_pool = SqlitePoolOptions::new()
             .max_connections(10)
-            .connect(&database_url)
+            .connect_with(sqlite_options)
             .await
-            .expect("should be able to connect to postgres");
+            .expect("should be able to connect to sqlite");
 
         sqlx::migrate!()
             .run(&db_pool)
