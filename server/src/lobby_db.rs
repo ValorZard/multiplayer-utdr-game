@@ -570,7 +570,7 @@ mod tests {
     use tokio::time::timeout;
 
     #[tokio::test]
-    async fn server_state_reuses_waiting_lobby_after_disconnect() {
+    async fn server_state_reuses_waiting_lobby_after_disconnect() -> anyhow::Result<()> {
         let server_state = ServerState::new();
 
         let left_addr = 3001;
@@ -584,82 +584,73 @@ mod tests {
         // by default the lobby gets created with the left side already filled
         server_state
             .connect_user(left_addr, left_reliable_sender, left_unreliable_sender)
-            .await
-            .expect("left connect should succeed");
+            .await?;
 
         server_state
             .handle_user_reliable_rpc(UserReliableRPCMessage {
                 message: ReliableRpcClientMessage::JoinServer,
                 send_addr: left_addr,
             })
-            .await
-            .expect("left join should succeed");
+            .await?;
 
-        let left_connection_init = timeout(Duration::from_secs(1), left_reliable_receiver.recv())
-            .await
-            .expect("left lobby init should arrive in time");
-        let left_user_id = match left_connection_init {
+        let left_connection_init =
+            timeout(Duration::from_secs(1), left_reliable_receiver.recv()).await?;
+        match left_connection_init {
             Some(ReliableRpcServerMessage::ConnectionInit(user_id)) => {
-                if left_addr == user_id {
-                    user_id
-                } else {
-                    panic!("unexpected left user id init: {user_id:?}")
+                if left_addr != user_id {
+                    bail!("unexpected left user id init: {user_id:?}")
                 }
             }
-            other => panic!("unexpected left connection init: {other:?}"),
-        };
+            other => bail!("unexpected left connection init: {other:?}"),
+        }
 
-        let left_lobby_init = timeout(Duration::from_secs(1), left_reliable_receiver.recv())
-            .await
-            .expect("left lobby init should arrive in time");
+        let left_lobby_init =
+            timeout(Duration::from_secs(1), left_reliable_receiver.recv()).await?;
         let lobby_id = match left_lobby_init {
-            Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Left, lobby_id)) => lobby_id,
-            other => panic!("unexpected left lobby init: {other:?}"),
-        };
+            Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Left, lobby_id)) => {
+                anyhow::Ok(lobby_id)
+            }
+            other => bail!("unexpected left lobby init: {other:?}"),
+        }?;
 
         let (right_reliable_sender, mut right_reliable_receiver) = mpsc::unbounded_channel();
         let (right_unreliable_sender, right_unreliable_receiver) = mpsc::unbounded_channel();
         server_state
             .connect_user(right_addr, right_reliable_sender, right_unreliable_sender)
-            .await
-            .expect("right connect should succeed");
+            .await?;
 
         server_state
             .handle_user_reliable_rpc(UserReliableRPCMessage {
                 message: ReliableRpcClientMessage::JoinServer,
                 send_addr: right_addr,
             })
-            .await
-            .expect("right join should succeed");
+            .await?;
 
-        let right_connection_init = timeout(Duration::from_secs(1), right_reliable_receiver.recv())
-            .await
-            .expect("left lobby init should arrive in time");
-        let right_user_id = match right_connection_init {
+        let right_connection_init =
+            timeout(Duration::from_secs(1), right_reliable_receiver.recv()).await?;
+        match right_connection_init {
             Some(ReliableRpcServerMessage::ConnectionInit(user_id)) => {
-                if right_addr == user_id {
-                    user_id
-                } else {
-                    panic!("unexpected left user id init: {user_id:?}")
+                if right_addr != user_id {
+                    bail!("unexpected left user id init: {user_id:?}")
                 }
             }
-            other => panic!("unexpected left connection init: {other:?}"),
-        };
+            other => bail!("unexpected left connection init: {other:?}"),
+        }
 
-        let right_lobby_init = timeout(Duration::from_secs(1), right_reliable_receiver.recv())
-            .await
-            .expect("left lobby init should arrive in time");
-        let lobby_id = match right_lobby_init {
-            Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Right, lobby_id)) => lobby_id,
-            other => panic!("unexpected left lobby init: {other:?}"),
-        };
+        let right_lobby_init =
+            timeout(Duration::from_secs(1), right_reliable_receiver.recv()).await?;
+        match right_lobby_init {
+            Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Right, recv_lobby_id)) => {
+                if recv_lobby_id != lobby_id {
+                    bail!("unexpected right lobby init: {lobby_id:?}")
+                }
+            }
+            other => bail!("unexpected left lobby init: {other:?}"),
+        }
 
         // disconnect left user so now lobby has to fill in left user
 
-        server_state
-            .disconnect_user(left_addr)
-            .await
-            .expect("right disconnect should succeed");
+        server_state.disconnect_user(left_addr).await?;
 
         // drop old left receivers
         drop(left_reliable_receiver);
@@ -690,51 +681,46 @@ mod tests {
                 replacement_left_reliable_sender,
                 replacement_left_unreliable_sender,
             )
-            .await
-            .expect("replacement connect should succeed");
+            .await?;
 
         server_state
             .handle_user_reliable_rpc(UserReliableRPCMessage {
                 message: ReliableRpcClientMessage::JoinServer,
                 send_addr: replacement_left_addr,
             })
-            .await
-            .expect("replacement join should succeed");
+            .await?;
 
         let left_connection_init = timeout(
             Duration::from_secs(1),
             replacement_left_reliable_receiver.recv(),
         )
-        .await
-        .expect("left lobby init should arrive in time");
-        let left_user_id = match left_connection_init {
+        .await?;
+        match left_connection_init {
             Some(ReliableRpcServerMessage::ConnectionInit(user_id)) => {
-                if replacement_left_addr == user_id {
-                    user_id
-                } else {
-                    panic!("unexpected left user id init: {user_id:?}")
+                if replacement_left_addr != user_id {
+                    bail!("unexpected left user id init: {user_id:?}")
                 }
             }
-            other => panic!("unexpected left connection init: {other:?}"),
-        };
+            other => bail!("unexpected left connection init: {other:?}"),
+        }
 
         let left_lobby_init = timeout(
             Duration::from_secs(1),
             replacement_left_reliable_receiver.recv(),
         )
-        .await
-        .expect("left lobby init should arrive in time");
-        let lobby_id = match left_lobby_init {
-            Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Left, lobby_id)) => lobby_id,
-            other => panic!("unexpected left lobby init: {other:?}"),
+        .await?;
+        match left_lobby_init {
+            Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Left, recv_lobby_id)) => {
+                if recv_lobby_id != lobby_id {
+                    bail!("unexpected left lobby init: {lobby_id:?}")
+                }
+            }
+            other => bail!("unexpected left lobby init: {other:?}"),
         };
 
         // disconnect right user so now lobby has to fill in right user
 
-        server_state
-            .disconnect_user(right_addr)
-            .await
-            .expect("right disconnect should succeed");
+        server_state.disconnect_user(right_addr).await?;
 
         // drop old right receivers
         drop(right_reliable_receiver);
@@ -770,56 +756,50 @@ mod tests {
                 replacement_right_reliable_sender,
                 replacement_right_unreliable_sender,
             )
-            .await
-            .expect("replacement connect should succeed");
+            .await?;
 
         server_state
             .handle_user_reliable_rpc(UserReliableRPCMessage {
                 message: ReliableRpcClientMessage::JoinServer,
                 send_addr: replacement_right_addr,
             })
-            .await
-            .expect("replacement join should succeed");
+            .await?;
 
         let right_connection_init = timeout(
             Duration::from_secs(1),
             replacement_right_reliable_receiver.recv(),
         )
-        .await
-        .expect("left lobby init should arrive in time");
-        let right_user_id = match right_connection_init {
+        .await?;
+        match right_connection_init {
             Some(ReliableRpcServerMessage::ConnectionInit(user_id)) => {
-                if replacement_right_addr == user_id {
-                    user_id
-                } else {
-                    panic!("unexpected left user id init: {user_id:?}")
+                if replacement_right_addr != user_id {
+                    bail!("unexpected left user id init: {user_id:?}")
                 }
             }
-            other => panic!("unexpected left connection init: {other:?}"),
-        };
+            other => bail!("unexpected left connection init: {other:?}"),
+        }
 
         let right_lobby_init = timeout(
             Duration::from_secs(1),
             replacement_right_reliable_receiver.recv(),
         )
-        .await
-        .expect("left lobby init should arrive in time");
-        let lobby_id = match right_lobby_init {
-            Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Right, lobby_id)) => lobby_id,
-            other => panic!("unexpected left lobby init: {other:?}"),
-        };
+        .await?;
+        match right_lobby_init {
+            Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Right, recv_lobby_id)) => {
+                if recv_lobby_id != lobby_id {
+                    bail!("unexpected right lobby init: {lobby_id:?}")
+                }
+            }
+            other => bail!("unexpected left lobby init: {other:?}"),
+        }
 
         // disconnect both clients now and check that lobby is now gone
-        server_state
-            .disconnect_user(replacement_left_addr)
-            .await
-            .expect("left replacement disconnect should succeed");
-        server_state
-            .disconnect_user(replacement_right_addr)
-            .await
-            .expect("right disconnect should succeed");
+        server_state.disconnect_user(replacement_left_addr).await?;
+        server_state.disconnect_user(replacement_right_addr).await?;
 
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert_eq!(server_state.check_if_lobby_exists(lobby_id).await, false);
+
+        Ok(())
     }
 }
