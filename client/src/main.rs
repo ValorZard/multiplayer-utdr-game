@@ -214,6 +214,8 @@ async fn main() {
     let mut previous_time = OffsetDateTime::now_utc();
     // deltarune runs on 30 TPS
     let mut game_time_step_timer = Duration::new(0, 0);
+    // max time accumulated between frames should be 0.25 seconds
+    let max_time_between_frames = Duration::milliseconds(250);
 
     // input state
     let mut input = rpc::MoveInputState::default();
@@ -232,7 +234,14 @@ async fn main() {
     let mut direct_connect_addr = String::new();
     while window.render_2d(&mut scene, &mut camera).await {
         let current_time = OffsetDateTime::now_utc();
-        let time_since_last_frame = current_time - previous_time;
+        let time_since_last_frame = {
+            let frame_time = current_time - previous_time;
+            if frame_time > max_time_between_frames {
+                max_time_between_frames
+            } else {
+                frame_time
+            }
+        };
         previous_time = current_time;
         // set lobby state to empty if connection lost
         if let Some(ref mut connection_finished_receiver) = connection_finished_receiver
