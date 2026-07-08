@@ -38,8 +38,9 @@ use web_transport_quinn::{Request, Server, proto::ConnectResponse};
 
 use crate::lobby_db::{ServerState, UserReliableRPCMessage, UserUnreliableRPCMessage};
 use rustls::pki_types::CertificateDer;
-use sqlx::PgPool;
+use sqlx::migrate::MigrateDatabase;
 use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, Postgres};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use url::Url;
@@ -453,11 +454,20 @@ async fn handle_connection(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
     let _ = rustls::crypto::ring::default_provider().install_default();
     dotenvy::dotenv()?;
     let database_url = env::var("DATABASE_URL").context("DATABASE_URL missing")?;
+    // check if database has been created yet, and if not, create it
+    // this is really only useful for debugging, but still, it couldn't hurt
+    // TODO: Check if this is safe?
+    if !Postgres::database_exists(&database_url).await? {
+        warn!("The database we need does not exist, creating it now...");
+        Postgres::create_database(&database_url).await?;
+    } else {
+        info!("Database at {database_url} exists!");
+    }
     let this_server_ip = env::var("THIS_SERVER_IP")?.parse::<Ipv4Addr>()?;
-    tracing_subscriber::fmt::init();
     // Create the event loop and TCP listener we'll accept connections on.
     let server_hosting_address =
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), SERVER_HOSTING_PORT);
