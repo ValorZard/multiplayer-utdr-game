@@ -505,6 +505,11 @@ async fn main() -> anyhow::Result<()> {
             .await
             .expect("should be able to connect to postgres");
 
+        sqlx::migrate!()
+            .run(&db_pool)
+            .await
+            .expect("Migrations should succeed.");
+
         while let Some(session) = server.accept().await {
             let server_state = server_state.clone();
             let http_client = http_client.clone();
