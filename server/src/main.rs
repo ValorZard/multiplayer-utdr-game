@@ -299,7 +299,7 @@ async fn handle_connection(
     let oauth_receiver = pending_oauth_requests
         .get_receiver(&oauth_request.csrf_state)
         .await;
-    let message = encode_message(&ReliableRpcServerMessage::ConnectionInit(
+    let message = encode_message(&ReliableRpcServerMessage::ConnectionAuthentication(
         oauth_request.authorize_url.into(),
     ))?;
     outgoing.write_all(&message).await?;

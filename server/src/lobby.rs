@@ -99,7 +99,6 @@ impl LobbySession {
     ) -> Self {
         let _ = left_side.1.send(ReliableRpcServerMessage::LobbyInit(
             PlayerSide::Left,
-            left_side.0,
             id,
         ));
         Self {
@@ -129,7 +128,6 @@ impl LobbySession {
         if self.left_side.is_none() {
             let _ = new_player.1.send(ReliableRpcServerMessage::LobbyInit(
                 PlayerSide::Left,
-                new_player.0,
                 self.id,
             ));
             self.left_side = Some(new_player);
@@ -142,7 +140,6 @@ impl LobbySession {
         } else if self.right_side.is_none() {
             let _ = new_player.1.send(ReliableRpcServerMessage::LobbyInit(
                 PlayerSide::Right,
-                new_player.0,
                 self.id,
             ));
             self.right_side = Some(new_player);

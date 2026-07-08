@@ -69,7 +69,6 @@ pub enum ReliableRpcClientMessage {
     TurnInput(TurnInput),
     ContinueRound(YesOrNo),
     JoinServer,
-    JoinLobby,
     Heartbeat,
 }
 
@@ -186,8 +185,9 @@ pub enum ReliableRpcServerMessage {
         right_side_score: ScoreSize,
     },
     // send oauth url for client to open up
-    ConnectionInit(RpcUrl),
-    LobbyInit(PlayerSide, UserId, LobbyId),
+    ConnectionAuthentication(RpcUrl),
+    ConnectionInit(UserId),
+    LobbyInit(PlayerSide, LobbyId),
     LobbyState(LobbyState),
     Text(String),
 }

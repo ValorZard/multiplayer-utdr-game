@@ -80,7 +80,7 @@ fn reset_connection_and_join_lobby(
     let _ = reliable_client_rpc_sender
         .as_ref()
         .expect("should be set")
-        .unbounded_send(ReliableRpcClientMessage::JoinLobby);
+        .unbounded_send(ReliableRpcClientMessage::JoinServer);
 }
 
 #[derive(Debug)]
@@ -300,14 +300,16 @@ async fn main() {
                     ui_game_state.remote_right_score = right_side_score;
                     ui_game_state.current_game_state = Some(state);
                 }
-                ReliableRpcServerMessage::ConnectionInit(oauth_url) => {
+                ReliableRpcServerMessage::ConnectionAuthentication(oauth_url) => {
                     if webbrowser::open(&oauth_url.0).is_err() {
                         log!("{:?}", oauth_url);
                     }
                 }
-                ReliableRpcServerMessage::LobbyInit(side, user_id, lobby_id) => {
+                ReliableRpcServerMessage::ConnectionInit(user_id) => {
                     ui_game_state.reset();
                     ui_game_state.user_id = Some(user_id);
+                }
+                ReliableRpcServerMessage::LobbyInit(side, lobby_id) => {
                     ui_game_state.lobby_id = Some(lobby_id);
                     ui_game_state.player_side = Some(side);
                 }
