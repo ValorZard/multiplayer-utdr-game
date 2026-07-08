@@ -17,7 +17,10 @@ use oauth2::basic::{
 use oauth2::{
     AuthUrl, ClientId, CsrfToken, EndpointSet, RedirectUrl, Scope, StandardRevocableToken,
 };
-use rpc::{HEADER_MESSAGE, ReliableRpcServerMessage, UserId, decode_message, encode_message};
+use rpc::{
+    ConnectionInitMessage, HEADER_MESSAGE, ReliableRpcServerMessage, UserId, decode_message,
+    encode_message,
+};
 use std::sync::LazyLock;
 use std::{
     collections::HashMap,
@@ -322,7 +325,7 @@ async fn handle_connection(
     .await?;
 
     let already_exists = insert_result.rows_affected() == 0;
-
+    let init_message;
     if already_exists {
         sqlx::query(
             "UPDATE users
@@ -337,8 +340,10 @@ async fn handle_connection(
             "Updating already existing user {itch_id} with username {}",
             oauth_answer.username
         );
+        init_message = ConnectionInitMessage::WelcomeBack;
     } else {
         info!("Created new user {itch_id} in database!");
+        init_message = ConnectionInitMessage::FirstTime;
     }
     let addr = oauth_answer.id;
 
@@ -347,7 +352,12 @@ async fn handle_connection(
     let (user_unreliable_sender, mut user_unreliable_receiver) = mpsc::unbounded_channel();
 
     server_state
-        .connect_user(addr, user_reliable_sender, user_unreliable_sender)
+        .connect_user(
+            addr,
+            init_message,
+            user_reliable_sender,
+            user_unreliable_sender,
+        )
         .await?;
 
     let server_state_clone = server_state.clone();

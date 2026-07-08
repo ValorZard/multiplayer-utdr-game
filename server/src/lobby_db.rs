@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail};
 use rpc::{
-    LobbyId, PlayerSide, RPSGameState, ReliableRpcClientMessage, ReliableRpcServerMessage,
-    UnreliableRpcClientMessage, UserId, YesOrNo,
+    ConnectionInitMessage, LobbyId, PlayerSide, RPSGameState, ReliableRpcClientMessage,
+    ReliableRpcServerMessage, UnreliableRpcClientMessage, UserId, YesOrNo,
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
@@ -78,6 +78,7 @@ impl ServerStateInner {
     fn connect_user(
         &mut self,
         addr: UserId,
+        connection_init_message: ConnectionInitMessage,
         reliable_sender: UserReliableSender,
         unreliable_sender: UserUnreliableSender,
     ) -> anyhow::Result<()> {
@@ -85,7 +86,10 @@ impl ServerStateInner {
             bail!("Can't double connect a user to the server");
         }
 
-        reliable_sender.send(ReliableRpcServerMessage::ConnectionInit(addr))?;
+        reliable_sender.send(ReliableRpcServerMessage::ConnectionInit(
+            addr,
+            connection_init_message,
+        ))?;
 
         self.connected_user_list.insert(
             addr,
@@ -516,13 +520,16 @@ impl ServerState {
     pub async fn connect_user(
         &self,
         addr: UserId,
+        connection_init_message: ConnectionInitMessage,
         reliable_sender: UserReliableSender,
         unreliable_sender: UserUnreliableSender,
     ) -> anyhow::Result<()> {
-        self.server_state
-            .lock()
-            .await
-            .connect_user(addr, reliable_sender, unreliable_sender)
+        self.server_state.lock().await.connect_user(
+            addr,
+            connection_init_message,
+            reliable_sender,
+            unreliable_sender,
+        )
     }
 
     pub async fn disconnect_user(&self, addr: UserId) -> anyhow::Result<()> {
@@ -605,7 +612,7 @@ mod tests {
     ) -> anyhow::Result<LobbyId> {
         let connection_init = timeout(Duration::from_secs(1), reliable_receiver.recv()).await?;
         match connection_init {
-            Some(ReliableRpcServerMessage::ConnectionInit(user_id)) => {
+            Some(ReliableRpcServerMessage::ConnectionInit(user_id, _)) => {
                 if user_addr != user_id {
                     bail!("unexpected left user id init: {user_id:?}")
                 }
@@ -639,7 +646,12 @@ mod tests {
 
         // by default the lobby gets created with the left side already filled
         server_state
-            .connect_user(left_addr, left_reliable_sender, left_unreliable_sender)
+            .connect_user(
+                left_addr,
+                ConnectionInitMessage::FirstTime,
+                left_reliable_sender,
+                left_unreliable_sender,
+            )
             .await?;
 
         server_state
@@ -656,7 +668,12 @@ mod tests {
         let (right_reliable_sender, mut right_reliable_receiver) = mpsc::unbounded_channel();
         let (right_unreliable_sender, right_unreliable_receiver) = mpsc::unbounded_channel();
         server_state
-            .connect_user(right_addr, right_reliable_sender, right_unreliable_sender)
+            .connect_user(
+                right_addr,
+                ConnectionInitMessage::FirstTime,
+                right_reliable_sender,
+                right_unreliable_sender,
+            )
             .await?;
 
         server_state
@@ -702,6 +719,7 @@ mod tests {
         server_state
             .connect_user(
                 replacement_left_addr,
+                ConnectionInitMessage::FirstTime,
                 replacement_left_reliable_sender,
                 replacement_left_unreliable_sender,
             )
@@ -749,6 +767,7 @@ mod tests {
         server_state
             .connect_user(
                 replacement_right_addr,
+                ConnectionInitMessage::FirstTime,
                 replacement_right_reliable_sender,
                 replacement_right_unreliable_sender,
             )

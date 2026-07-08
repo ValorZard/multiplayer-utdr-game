@@ -110,6 +110,7 @@ pub type InputSequence = u32;
 #[rkyv(
     // Derives can be passed through to the generated type:
     derive(Debug),
+    compare(PartialEq)
 )]
 pub struct MoveGameState {
     pub left_position: Vec2,
@@ -175,6 +176,22 @@ impl TryFrom<&RpcUrl> for Url {
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum ConnectionInitMessage {
+    FirstTime,
+    WelcomeBack,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
@@ -186,7 +203,7 @@ pub enum ReliableRpcServerMessage {
     },
     // send oauth url for client to open up
     ConnectionAuthentication(RpcUrl),
-    ConnectionInit(UserId),
+    ConnectionInit(UserId, ConnectionInitMessage),
     LobbyInit(PlayerSide, LobbyId),
     LobbyState(LobbyState),
     Text(String),
@@ -194,6 +211,7 @@ pub enum ReliableRpcServerMessage {
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
+    compare(PartialEq),
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]

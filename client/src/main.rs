@@ -305,9 +305,10 @@ async fn main() {
                         log!("{:?}", oauth_url);
                     }
                 }
-                ReliableRpcServerMessage::ConnectionInit(user_id) => {
+                ReliableRpcServerMessage::ConnectionInit(user_id, init_message) => {
                     ui_game_state.reset();
                     ui_game_state.user_id = Some(user_id);
+                    log!("Connection init message: {init_message:?}");
                 }
                 ReliableRpcServerMessage::LobbyInit(side, lobby_id) => {
                     ui_game_state.lobby_id = Some(lobby_id);
