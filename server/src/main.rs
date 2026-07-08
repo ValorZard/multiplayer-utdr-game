@@ -334,7 +334,7 @@ async fn handle_connection(
                WHERE id = ?",
         )
         .bind(&oauth_answer.username)
-                .bind(itch_id)
+        .bind(itch_id)
         .execute(&pool)
         .await?;
         info!(
