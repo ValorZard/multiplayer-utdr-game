@@ -314,12 +314,12 @@ async fn handle_connection(
     info!("Inserting user {itch_id} into database");
     let insert_result = sqlx::query(
         "INSERT INTO users (id, username) VALUES ($1, $2)
-         ON CONFLICT (id) DO NOTHING"
+         ON CONFLICT (id) DO NOTHING",
     )
-        .bind(itch_id)
-        .bind(&oauth_answer.username)
-        .execute(&pool)
-        .await?;
+    .bind(itch_id)
+    .bind(&oauth_answer.username)
+    .execute(&pool)
+    .await?;
 
     let already_exists = insert_result.rows_affected() == 0;
 
@@ -327,13 +327,16 @@ async fn handle_connection(
         sqlx::query(
             "UPDATE users
              SET username = $2
-             WHERE id = $1"
+             WHERE id = $1",
         )
-            .bind(itch_id)
-            .bind(&oauth_answer.username)
-            .execute(&pool)
-            .await?;
-        info!("Updating already existing user {itch_id} with username {}", oauth_answer.username);
+        .bind(itch_id)
+        .bind(&oauth_answer.username)
+        .execute(&pool)
+        .await?;
+        info!(
+            "Updating already existing user {itch_id} with username {}",
+            oauth_answer.username
+        );
     } else {
         info!("Created new user {itch_id} in database!");
     }
@@ -508,9 +511,14 @@ async fn main() -> anyhow::Result<()> {
             let pending_oauth_requests = pending_oauth_requests.clone();
             let db_pool = db_pool.clone();
             connection_set.spawn(async move {
-                if let Err(e) =
-                    handle_connection(session, server_state, http_client, pending_oauth_requests, db_pool)
-                        .await
+                if let Err(e) = handle_connection(
+                    session,
+                    server_state,
+                    http_client,
+                    pending_oauth_requests,
+                    db_pool,
+                )
+                .await
                 {
                     warn!("Connection error: {e:#}");
                 }
