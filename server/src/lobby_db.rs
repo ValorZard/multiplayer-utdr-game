@@ -605,7 +605,7 @@ mod tests {
                 } else {
                     panic!("unexpected left user id init: {user_id:?}")
                 }
-            },
+            }
             other => panic!("unexpected left connection init: {other:?}"),
         };
 
@@ -642,7 +642,7 @@ mod tests {
                 } else {
                     panic!("unexpected left user id init: {user_id:?}")
                 }
-            },
+            }
             other => panic!("unexpected left connection init: {other:?}"),
         };
 
@@ -701,9 +701,12 @@ mod tests {
             .await
             .expect("replacement join should succeed");
 
-        let left_connection_init = timeout(Duration::from_secs(1), replacement_left_reliable_receiver.recv())
-            .await
-            .expect("left lobby init should arrive in time");
+        let left_connection_init = timeout(
+            Duration::from_secs(1),
+            replacement_left_reliable_receiver.recv(),
+        )
+        .await
+        .expect("left lobby init should arrive in time");
         let left_user_id = match left_connection_init {
             Some(ReliableRpcServerMessage::ConnectionInit(user_id)) => {
                 if replacement_left_addr == user_id {
@@ -711,13 +714,16 @@ mod tests {
                 } else {
                     panic!("unexpected left user id init: {user_id:?}")
                 }
-            },
+            }
             other => panic!("unexpected left connection init: {other:?}"),
         };
 
-        let left_lobby_init = timeout(Duration::from_secs(1), replacement_left_reliable_receiver.recv())
-            .await
-            .expect("left lobby init should arrive in time");
+        let left_lobby_init = timeout(
+            Duration::from_secs(1),
+            replacement_left_reliable_receiver.recv(),
+        )
+        .await
+        .expect("left lobby init should arrive in time");
         let lobby_id = match left_lobby_init {
             Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Left, lobby_id)) => lobby_id,
             other => panic!("unexpected left lobby init: {other:?}"),
@@ -775,9 +781,12 @@ mod tests {
             .await
             .expect("replacement join should succeed");
 
-        let right_connection_init = timeout(Duration::from_secs(1), replacement_right_reliable_receiver.recv())
-            .await
-            .expect("left lobby init should arrive in time");
+        let right_connection_init = timeout(
+            Duration::from_secs(1),
+            replacement_right_reliable_receiver.recv(),
+        )
+        .await
+        .expect("left lobby init should arrive in time");
         let right_user_id = match right_connection_init {
             Some(ReliableRpcServerMessage::ConnectionInit(user_id)) => {
                 if replacement_right_addr == user_id {
@@ -785,13 +794,16 @@ mod tests {
                 } else {
                     panic!("unexpected left user id init: {user_id:?}")
                 }
-            },
+            }
             other => panic!("unexpected left connection init: {other:?}"),
         };
 
-        let right_lobby_init = timeout(Duration::from_secs(1), replacement_right_reliable_receiver.recv())
-            .await
-            .expect("left lobby init should arrive in time");
+        let right_lobby_init = timeout(
+            Duration::from_secs(1),
+            replacement_right_reliable_receiver.recv(),
+        )
+        .await
+        .expect("left lobby init should arrive in time");
         let lobby_id = match right_lobby_init {
             Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Right, lobby_id)) => lobby_id,
             other => panic!("unexpected left lobby init: {other:?}"),

@@ -97,10 +97,9 @@ impl LobbySession {
         left_side: PlayerDataTuple,
         receiver: mpsc::Receiver<LobbySessionMessage>,
     ) -> Self {
-        let _ = left_side.1.send(ReliableRpcServerMessage::LobbyInit(
-            PlayerSide::Left,
-            id,
-        ));
+        let _ = left_side
+            .1
+            .send(ReliableRpcServerMessage::LobbyInit(PlayerSide::Left, id));
         Self {
             id,
             left_side: Some(left_side),
