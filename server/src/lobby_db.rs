@@ -570,17 +570,29 @@ mod tests {
     use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
     use tokio::time::timeout;
 
-    async fn check_if_waiting(
+    async fn check_if_matches_lobby_state(
         reliable_receiver: &mut UnboundedReceiver<ReliableRpcServerMessage>,
+        lobby_state_to_check: LobbyState,
+        secs: u64,
     ) -> bool {
-        for _ in 0..8 {
-            match timeout(Duration::from_secs(1), reliable_receiver.recv()).await {
-                Ok(Some(ReliableRpcServerMessage::LobbyState(LobbyState::Waiting))) => {
-                    return true;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+
+            let remaining = deadline - now;
+            match timeout(remaining, reliable_receiver.recv()).await {
+                Ok(Some(ReliableRpcServerMessage::LobbyState(state))) => {
+                    if state == lobby_state_to_check {
+                        return true;
+                    }
                 }
                 Ok(Some(_)) => continue,
                 Ok(None) => break,
-                Err(_elapsed) => continue,
+                Err(_elapsed) => break,
             }
         }
         false
@@ -664,6 +676,11 @@ mod tests {
             .await?
         );
 
+        // lobby should now be full
+        assert!(
+            check_if_matches_lobby_state(&mut left_reliable_receiver, LobbyState::Running, 3).await
+        );
+
         // disconnect left user so now lobby has to fill in left user
 
         server_state.disconnect_user(left_addr).await?;
@@ -673,7 +690,10 @@ mod tests {
         drop(left_unreliable_receiver);
 
         // check if right side saw that the lobby is now waiting
-        assert!(check_if_waiting(&mut right_reliable_receiver).await);
+        assert!(
+            check_if_matches_lobby_state(&mut right_reliable_receiver, LobbyState::Waiting, 1)
+                .await
+        );
 
         let (replacement_left_reliable_sender, mut replacement_left_reliable_receiver) =
             mpsc::unbounded_channel();
@@ -713,8 +733,14 @@ mod tests {
         drop(right_unreliable_receiver);
 
         // check if left side saw that the lobby is now waiting
-
-        assert!(check_if_waiting(&mut replacement_left_reliable_receiver).await);
+        assert!(
+            check_if_matches_lobby_state(
+                &mut replacement_left_reliable_receiver,
+                LobbyState::Waiting,
+                1
+            )
+            .await
+        );
 
         let (replacement_right_reliable_sender, mut replacement_right_reliable_receiver) =
             mpsc::unbounded_channel();
