@@ -567,7 +567,51 @@ mod tests {
         time::Duration,
     };
     use tokio::sync::mpsc;
+    use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
     use tokio::time::timeout;
+
+    async fn check_if_waiting(
+        reliable_receiver: &mut UnboundedReceiver<ReliableRpcServerMessage>,
+    ) -> bool {
+        for _ in 0..8 {
+            match timeout(Duration::from_secs(1), reliable_receiver.recv()).await {
+                Ok(Some(ReliableRpcServerMessage::LobbyState(LobbyState::Waiting))) => {
+                    return true;
+                }
+                Ok(Some(_)) => continue,
+                Ok(None) => break,
+                Err(_elapsed) => continue,
+            }
+        }
+        false
+    }
+
+    async fn check_if_connected_to_lobby(
+        user_addr: UserId,
+        player_side: PlayerSide,
+        reliable_receiver: &mut UnboundedReceiver<ReliableRpcServerMessage>,
+    ) -> anyhow::Result<LobbyId> {
+        let connection_init = timeout(Duration::from_secs(1), reliable_receiver.recv()).await?;
+        match connection_init {
+            Some(ReliableRpcServerMessage::ConnectionInit(user_id)) => {
+                if user_addr != user_id {
+                    bail!("unexpected left user id init: {user_id:?}")
+                }
+            }
+            other => bail!("unexpected left connection init: {other:?}"),
+        }
+
+        let lobby_init = timeout(Duration::from_secs(1), reliable_receiver.recv()).await?;
+        match lobby_init {
+            Some(ReliableRpcServerMessage::LobbyInit(recv_player_side, lobby_id)) => {
+                if recv_player_side != player_side {
+                    bail!("unexpected player side: {recv_player_side:?}, lobby_id: {lobby_id:?}")
+                }
+                anyhow::Ok(lobby_id)
+            }
+            other => bail!("unexpected left lobby init: {other:?}"),
+        }
+    }
 
     #[tokio::test]
     async fn server_state_reuses_waiting_lobby_after_disconnect() -> anyhow::Result<()> {
@@ -593,25 +637,9 @@ mod tests {
             })
             .await?;
 
-        let left_connection_init =
-            timeout(Duration::from_secs(1), left_reliable_receiver.recv()).await?;
-        match left_connection_init {
-            Some(ReliableRpcServerMessage::ConnectionInit(user_id)) => {
-                if left_addr != user_id {
-                    bail!("unexpected left user id init: {user_id:?}")
-                }
-            }
-            other => bail!("unexpected left connection init: {other:?}"),
-        }
-
-        let left_lobby_init =
-            timeout(Duration::from_secs(1), left_reliable_receiver.recv()).await?;
-        let lobby_id = match left_lobby_init {
-            Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Left, lobby_id)) => {
-                anyhow::Ok(lobby_id)
-            }
-            other => bail!("unexpected left lobby init: {other:?}"),
-        }?;
+        let lobby_id =
+            check_if_connected_to_lobby(left_addr, PlayerSide::Left, &mut left_reliable_receiver)
+                .await?;
 
         let (right_reliable_sender, mut right_reliable_receiver) = mpsc::unbounded_channel();
         let (right_unreliable_sender, right_unreliable_receiver) = mpsc::unbounded_channel();
@@ -626,27 +654,15 @@ mod tests {
             })
             .await?;
 
-        let right_connection_init =
-            timeout(Duration::from_secs(1), right_reliable_receiver.recv()).await?;
-        match right_connection_init {
-            Some(ReliableRpcServerMessage::ConnectionInit(user_id)) => {
-                if right_addr != user_id {
-                    bail!("unexpected left user id init: {user_id:?}")
-                }
-            }
-            other => bail!("unexpected left connection init: {other:?}"),
-        }
-
-        let right_lobby_init =
-            timeout(Duration::from_secs(1), right_reliable_receiver.recv()).await?;
-        match right_lobby_init {
-            Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Right, recv_lobby_id)) => {
-                if recv_lobby_id != lobby_id {
-                    bail!("unexpected right lobby init: {lobby_id:?}")
-                }
-            }
-            other => bail!("unexpected left lobby init: {other:?}"),
-        }
+        assert_eq!(
+            lobby_id,
+            check_if_connected_to_lobby(
+                right_addr,
+                PlayerSide::Right,
+                &mut right_reliable_receiver
+            )
+            .await?
+        );
 
         // disconnect left user so now lobby has to fill in left user
 
@@ -657,19 +673,7 @@ mod tests {
         drop(left_unreliable_receiver);
 
         // check if right side saw that the lobby is now waiting
-
-        let mut saw_waiting = false;
-        for _ in 0..8 {
-            match timeout(Duration::from_secs(1), right_reliable_receiver.recv()).await {
-                Ok(Some(ReliableRpcServerMessage::LobbyState(LobbyState::Waiting))) => {
-                    saw_waiting = true
-                }
-                Ok(Some(_)) => continue,
-                Ok(None) => break,
-                Err(_elapsed) => continue,
-            }
-        }
-        assert!(saw_waiting);
+        assert!(check_if_waiting(&mut right_reliable_receiver).await);
 
         let (replacement_left_reliable_sender, mut replacement_left_reliable_receiver) =
             mpsc::unbounded_channel();
@@ -690,33 +694,15 @@ mod tests {
             })
             .await?;
 
-        let left_connection_init = timeout(
-            Duration::from_secs(1),
-            replacement_left_reliable_receiver.recv(),
-        )
-        .await?;
-        match left_connection_init {
-            Some(ReliableRpcServerMessage::ConnectionInit(user_id)) => {
-                if replacement_left_addr != user_id {
-                    bail!("unexpected left user id init: {user_id:?}")
-                }
-            }
-            other => bail!("unexpected left connection init: {other:?}"),
-        }
-
-        let left_lobby_init = timeout(
-            Duration::from_secs(1),
-            replacement_left_reliable_receiver.recv(),
-        )
-        .await?;
-        match left_lobby_init {
-            Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Left, recv_lobby_id)) => {
-                if recv_lobby_id != lobby_id {
-                    bail!("unexpected left lobby init: {lobby_id:?}")
-                }
-            }
-            other => bail!("unexpected left lobby init: {other:?}"),
-        };
+        assert_eq!(
+            lobby_id,
+            check_if_connected_to_lobby(
+                replacement_left_addr,
+                PlayerSide::Left,
+                &mut replacement_left_reliable_receiver
+            )
+            .await?
+        );
 
         // disconnect right user so now lobby has to fill in right user
 
@@ -728,23 +714,7 @@ mod tests {
 
         // check if left side saw that the lobby is now waiting
 
-        let mut saw_waiting = false;
-        for _ in 0..8 {
-            match timeout(
-                Duration::from_secs(1),
-                replacement_left_reliable_receiver.recv(),
-            )
-            .await
-            {
-                Ok(Some(ReliableRpcServerMessage::LobbyState(LobbyState::Waiting))) => {
-                    saw_waiting = true
-                }
-                Ok(Some(_)) => continue,
-                Ok(None) => break,
-                Err(_elapsed) => continue,
-            }
-        }
-        assert!(saw_waiting);
+        assert!(check_if_waiting(&mut replacement_left_reliable_receiver).await);
 
         let (replacement_right_reliable_sender, mut replacement_right_reliable_receiver) =
             mpsc::unbounded_channel();
@@ -765,33 +735,15 @@ mod tests {
             })
             .await?;
 
-        let right_connection_init = timeout(
-            Duration::from_secs(1),
-            replacement_right_reliable_receiver.recv(),
-        )
-        .await?;
-        match right_connection_init {
-            Some(ReliableRpcServerMessage::ConnectionInit(user_id)) => {
-                if replacement_right_addr != user_id {
-                    bail!("unexpected left user id init: {user_id:?}")
-                }
-            }
-            other => bail!("unexpected left connection init: {other:?}"),
-        }
-
-        let right_lobby_init = timeout(
-            Duration::from_secs(1),
-            replacement_right_reliable_receiver.recv(),
-        )
-        .await?;
-        match right_lobby_init {
-            Some(ReliableRpcServerMessage::LobbyInit(PlayerSide::Right, recv_lobby_id)) => {
-                if recv_lobby_id != lobby_id {
-                    bail!("unexpected right lobby init: {lobby_id:?}")
-                }
-            }
-            other => bail!("unexpected left lobby init: {other:?}"),
-        }
+        assert_eq!(
+            lobby_id,
+            check_if_connected_to_lobby(
+                replacement_right_addr,
+                PlayerSide::Right,
+                &mut replacement_right_reliable_receiver
+            )
+            .await?
+        );
 
         // disconnect both clients now and check that lobby is now gone
         server_state.disconnect_user(replacement_left_addr).await?;
