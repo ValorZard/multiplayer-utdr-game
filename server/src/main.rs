@@ -35,6 +35,8 @@ use web_transport_quinn::{Request, Server, proto::ConnectResponse};
 
 use crate::lobby_db::{ServerState, UserReliableRPCMessage, UserUnreliableRPCMessage};
 use rustls::pki_types::CertificateDer;
+use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use url::Url;
@@ -274,6 +276,7 @@ async fn handle_connection(
     server_state: ServerState,
     http_client: reqwest::Client,
     pending_oauth_requests: PendingOAuthRequests,
+    pool: PgPool,
 ) -> anyhow::Result<()> {
     let this_server_ip = env::var("THIS_SERVER_IP")?.parse::<Ipv4Addr>()?;
     info!("WebTransport connection established: {}", request.url);
@@ -305,6 +308,35 @@ async fn handle_connection(
     outgoing.write_all(&message).await?;
     // TODO: add timeout here
     let oauth_answer = oauth_receiver.await?;
+    // insert into database
+    let itch_id = i64::try_from(oauth_answer.id).context("itch user id does not fit in BIGINT")?;
+
+    info!("Inserting user {itch_id} into database");
+    let insert_result = sqlx::query(
+        "INSERT INTO users (id, username) VALUES ($1, $2)
+         ON CONFLICT (id) DO NOTHING"
+    )
+        .bind(itch_id)
+        .bind(&oauth_answer.username)
+        .execute(&pool)
+        .await?;
+
+    let already_exists = insert_result.rows_affected() == 0;
+
+    if already_exists {
+        sqlx::query(
+            "UPDATE users
+             SET username = $2
+             WHERE id = $1"
+        )
+            .bind(itch_id)
+            .bind(&oauth_answer.username)
+            .execute(&pool)
+            .await?;
+        info!("Updating already existing user {itch_id} with username {}", oauth_answer.username);
+    } else {
+        info!("Created new user {itch_id} in database!");
+    }
     let addr = oauth_answer.id;
 
     // Insert the write part of this peer to the peer map.
@@ -410,6 +442,7 @@ async fn handle_connection(
 async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     dotenvy::dotenv()?;
+    let database_url = env::var("DATABASE_URL").context("DATABASE_URL missing")?;
     let this_server_ip = env::var("THIS_SERVER_IP")?.parse::<Ipv4Addr>()?;
     tracing_subscriber::fmt::init();
     // Create the event loop and TCP listener we'll accept connections on.
@@ -463,13 +496,20 @@ async fn main() -> anyhow::Result<()> {
 
         let pending_oauth_requests = pending_oauth_for_main_server;
 
+        let db_pool = PgPoolOptions::new()
+            .max_connections(10)
+            .connect(&database_url)
+            .await
+            .expect("should be able to connect to postgres");
+
         while let Some(session) = server.accept().await {
             let server_state = server_state.clone();
             let http_client = http_client.clone();
             let pending_oauth_requests = pending_oauth_requests.clone();
+            let db_pool = db_pool.clone();
             connection_set.spawn(async move {
                 if let Err(e) =
-                    handle_connection(session, server_state, http_client, pending_oauth_requests)
+                    handle_connection(session, server_state, http_client, pending_oauth_requests, db_pool)
                         .await
                 {
                     warn!("Connection error: {e:#}");
