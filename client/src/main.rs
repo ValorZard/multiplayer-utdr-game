@@ -9,11 +9,13 @@ use include_dir::{Dir, include_dir};
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
 use rpc::{
-    GAME_TIME_STEP, GameLogic, InputSequence, LobbyId, LobbyState, PlayerSide, RPSGameState,
-    RPSWinState, ReliableRpcClientMessage, ReliableRpcServerMessage, ScoreSize, TurnInput,
-    UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId, YesOrNo,
+    GAME_TIME_STEP, GameLogic, InputSequence, LobbyId, LobbyState, MoveGameState, PlayerSide,
+    RPSGameState, RPSWinState, ReliableRpcClientMessage, ReliableRpcServerMessage, ScoreSize,
+    TurnInput, UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId, YesOrNo,
+    encode_message,
 };
 use std::collections::VecDeque;
+use std::hash::{DefaultHasher, Hash, Hasher};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 use time::{Duration, OffsetDateTime};
@@ -227,6 +229,8 @@ async fn main() {
     let mut remote_snapshots: VecDeque<TimedRemoteSnapshot> = VecDeque::new();
     let mut last_acknowledged_sequence: InputSequence = 0;
 
+    let mut state_hash = 0;
+
     // Client config
     let client_config = include_str!("../client_config.toml");
     let client_config: ClientConfig =
@@ -333,21 +337,23 @@ async fn main() {
             && let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten()
         {
             match rpc_message {
-                UnreliableRpcServerMessage::MoveGameState(game_state) => {
+                UnreliableRpcServerMessage::MoveGameState {
+                    state,
+                    acknowledged_sequence,
+                } => {
+                    // hash state
+                    state_hash = {
+                        let bytes = encode_message(&state).expect("can turn back into bytes");
+                        let mut s = DefaultHasher::new();
+                        bytes.hash(&mut s);
+                        s.finish()
+                    };
+
                     if let Some(local_side) = ui_game_state.player_side {
-                        let (local_position, remote_position, acknowledged_sequence) =
-                            match local_side {
-                                PlayerSide::Left => (
-                                    game_state.left_position,
-                                    game_state.right_position,
-                                    game_state.left_last_processed_input,
-                                ),
-                                PlayerSide::Right => (
-                                    game_state.right_position,
-                                    game_state.left_position,
-                                    game_state.right_last_processed_input,
-                                ),
-                            };
+                        let (local_position, remote_position) = match local_side {
+                            PlayerSide::Left => (state.left_position, state.right_position),
+                            PlayerSide::Right => (state.right_position, state.left_position),
+                        };
 
                         if acknowledged_sequence < last_acknowledged_sequence {
                             continue;
@@ -479,10 +485,7 @@ async fn main() {
                 .default_width(300.0)
                 .show(ctx, |ui| {
                     ui.label(format!("Current Frame Time {}", time_since_last_frame));
-                    ui.label(format!(
-                        "Current player position {}",
-                        local_player.position()
-                    ));
+                    ui.label(format!("Current state hash: {}", state_hash));
                     ui.label(format!("{ui_game_state:#?}"));
 
                     ui.separator();

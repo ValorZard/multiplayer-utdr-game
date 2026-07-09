@@ -131,6 +131,14 @@ impl GameSession {
         }
     }
 
+    pub fn get_left_processed_input(&self) -> InputSequence {
+        self.left_last_processed_input
+    }
+
+    pub fn get_right_processed_input(&self) -> InputSequence {
+        self.right_last_processed_input
+    }
+
     // you can only set this once per turn
     pub fn set_left_turn_input(
         &mut self,
@@ -168,10 +176,7 @@ impl GameSession {
     }
 
     pub fn get_move_state(&mut self) -> MoveGameState {
-        let mut state = self.game_logic.get_state_to_send_to_client();
-        state.left_last_processed_input = self.left_last_processed_input;
-        state.right_last_processed_input = self.right_last_processed_input;
-        state
+        self.game_logic.get_state_to_send_to_client()
     }
 
     pub fn step(&mut self) {

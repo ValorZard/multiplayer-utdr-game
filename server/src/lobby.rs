@@ -1,7 +1,7 @@
 use crate::rps::{GameError, GameSession};
 use rpc::{
-    InputSequence, LobbyId, LobbyState, MoveInputState, PlayerSide, RPSGameState, RPSWinState,
-    ReliableRpcServerMessage, TurnInput, UnreliableRpcServerMessage, UserId,
+    InputSequence, LobbyId, LobbyState, MoveGameState, MoveInputState, PlayerSide, RPSGameState,
+    RPSWinState, ReliableRpcServerMessage, TurnInput, UnreliableRpcServerMessage, UserId,
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot};
@@ -283,6 +283,54 @@ impl LobbySession {
         }
     }
 
+    fn send_reliable_message_to_side(
+        &self,
+        message: ReliableRpcServerMessage,
+        player_side: PlayerSide,
+    ) -> Result<(), LobbyError> {
+        match player_side {
+            PlayerSide::Left => {
+                if let Some((user, sender, _)) = self.left_side.as_ref() {
+                    return sender
+                        .send(message)
+                        .map_err(|_e| LobbyError::MessageSendFailed(*user));
+                }
+            }
+            PlayerSide::Right => {
+                if let Some((user, sender, _)) = self.right_side.as_ref() {
+                    return sender
+                        .send(message)
+                        .map_err(|_e| LobbyError::MessageSendFailed(*user));
+                }
+            }
+        }
+        Err(LobbyError::SideNotFound(player_side))
+    }
+
+    fn send_unreliable_message_to_side(
+        &self,
+        message: UnreliableRpcServerMessage,
+        player_side: PlayerSide,
+    ) -> Result<(), LobbyError> {
+        match player_side {
+            PlayerSide::Left => {
+                if let Some((user, _, sender)) = self.left_side.as_ref() {
+                    return sender
+                        .send(message)
+                        .map_err(|_e| LobbyError::MessageSendFailed(*user));
+                }
+            }
+            PlayerSide::Right => {
+                if let Some((user, _, sender)) = self.right_side.as_ref() {
+                    return sender
+                        .send(message)
+                        .map_err(|_e| LobbyError::MessageSendFailed(*user));
+                }
+            }
+        }
+        Err(LobbyError::SideNotFound(player_side))
+    }
+
     fn send_reliable_message_to_lobby(
         &self,
         message: ReliableRpcServerMessage,
@@ -335,10 +383,12 @@ impl LobbySession {
             state,
             left_side_score,
             right_side_score,
-        })?;
-        let move_state = self.current_round.get_move_state();
+        })
+    }
+
+    fn step_game(&mut self) -> MoveGameState {
         self.current_round.step();
-        self.send_unreliable_message_to_lobby(UnreliableRpcServerMessage::MoveGameState(move_state))
+        self.current_round.get_move_state()
     }
 
     fn handle_message(&mut self, message: LobbySessionMessage) -> Result<(), LobbyError> {
@@ -431,6 +481,10 @@ async fn run_lobby_session(mut lobby: LobbySession) -> Result<(), LobbyError> {
                 // send out gamestate updates
                 lobby.broadcast_lobby_state()?;
                 lobby.broadcast_game_state()?;
+                let move_state = lobby.step_game();
+                // broadcast state to both right and left (it's okay if these fail)
+                let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::MoveGameState {state:move_state.clone(), acknowledged_sequence: lobby.current_round.get_left_processed_input()}, PlayerSide::Left);
+                let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::MoveGameState {state:move_state, acknowledged_sequence: lobby.current_round.get_right_processed_input()}, PlayerSide::Right);
             }
         }
     }

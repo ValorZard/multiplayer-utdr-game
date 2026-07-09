@@ -3,6 +3,7 @@ use rapier2d::prelude::*;
 use rkyv::api::high::{HighSerializer, HighValidator};
 use rkyv::bytecheck::CheckBytes;
 use rkyv::{Archive, Deserialize, Serialize, rancor, util::AlignedVec};
+use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::time::Duration;
 use url::Url;
@@ -114,8 +115,6 @@ pub type InputSequence = u32;
 pub struct MoveGameState {
     pub left_position: Vec2,
     pub right_position: Vec2,
-    pub left_last_processed_input: InputSequence,
-    pub right_last_processed_input: InputSequence,
 }
 
 impl MoveGameState {
@@ -123,8 +122,6 @@ impl MoveGameState {
         Self {
             left_position: Vec2::ZERO,
             right_position: Vec2::ZERO,
-            left_last_processed_input: 0,
-            right_last_processed_input: 0,
         }
     }
 }
@@ -215,7 +212,10 @@ pub enum ReliableRpcServerMessage {
     derive(Debug),
 )]
 pub enum UnreliableRpcServerMessage {
-    MoveGameState(MoveGameState),
+    MoveGameState {
+        state: MoveGameState,
+        acknowledged_sequence: InputSequence,
+    },
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]
@@ -419,8 +419,6 @@ impl GameLogic {
         MoveGameState {
             left_position,
             right_position,
-            left_last_processed_input: 0,
-            right_last_processed_input: 0,
         }
     }
 }
