@@ -229,7 +229,8 @@ async fn main() {
     let mut remote_snapshots: VecDeque<TimedRemoteSnapshot> = VecDeque::new();
     let mut last_acknowledged_sequence: InputSequence = 0;
 
-    let mut state_hash = 0;
+    let mut remote_state_hash = 0;
+    let mut predicted_state_hash = 0;
 
     // Client config
     let client_config = include_str!("../client_config.toml");
@@ -342,7 +343,7 @@ async fn main() {
                     acknowledged_sequence,
                 } => {
                     // hash state
-                    state_hash = {
+                    remote_state_hash = {
                         let bytes = encode_message(&state).expect("can turn back into bytes");
                         let mut s = DefaultHasher::new();
                         bytes.hash(&mut s);
@@ -385,6 +386,15 @@ async fn main() {
                 }
             }
         }
+
+        // hash the state now that we've run our prediction logic
+        // TODO: there's a desync happening since the predicted state hashes between the two clients can desync
+        predicted_state_hash = {
+            let bytes = encode_message(&game_logic.get_state_to_send_to_client()).expect("Should be able to serialize");
+            let mut s = DefaultHasher::new();
+            bytes.hash(&mut s);
+            s.finish()
+        };
 
         // the way OS's poll key inputs mean that there's a frame of waiting before sending in the next key input
         // see: https://stereopsis.com/keyrepeat/
@@ -485,7 +495,8 @@ async fn main() {
                 .default_width(300.0)
                 .show(ctx, |ui| {
                     ui.label(format!("Current Frame Time {}", time_since_last_frame));
-                    ui.label(format!("Current state hash: {}", state_hash));
+                    ui.label(format!("Current remote state hash: {}", remote_state_hash));
+                    ui.label(format!("Current predicted state hash: {}", predicted_state_hash));
                     ui.label(format!("{ui_game_state:#?}"));
 
                     ui.separator();
