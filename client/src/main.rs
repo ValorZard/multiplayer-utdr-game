@@ -141,6 +141,13 @@ const MAX_PENDING_INPUTS: usize = 256;
 const MAX_REMOTE_SNAPSHOTS: usize = 64;
 const REMOTE_INTERPOLATION_DELAY: Duration = Duration::milliseconds(100);
 
+fn hash_move_state(state: &MoveGameState) -> u64 {
+    let bytes = encode_message(state).expect("Should be able to serialize");
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn interpolate_remote_position(
     snapshots: &VecDeque<TimedRemoteSnapshot>,
     target_time: OffsetDateTime,
@@ -230,7 +237,6 @@ async fn main() {
     let mut last_acknowledged_sequence: InputSequence = 0;
 
     let mut remote_state_hash = 0;
-    let mut predicted_state_hash = 0;
 
     // Client config
     let client_config = include_str!("../client_config.toml");
@@ -343,12 +349,7 @@ async fn main() {
                     acknowledged_sequence,
                 } => {
                     // hash state
-                    remote_state_hash = {
-                        let bytes = encode_message(&state).expect("can turn back into bytes");
-                        let mut s = DefaultHasher::new();
-                        bytes.hash(&mut s);
-                        s.finish()
-                    };
+                    remote_state_hash = hash_move_state(&state);
 
                     if let Some(local_side) = ui_game_state.player_side {
                         let (local_position, remote_position) = match local_side {
@@ -386,15 +387,6 @@ async fn main() {
                 }
             }
         }
-
-        // hash the state now that we've run our prediction logic
-        // TODO: there's a desync happening since the predicted state hashes between the two clients can desync
-        predicted_state_hash = {
-            let bytes = encode_message(&game_logic.get_state_to_send_to_client()).expect("Should be able to serialize");
-            let mut s = DefaultHasher::new();
-            bytes.hash(&mut s);
-            s.finish()
-        };
 
         // the way OS's poll key inputs mean that there's a frame of waiting before sending in the next key input
         // see: https://stereopsis.com/keyrepeat/
@@ -459,21 +451,23 @@ async fn main() {
             game_logic.step_physics();
         }
 
-        // make remote player whatever the other side is
+        // Hash the simulation state before applying any render-time interpolation.
+        let predicted_state = game_logic.get_state_to_send_to_client();
+        let predicted_state_hash = hash_move_state(&predicted_state);
+
+        // Keep remote interpolation render-only since it isn't "real" game state
+        let mut render_state = predicted_state.clone();
         if let Some(side) = ui_game_state.player_side {
-            let remote_side = match side {
-                PlayerSide::Left => PlayerSide::Right,
-                PlayerSide::Right => PlayerSide::Left,
-            };
-            let target_time = current_time - REMOTE_INTERPOLATION_DELAY;
+            let target_time = current_time;
             if let Some(interpolated_position) =
                 interpolate_remote_position(&remote_snapshots, target_time)
             {
-                game_logic.update_position_with_vec(remote_side, interpolated_position);
+                match side {
+                    PlayerSide::Left => render_state.right_position = interpolated_position,
+                    PlayerSide::Right => render_state.left_position = interpolated_position,
+                }
             }
         }
-
-        let render_state = game_logic.get_state_to_send_to_client();
         match ui_game_state.player_side {
             Some(PlayerSide::Left) => {
                 local_player.set_position(render_state.left_position);
