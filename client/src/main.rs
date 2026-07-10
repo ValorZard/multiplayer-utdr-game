@@ -151,7 +151,7 @@ fn interpolate_remote_position(
     let target_time = current_time - REMOTE_INTERPOLATION_DELAY;
 
     // filter out snapshots that have aged out
-    snapshots.retain(|k, _| { k >= &target_time });
+    snapshots.retain(|k, _| k >= &target_time);
     // get next two values
     let mut iter = snapshots.iter();
     let snapshot1 = iter.next();
@@ -425,10 +425,12 @@ async fn main() {
             {
                 match side {
                     PlayerSide::Left => {
-                        game_logic.update_position_with_vec(PlayerSide::Right, interpolated_position);
+                        game_logic
+                            .update_position_with_vec(PlayerSide::Right, interpolated_position);
                     }
                     PlayerSide::Right => {
-                        game_logic.update_position_with_vec(PlayerSide::Left, interpolated_position);
+                        game_logic
+                            .update_position_with_vec(PlayerSide::Left, interpolated_position);
                     }
                 }
             }
