@@ -149,12 +149,25 @@ fn hash_move_state(state: &MoveGameState) -> u64 {
 }
 
 fn interpolate_remote_position(
-    snapshots: &VecDeque<TimedRemoteSnapshot>,
+    snapshots: &mut VecDeque<TimedRemoteSnapshot>,
     target_time: OffsetDateTime,
 ) -> Option<Vec2> {
     if snapshots.is_empty() {
         return None;
     }
+
+    // Keep only snapshots that can bracket the target render time.
+    while snapshots.len() >= 2 {
+        let second = snapshots
+            .get(1)
+            .expect("snapshot index should be in bounds");
+        if second.received_at <= target_time {
+            let _ = snapshots.pop_front();
+        } else {
+            break;
+        }
+    }
+
     if snapshots.len() == 1 {
         return snapshots.front().map(|snapshot| snapshot.position);
     }
@@ -458,9 +471,9 @@ async fn main() {
         // Keep remote interpolation render-only since it isn't "real" game state
         let mut render_state = predicted_state.clone();
         if let Some(side) = ui_game_state.player_side {
-            let target_time = current_time;
+            let target_time = current_time - REMOTE_INTERPOLATION_DELAY;
             if let Some(interpolated_position) =
-                interpolate_remote_position(&remote_snapshots, target_time)
+                interpolate_remote_position(&mut remote_snapshots, target_time)
             {
                 match side {
                     PlayerSide::Left => render_state.right_position = interpolated_position,

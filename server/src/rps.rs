@@ -162,6 +162,9 @@ impl GameSession {
     }
 
     pub fn set_left_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
+        if sequence <= self.left_last_processed_input {
+            return;
+        }
         Self::push_move_input(
             &mut self.left_pending_move_inputs,
             QueuedMoveInput { input, sequence },
@@ -169,6 +172,9 @@ impl GameSession {
     }
 
     pub fn set_right_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
+        if sequence <= self.right_last_processed_input {
+            return;
+        }
         Self::push_move_input(
             &mut self.right_pending_move_inputs,
             QueuedMoveInput { input, sequence },
