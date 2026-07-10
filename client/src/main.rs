@@ -168,9 +168,7 @@ fn interpolate_remote_position(
             if t0 == t1 {
                 Some(*p0)
             } else {
-                let total = (*t1 - *t0).as_seconds_f64();
-                let frac = ((target_time - *t0).as_seconds_f64() / total).clamp(0.0, 1.0) as f32;
-                Some(*p0 + (*p1 - *p0) * frac)
+                Some((*p0 + *p1) / 2.)
             }
         }
         (Some((_, p)), None) => Some(*p),
@@ -279,6 +277,8 @@ async fn main() {
                             local_player.set_position(Vec2::ZERO);
                             remote_player.set_position(Vec2::ZERO);
                             game_logic.setup_game();
+                            local_player.set_position(Vec2::ZERO);
+                            remote_player.set_position(Vec2::ZERO);
                             pending_inputs.clear();
                             remote_snapshots.clear();
                             next_input_sequence = 1;
@@ -320,14 +320,19 @@ async fn main() {
                 }
                 ReliableRpcServerMessage::LobbyState(state) => {
                     // unless lobby state is finished, we really shouldn't have a win state
-                    match state {
-                        LobbyState::Finished => {}
-                        _ => {
-                            ui_game_state.win_state = None;
-                            is_input_selected = false;
+                    // also don't updadte if the same lobby state has already been set
+                    if ui_game_state.lobby_state != state {
+                        match state {
+                            LobbyState::Finished => {}
+                            LobbyState::Running => {
+                                ui_game_state.win_state = None;
+                                is_input_selected = false;
+                            }
+                            LobbyState::Empty => {}
+                            LobbyState::Waiting => {}
                         }
+                        ui_game_state.lobby_state = state;
                     }
-                    ui_game_state.lobby_state = state;
                 }
             }
         }
