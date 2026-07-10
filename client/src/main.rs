@@ -14,7 +14,7 @@ use rpc::{
     TurnInput, UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId, YesOrNo,
     encode_message,
 };
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
@@ -131,12 +131,6 @@ struct PendingMoveInput {
     sequence: InputSequence,
 }
 
-#[derive(Clone, Copy)]
-struct TimedRemoteSnapshot {
-    received_at: OffsetDateTime,
-    position: Vec2,
-}
-
 const MAX_PENDING_INPUTS: usize = 256;
 const MAX_REMOTE_SNAPSHOTS: usize = 64;
 const REMOTE_INTERPOLATION_DELAY: Duration = Duration::milliseconds(100);
@@ -148,56 +142,30 @@ fn hash_move_state(state: &MoveGameState) -> u64 {
     hasher.finish()
 }
 
+// client side replication taken from: https://www.gabrielgambetta.com/client-side-prediction-live-demo.html
+// (right click and inspect webpage to see the actual javascript)
 fn interpolate_remote_position(
-    snapshots: &mut VecDeque<TimedRemoteSnapshot>,
-    target_time: OffsetDateTime,
+    snapshots: &mut BTreeMap<OffsetDateTime, Vec2>,
+    current_time: OffsetDateTime,
 ) -> Option<Vec2> {
-    if snapshots.is_empty() {
-        return None;
-    }
+    let target_time = current_time - REMOTE_INTERPOLATION_DELAY;
 
-    // Keep only snapshots that can bracket the target render time.
-    while snapshots.len() >= 2 {
-        let second = snapshots
-            .get(1)
-            .expect("snapshot index should be in bounds");
-        if second.received_at <= target_time {
-            let _ = snapshots.pop_front();
+    // filter out snapshots that have aged out
+    snapshots.retain(|k, _| { k >= &target_time });
+    // get next two values
+    let mut iter = snapshots.iter();
+    let snapshot1 = iter.next();
+    let snapshot2 = iter.next();
+    if let Some(snapshot1) = snapshot1 {
+        if let Some(snapshot2) = snapshot2 {
+            let interpolated_position = (snapshot1.1 + snapshot2.1) / 2.;
+            Some(interpolated_position)
         } else {
-            break;
+            Some(*snapshot1.1)
         }
+    } else {
+        None
     }
-
-    if snapshots.len() == 1 {
-        return snapshots.front().map(|snapshot| snapshot.position);
-    }
-
-    if let Some(first) = snapshots.front()
-        && target_time <= first.received_at
-    {
-        return Some(first.position);
-    }
-
-    for index in 1..snapshots.len() {
-        let previous = snapshots
-            .get(index - 1)
-            .expect("snapshot index should be in bounds");
-        let next = snapshots
-            .get(index)
-            .expect("snapshot index should be in bounds");
-
-        if target_time <= next.received_at {
-            let span = (next.received_at - previous.received_at).as_seconds_f32();
-            if span <= 0.0 {
-                return Some(next.position);
-            }
-            let alpha =
-                ((target_time - previous.received_at).as_seconds_f32() / span).clamp(0.0, 1.0);
-            return Some(previous.position.lerp(next.position, alpha));
-        }
-    }
-
-    snapshots.back().map(|snapshot| snapshot.position)
 }
 
 #[kiss3d::main]
@@ -246,7 +214,7 @@ async fn main() {
     let mut game_logic = GameLogic::new();
     let mut next_input_sequence: InputSequence = 1;
     let mut pending_inputs: Vec<PendingMoveInput> = Vec::new();
-    let mut remote_snapshots: VecDeque<TimedRemoteSnapshot> = VecDeque::new();
+    let mut remote_snapshots: BTreeMap<OffsetDateTime, Vec2> = BTreeMap::new();
     let mut last_acknowledged_sequence: InputSequence = 0;
 
     let mut remote_state_hash = 0;
@@ -384,10 +352,7 @@ async fn main() {
                             game_logic.update_position_with_input(local_side, &pending.input);
                         }
 
-                        remote_snapshots.push_back(TimedRemoteSnapshot {
-                            received_at: current_time,
-                            position: remote_position,
-                        });
+                        remote_snapshots.insert(current_time, remote_position);
                     }
                 }
             }
@@ -454,30 +419,30 @@ async fn main() {
         }
 
         // Hash the simulation state before applying any render-time interpolation.
-        let predicted_state = game_logic.get_state_to_send_to_client();
-        let predicted_state_hash = hash_move_state(&predicted_state);
-
-        // Keep remote interpolation render-only since it isn't "real" game state
-        let mut render_state = predicted_state.clone();
         if let Some(side) = ui_game_state.player_side {
-            let target_time = current_time - REMOTE_INTERPOLATION_DELAY;
             if let Some(interpolated_position) =
-                interpolate_remote_position(&mut remote_snapshots, target_time)
+                interpolate_remote_position(&mut remote_snapshots, current_time)
             {
                 match side {
-                    PlayerSide::Left => render_state.right_position = interpolated_position,
-                    PlayerSide::Right => render_state.left_position = interpolated_position,
+                    PlayerSide::Left => {
+                        game_logic.update_position_with_vec(PlayerSide::Right, interpolated_position);
+                    }
+                    PlayerSide::Right => {
+                        game_logic.update_position_with_vec(PlayerSide::Left, interpolated_position);
+                    }
                 }
             }
         }
+        let predicted_state = game_logic.get_state_to_send_to_client();
+        let predicted_state_hash = hash_move_state(&predicted_state);
         match ui_game_state.player_side {
             Some(PlayerSide::Left) => {
-                local_player.set_position(render_state.left_position);
-                remote_player.set_position(render_state.right_position);
+                local_player.set_position(predicted_state.left_position);
+                remote_player.set_position(predicted_state.right_position);
             }
             Some(PlayerSide::Right) => {
-                local_player.set_position(render_state.right_position);
-                remote_player.set_position(render_state.left_position);
+                local_player.set_position(predicted_state.right_position);
+                remote_player.set_position(predicted_state.left_position);
             }
             None => {
                 local_player.set_position(Vec2::ZERO);
