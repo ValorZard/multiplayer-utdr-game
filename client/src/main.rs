@@ -14,7 +14,7 @@ use rpc::{
     TurnInput, UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId, YesOrNo,
     encode_message,
 };
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
@@ -134,6 +134,7 @@ struct PendingMoveInput {
 const MAX_PENDING_INPUTS: usize = 256;
 const MAX_REMOTE_SNAPSHOTS: usize = 64;
 const REMOTE_INTERPOLATION_DELAY: Duration = Duration::milliseconds(100);
+const REMOTE_SNAPSHOT_HISTORY: Duration = Duration::milliseconds(500);
 
 fn hash_move_state(state: &MoveGameState) -> u64 {
     let bytes = encode_message(state).expect("Should be able to serialize");
@@ -150,21 +151,31 @@ fn interpolate_remote_position(
 ) -> Option<Vec2> {
     let target_time = current_time - REMOTE_INTERPOLATION_DELAY;
 
-    // filter out snapshots that have aged out
-    snapshots.retain(|k, _| k >= &target_time);
-    // get next two values
-    let mut iter = snapshots.iter();
-    let snapshot1 = iter.next();
-    let snapshot2 = iter.next();
-    if let Some(snapshot1) = snapshot1 {
-        if let Some(snapshot2) = snapshot2 {
-            let interpolated_position = (snapshot1.1 + snapshot2.1) / 2.;
-            Some(interpolated_position)
-        } else {
-            Some(*snapshot1.1)
+    // Keep only recent history so we can bracket target_time with a before/after pair.
+    let oldest_allowed = current_time - REMOTE_SNAPSHOT_HISTORY;
+    snapshots.retain(|k, _| k >= &oldest_allowed);
+
+    if snapshots.is_empty() {
+        return None;
+    }
+
+    // Prefer interpolation between samples surrounding target_time.
+    let before = snapshots.range(..=target_time).next_back();
+    let after = snapshots.range(target_time..).next();
+
+    match (before, after) {
+        (Some((t0, p0)), Some((t1, p1))) => {
+            if t0 == t1 {
+                Some(*p0)
+            } else {
+                let total = (*t1 - *t0).as_seconds_f64();
+                let frac = ((target_time - *t0).as_seconds_f64() / total).clamp(0.0, 1.0) as f32;
+                Some(*p0 + (*p1 - *p0) * frac)
+            }
         }
-    } else {
-        None
+        (Some((_, p)), None) => Some(*p),
+        (None, Some((_, p))) => Some(*p),
+        (None, None) => None,
     }
 }
 
@@ -218,6 +229,7 @@ async fn main() {
     let mut last_acknowledged_sequence: InputSequence = 0;
 
     let mut remote_state_hash = 0;
+    let mut predicted_state: MoveGameState;
 
     // Client config
     let client_config = include_str!("../client_config.toml");
@@ -352,7 +364,14 @@ async fn main() {
                             game_logic.update_position_with_input(local_side, &pending.input);
                         }
 
-                        remote_snapshots.insert(current_time, remote_position);
+                        remote_snapshots.insert(OffsetDateTime::now_utc(), remote_position);
+                        while remote_snapshots.len() > MAX_REMOTE_SNAPSHOTS {
+                            if let Some(oldest) = remote_snapshots.keys().next().copied() {
+                                remote_snapshots.remove(&oldest);
+                            } else {
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -408,6 +427,10 @@ async fn main() {
                 next_input_sequence = next_input_sequence.wrapping_add(1);
 
                 pending_inputs.push(PendingMoveInput { input, sequence });
+                if pending_inputs.len() > MAX_PENDING_INPUTS {
+                    let to_drop = pending_inputs.len() - MAX_PENDING_INPUTS;
+                    pending_inputs.drain(0..to_drop);
+                }
 
                 game_logic.update_position_with_input(side, &input);
                 if let Some(rpc_sender) = unreliable_client_rpc_sender.as_ref() {
@@ -419,23 +442,22 @@ async fn main() {
         }
 
         // Hash the simulation state before applying any render-time interpolation.
+        // predicted state is just for rendering, it can't be real because the server has the real state.
+        predicted_state = game_logic.get_state_to_send_to_client();
         if let Some(side) = ui_game_state.player_side {
             if let Some(interpolated_position) =
                 interpolate_remote_position(&mut remote_snapshots, current_time)
             {
                 match side {
                     PlayerSide::Left => {
-                        game_logic
-                            .update_position_with_vec(PlayerSide::Right, interpolated_position);
+                        predicted_state.right_position = interpolated_position;
                     }
                     PlayerSide::Right => {
-                        game_logic
-                            .update_position_with_vec(PlayerSide::Left, interpolated_position);
+                        predicted_state.left_position = interpolated_position;
                     }
                 }
             }
         }
-        let predicted_state = game_logic.get_state_to_send_to_client();
         let predicted_state_hash = hash_move_state(&predicted_state);
         match ui_game_state.player_side {
             Some(PlayerSide::Left) => {
