@@ -245,7 +245,7 @@ async fn main() {
     // game state
     let mut game_logic = GameLogic::new();
     let mut next_input_sequence: InputSequence = 1;
-    let mut pending_inputs: VecDeque<PendingMoveInput> = VecDeque::new();
+    let mut pending_inputs: Vec<PendingMoveInput> = Vec::new();
     let mut remote_snapshots: VecDeque<TimedRemoteSnapshot> = VecDeque::new();
     let mut last_acknowledged_sequence: InputSequence = 0;
 
@@ -377,13 +377,8 @@ async fn main() {
 
                         game_logic.update_position_with_vec(local_side, local_position);
 
-                        while let Some(pending) = pending_inputs.front() {
-                            if pending.sequence <= acknowledged_sequence {
-                                let _ = pending_inputs.pop_front();
-                            } else {
-                                break;
-                            }
-                        }
+                        // drain all pending_inputs that have been aged out
+                        pending_inputs.retain(|input| input.sequence > last_acknowledged_sequence);
 
                         for pending in pending_inputs.iter() {
                             game_logic.update_position_with_input(local_side, &pending.input);
@@ -393,9 +388,6 @@ async fn main() {
                             received_at: current_time,
                             position: remote_position,
                         });
-                        while remote_snapshots.len() > MAX_REMOTE_SNAPSHOTS {
-                            let _ = remote_snapshots.pop_front();
-                        }
                     }
                 }
             }
@@ -450,10 +442,7 @@ async fn main() {
                 let sequence = next_input_sequence;
                 next_input_sequence = next_input_sequence.wrapping_add(1);
 
-                pending_inputs.push_back(PendingMoveInput { input, sequence });
-                while pending_inputs.len() > MAX_PENDING_INPUTS {
-                    let _ = pending_inputs.pop_front();
-                }
+                pending_inputs.push(PendingMoveInput { input, sequence });
 
                 game_logic.update_position_with_input(side, &input);
                 if let Some(rpc_sender) = unreliable_client_rpc_sender.as_ref() {
