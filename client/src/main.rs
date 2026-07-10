@@ -503,7 +503,10 @@ async fn main() {
                 .show(ctx, |ui| {
                     ui.label(format!("Current Frame Time {}", time_since_last_frame));
                     ui.label(format!("Current remote state hash: {}", remote_state_hash));
-                    ui.label(format!("Current predicted state hash: {}", predicted_state_hash));
+                    ui.label(format!(
+                        "Current predicted state hash: {}",
+                        predicted_state_hash
+                    ));
                     ui.label(format!("{ui_game_state:#?}"));
 
                     ui.separator();
