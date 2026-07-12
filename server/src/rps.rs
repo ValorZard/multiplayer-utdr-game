@@ -1,7 +1,5 @@
-use rpc::{
-    GameLogic, InputSequence, MoveGameState, PlayerSide, RPSGameState, RPSWinState, TurnInput,
-};
-use std::collections::VecDeque;
+use rpc::{GameLogic, InputSequence, MoveGameState, PlayerSide, RPSGameState, RPSWinState, TurnInput, UnreliableRpcClientMessage};
+use ringbuffer::{AllocRingBuffer, RingBuffer};
 
 const MAX_QUEUED_MOVE_INPUTS: usize = 512;
 
@@ -47,10 +45,12 @@ pub struct GameSession {
     left_input: Option<rpc::TurnInput>,
     right_input: Option<rpc::TurnInput>,
     game_logic: GameLogic,
-    left_last_processed_input: InputSequence,
-    right_last_processed_input: InputSequence,
-    left_pending_move_inputs: VecDeque<QueuedMoveInput>,
-    right_pending_move_inputs: VecDeque<QueuedMoveInput>,
+    // the latest ack the server received
+    right_remote_clock_ack: InputSequence,
+    left_remote_clock_ack: InputSequence,
+    // TODO: maybe make this a separate struct for the unreliable rpc client message to wrap around?
+    left_pending_move_inputs: AllocRingBuffer<QueuedMoveInput>,
+    right_pending_move_inputs: AllocRingBuffer<QueuedMoveInput>,
 }
 
 impl GameSession {
@@ -59,10 +59,10 @@ impl GameSession {
             left_input: None,
             right_input: None,
             game_logic: GameLogic::new(),
-            left_last_processed_input: 0,
-            right_last_processed_input: 0,
-            left_pending_move_inputs: VecDeque::new(),
-            right_pending_move_inputs: VecDeque::new(),
+            left_remote_clock_ack: 0,
+            right_remote_clock_ack: 0,
+            left_pending_move_inputs: AllocRingBuffer::new(MAX_QUEUED_MOVE_INPUTS),
+            right_pending_move_inputs: AllocRingBuffer::new(MAX_QUEUED_MOVE_INPUTS),
         }
     }
 
@@ -131,12 +131,12 @@ impl GameSession {
         }
     }
 
-    pub fn get_left_processed_input(&self) -> InputSequence {
-        self.left_last_processed_input
+    pub fn get_left_remote_clock_ack(&self) -> InputSequence {
+        self.left_remote_clock_ack
     }
 
-    pub fn get_right_processed_input(&self) -> InputSequence {
-        self.right_last_processed_input
+    pub fn get_right_remote_clock_ack(&self) -> InputSequence {
+        self.right_remote_clock_ack
     }
 
     // you can only set this once per turn
@@ -162,23 +162,11 @@ impl GameSession {
     }
 
     pub fn set_left_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
-        if sequence <= self.left_last_processed_input {
-            return;
-        }
-        Self::push_move_input(
-            &mut self.left_pending_move_inputs,
-            QueuedMoveInput { input, sequence },
-        );
+        self.left_pending_move_inputs.enqueue(QueuedMoveInput { input, sequence });
     }
 
     pub fn set_right_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
-        if sequence <= self.right_last_processed_input {
-            return;
-        }
-        Self::push_move_input(
-            &mut self.right_pending_move_inputs,
-            QueuedMoveInput { input, sequence },
-        );
+        self.right_pending_move_inputs.enqueue(QueuedMoveInput { input, sequence });
     }
 
     pub fn get_move_state(&mut self) -> MoveGameState {
@@ -186,31 +174,24 @@ impl GameSession {
     }
 
     pub fn step(&mut self) {
-        if let Some(next_input) = self.left_pending_move_inputs.pop_front() {
+        // Right now, we don't do any server side rollback, we just directly read the inputs as they come in
+        // the only stuff we do here is update the remote clock ack for the player side
+        for next_input in self.left_pending_move_inputs.drain() {
             self.game_logic
                 .update_position_with_input(PlayerSide::Left, &next_input.input);
-            self.left_last_processed_input = next_input.sequence;
+            if self.left_remote_clock_ack <= next_input.sequence {
+                self.left_remote_clock_ack = next_input.sequence;
+            }
         }
 
-        if let Some(next_input) = self.right_pending_move_inputs.pop_front() {
+        for next_input in self.right_pending_move_inputs.drain() {
             self.game_logic
                 .update_position_with_input(PlayerSide::Right, &next_input.input);
-            self.right_last_processed_input = next_input.sequence;
+            if self.right_remote_clock_ack <= next_input.sequence {
+                self.right_remote_clock_ack = next_input.sequence;
+            }
         }
 
         self.game_logic.step_physics();
-    }
-
-    fn push_move_input(queue: &mut VecDeque<QueuedMoveInput>, next_input: QueuedMoveInput) {
-        if let Some(last) = queue.back()
-            && next_input.sequence <= last.sequence
-        {
-            return;
-        }
-
-        queue.push_back(next_input);
-        while queue.len() > MAX_QUEUED_MOVE_INPUTS {
-            let _ = queue.pop_front();
-        }
     }
 }

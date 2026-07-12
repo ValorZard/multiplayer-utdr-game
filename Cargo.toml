@@ -18,3 +18,4 @@ rapier2d = { version = "0.33", features = ["serde-serialize", "bytemuck"] }
 # we're using straight from git because of extra bug fixes and whatnot
 hecs = {git = "https://github.com/Ralith/hecs.git", rev = "e57c6c895a1a1748746ffa4c6358ac448375e71c"}
 url = { version = "2.5.8", features = ["serde"] }
+ringbuffer = "0.16.0"

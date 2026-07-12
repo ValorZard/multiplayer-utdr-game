@@ -64,6 +64,7 @@ pub enum LobbyError {
     MessageSendFailed(UserId),
     GameError(GameError),
     SideNotFound(PlayerSide),
+    NotRunning,
 }
 
 impl std::fmt::Display for LobbyError {
@@ -84,6 +85,9 @@ impl std::fmt::Display for LobbyError {
             LobbyError::GameError(err) => write!(f, "Game Error: {}", err),
             LobbyError::SideNotFound(side) => {
                 write!(f, "UserId for player side not found: {side:?}")
+            }
+            LobbyError::NotRunning => {
+                write!(f, "Error! This lobby is not running!")
             }
         }
     }
@@ -308,7 +312,7 @@ impl LobbySession {
     }
 
     fn send_unreliable_message_to_side(
-        &self,
+        &mut self,
         message: UnreliableRpcServerMessage,
         player_side: PlayerSide,
     ) -> Result<(), LobbyError> {
@@ -386,9 +390,14 @@ impl LobbySession {
         })
     }
 
-    fn step_game(&mut self) -> MoveGameState {
-        self.current_round.step();
-        self.current_round.get_move_state()
+    fn step_game(&mut self) -> Result<MoveGameState, LobbyError> {
+        // don't step if the lobby is not running
+        if self.get_current_lobby_state() == LobbyState::Running {
+            self.current_round.step();
+            Ok(self.current_round.get_move_state())
+        } else {
+            Err(LobbyError::NotRunning)
+        }
     }
 
     fn handle_message(&mut self, message: LobbySessionMessage) -> Result<(), LobbyError> {
@@ -481,10 +490,11 @@ async fn run_lobby_session(mut lobby: LobbySession) -> Result<(), LobbyError> {
                 // send out gamestate updates
                 lobby.broadcast_lobby_state()?;
                 lobby.broadcast_game_state()?;
-                let move_state = lobby.step_game();
-                // broadcast state to both right and left (it's okay if these fail)
-                let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::MoveGameState {state:move_state.clone(), acknowledged_sequence: lobby.current_round.get_left_processed_input()}, PlayerSide::Left);
-                let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::MoveGameState {state:move_state, acknowledged_sequence: lobby.current_round.get_right_processed_input()}, PlayerSide::Right);
+                if let Ok(move_state) = lobby.step_game() {
+                    // broadcast state to both right and left (it's okay if these fail)
+                    let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::GameState {state:move_state.clone(), acknowledged_sequence: lobby.current_round.get_left_remote_clock_ack()}, PlayerSide::Left);
+                    let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::GameState {state:move_state, acknowledged_sequence: lobby.current_round.get_right_remote_clock_ack()}, PlayerSide::Right);
+                }
             }
         }
     }

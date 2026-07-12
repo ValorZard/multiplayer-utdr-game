@@ -19,6 +19,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 use time::{Duration, OffsetDateTime};
+use ringbuffer::{AllocRingBuffer, RingBuffer};
 
 mod connection;
 
@@ -132,8 +133,12 @@ struct PendingMoveInput {
 }
 
 const MAX_PENDING_INPUTS: usize = 256;
-const MAX_REMOTE_SNAPSHOTS: usize = 64;
-const REMOTE_INTERPOLATION_DELAY: Duration = Duration::milliseconds(100);
+const MAX_REMOTE_SNAPSHOTS: InputSequence = 64;
+// this should be based on our delay to the server
+const REMOTE_INTERPOLATION_DELAY: Duration = Duration::milliseconds(330);
+// TODO: make a proper calculation based on acknowledgement + actual network delay
+// We assume both client and server run on 30 fps
+const REMOTE_ACK_DELAY_FRAMES: InputSequence = 11;
 const REMOTE_SNAPSHOT_HISTORY: Duration = Duration::milliseconds(500);
 
 fn hash_move_state(state: &MoveGameState) -> u64 {
@@ -143,16 +148,40 @@ fn hash_move_state(state: &MoveGameState) -> u64 {
     hasher.finish()
 }
 
+fn prune_acknowledged_inputs(
+    pending_inputs: &mut AllocRingBuffer<PendingMoveInput>,
+    acknowledged_sequence: InputSequence,
+) {
+    let mut remaining: AllocRingBuffer<PendingMoveInput> =
+        AllocRingBuffer::new(MAX_PENDING_INPUTS);
+
+    for pending in pending_inputs.drain() {
+        if pending.sequence > acknowledged_sequence {
+            remaining.enqueue(pending);
+        }
+    }
+
+    *pending_inputs = remaining;
+}
+
 // client side replication taken from: https://www.gabrielgambetta.com/client-side-prediction-live-demo.html
 // (right click and inspect webpage to see the actual javascript)
 fn interpolate_remote_position(
-    snapshots: &mut BTreeMap<OffsetDateTime, Vec2>,
-    current_time: OffsetDateTime,
+    snapshots: &mut BTreeMap<InputSequence, Vec2>,
+    current_local_input_sequence: InputSequence,
 ) -> Option<Vec2> {
-    let target_time = current_time - REMOTE_INTERPOLATION_DELAY;
+    let target_time = if current_local_input_sequence < REMOTE_ACK_DELAY_FRAMES {
+        current_local_input_sequence
+    } else {
+        current_local_input_sequence - REMOTE_ACK_DELAY_FRAMES
+    };
 
     // Keep only recent history so we can bracket target_time with a before/after pair.
-    let oldest_allowed = current_time - REMOTE_SNAPSHOT_HISTORY;
+    let oldest_allowed = if current_local_input_sequence < MAX_REMOTE_SNAPSHOTS {
+        current_local_input_sequence
+    } else {
+        current_local_input_sequence - MAX_REMOTE_SNAPSHOTS
+    };
     snapshots.retain(|k, _| k >= &oldest_allowed);
 
     if snapshots.is_empty() {
@@ -222,8 +251,8 @@ async fn main() {
     // game state
     let mut game_logic = GameLogic::new();
     let mut next_input_sequence: InputSequence = 1;
-    let mut pending_inputs: Vec<PendingMoveInput> = Vec::new();
-    let mut remote_snapshots: BTreeMap<OffsetDateTime, Vec2> = BTreeMap::new();
+    let mut pending_inputs: AllocRingBuffer<PendingMoveInput> = AllocRingBuffer::new(MAX_PENDING_INPUTS);
+    let mut remote_snapshots: BTreeMap<InputSequence, Vec2> = BTreeMap::new();
     let mut last_acknowledged_sequence: InputSequence = 0;
 
     let mut remote_state_hash = 0;
@@ -327,6 +356,12 @@ async fn main() {
                             LobbyState::Running => {
                                 ui_game_state.win_state = None;
                                 is_input_selected = false;
+                                // Ensure move prediction starts from a clean baseline when a round begins.
+                                pending_inputs.clear();
+                                remote_snapshots.clear();
+                                next_input_sequence = 1;
+                                last_acknowledged_sequence = 0;
+                                game_logic.setup_game();
                             }
                             LobbyState::Empty => {}
                             LobbyState::Waiting => {}
@@ -342,7 +377,7 @@ async fn main() {
             && let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten()
         {
             match rpc_message {
-                UnreliableRpcServerMessage::MoveGameState {
+                UnreliableRpcServerMessage::GameState {
                     state,
                     acknowledged_sequence,
                 } => {
@@ -360,23 +395,16 @@ async fn main() {
                         }
                         last_acknowledged_sequence = acknowledged_sequence;
 
+                        prune_acknowledged_inputs(&mut pending_inputs, acknowledged_sequence);
+
                         game_logic.update_position_with_vec(local_side, local_position);
 
-                        // drain all pending_inputs that have been aged out
-                        pending_inputs.retain(|input| input.sequence > last_acknowledged_sequence);
 
                         for pending in pending_inputs.iter() {
                             game_logic.update_position_with_input(local_side, &pending.input);
                         }
 
-                        remote_snapshots.insert(OffsetDateTime::now_utc(), remote_position);
-                        while remote_snapshots.len() > MAX_REMOTE_SNAPSHOTS {
-                            if let Some(oldest) = remote_snapshots.keys().next().copied() {
-                                remote_snapshots.remove(&oldest);
-                            } else {
-                                break;
-                            }
-                        }
+                        remote_snapshots.insert(acknowledged_sequence, remote_position);
                     }
                 }
             }
@@ -431,16 +459,12 @@ async fn main() {
                 let sequence = next_input_sequence;
                 next_input_sequence = next_input_sequence.wrapping_add(1);
 
-                pending_inputs.push(PendingMoveInput { input, sequence });
-                if pending_inputs.len() > MAX_PENDING_INPUTS {
-                    let to_drop = pending_inputs.len() - MAX_PENDING_INPUTS;
-                    pending_inputs.drain(0..to_drop);
-                }
+                pending_inputs.enqueue(PendingMoveInput { input, sequence });
 
                 game_logic.update_position_with_input(side, &input);
                 if let Some(rpc_sender) = unreliable_client_rpc_sender.as_ref() {
                     let _ = rpc_sender
-                        .unbounded_send(UnreliableRpcClientMessage::MoveInput { input, sequence });
+                        .unbounded_send(UnreliableRpcClientMessage::Input { input, sequence });
                 }
             }
             game_logic.step_physics();
@@ -451,7 +475,7 @@ async fn main() {
         predicted_state = game_logic.get_state_to_send_to_client();
         if let Some(side) = ui_game_state.player_side {
             if let Some(interpolated_position) =
-                interpolate_remote_position(&mut remote_snapshots, current_time)
+                interpolate_remote_position(&mut remote_snapshots, next_input_sequence)
             {
                 match side {
                     PlayerSide::Left => {

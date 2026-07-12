@@ -81,10 +81,10 @@ pub enum ReliableRpcClientMessage {
     derive(Debug),
 )]
 pub enum UnreliableRpcClientMessage {
-    MoveInput {
+    Input {
         input: MoveInputState,
         sequence: InputSequence,
-    },
+    }
 }
 
 pub type LobbyId = Uuid;
@@ -212,10 +212,10 @@ pub enum ReliableRpcServerMessage {
     derive(Debug),
 )]
 pub enum UnreliableRpcServerMessage {
-    MoveGameState {
+    GameState {
         state: MoveGameState,
         acknowledged_sequence: InputSequence,
-    },
+    }
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]

@@ -479,7 +479,7 @@ impl ServerStateInner {
             match lobby_entry {
                 LobbyEntry::Running(lobby) => {
                     match user_rpc_message.message {
-                        UnreliableRpcClientMessage::MoveInput { input, sequence } => {
+                        UnreliableRpcClientMessage::Input { input, sequence } => {
                             /*
                             info!(
                                 "Lobby input: {input:?} sent from {:?}",
