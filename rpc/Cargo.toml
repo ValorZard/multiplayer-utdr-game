@@ -13,4 +13,3 @@ glam = {workspace = true}
 rapier2d = {workspace = true}
 hecs = {workspace = true}
 url = {workspace = true}
-ringbuffer = {workspace = true}

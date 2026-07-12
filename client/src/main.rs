@@ -8,7 +8,6 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use ringbuffer::{AllocRingBuffer, RingBuffer};
 use rpc::{
     GAME_TIME_STEP, GameLogic, InputSequence, LobbyId, LobbyState, MoveGameState, PlayerSide,
     RPSGameState, RPSWinState, ReliableRpcClientMessage, ReliableRpcServerMessage, ScoreSize,

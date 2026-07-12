@@ -12,7 +12,6 @@ futures-util = "0.3.32"
 tokio = {workspace = true}
 web-transport-quinn = "0.11.9"
 tokio-stream = {workspace = true}
-rkyv = {workspace = true}
 uuid = {workspace = true }
 anyhow = "1.0.102"
 rustls = { version = "0.23.40", features = ["ring"] }
@@ -31,4 +30,3 @@ reqwest = { version = "0.12.24", default-features = false, features = ["json", "
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sqlx = { version = "0.9.0", features = ["sqlite", "runtime-tokio", "sqlx-toml", "macros", "migrate"] }
-ringbuffer = {workspace = true}
