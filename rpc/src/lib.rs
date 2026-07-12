@@ -81,7 +81,7 @@ pub enum ReliableRpcClientMessage {
     derive(Debug),
 )]
 pub enum UnreliableRpcClientMessage {
-    MoveInput {
+    Input {
         input: MoveInputState,
         sequence: InputSequence,
     },
@@ -212,9 +212,12 @@ pub enum ReliableRpcServerMessage {
     derive(Debug),
 )]
 pub enum UnreliableRpcServerMessage {
-    MoveGameState {
+    GameState {
         state: MoveGameState,
+        // the latest input the server received from the client and acknowledged
         acknowledged_sequence: InputSequence,
+        // the server timestamp for this message
+        tick: InputSequence,
     },
 }
 
@@ -379,7 +382,9 @@ impl GameLogic {
     ) -> Vec2 {
         let handle = self.physics_handle_for(player_side);
         let body = &mut self.physics.bodies[handle];
-        let current_position = body.translation();
+        // Reconciliation may apply multiple inputs before a physics step;
+        // use the pending kinematic target so updates accumulate deterministically.
+        let current_position = body.next_position().translation;
         let delta = input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA;
         let new_pos = Vec2::new(current_position.x + delta.x, current_position.y + delta.y);
 

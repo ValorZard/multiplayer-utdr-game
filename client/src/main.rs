@@ -14,7 +14,7 @@ use rpc::{
     TurnInput, UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId, YesOrNo,
     encode_message,
 };
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
@@ -91,8 +91,6 @@ struct UiGameState {
     lobby_id: Option<LobbyId>,
     remote_right_input: Option<TurnInput>,
     remote_left_input: Option<TurnInput>,
-    remote_right_score: ScoreSize,
-    remote_left_score: ScoreSize,
     player_side: Option<PlayerSide>,
     win_state: Option<RPSWinState>,
     current_game_state: Option<RPSGameState>,
@@ -106,8 +104,6 @@ impl UiGameState {
             lobby_id: None,
             remote_right_input: None,
             remote_left_input: None,
-            remote_right_score: 0,
-            remote_left_score: 0,
             player_side: None,
             win_state: None,
             current_game_state: None,
@@ -131,15 +127,15 @@ struct PendingMoveInput {
     sequence: InputSequence,
 }
 
-#[derive(Clone, Copy)]
-struct TimedRemoteSnapshot {
-    received_at: OffsetDateTime,
-    position: Vec2,
-}
-
 const MAX_PENDING_INPUTS: usize = 256;
-const MAX_REMOTE_SNAPSHOTS: usize = 64;
-const REMOTE_INTERPOLATION_DELAY: Duration = Duration::milliseconds(100);
+const MAX_REMOTE_SNAPSHOTS: InputSequence = 64;
+// We assume both client and server run on 30 fps
+const DEFAULT_REMOTE_ACK_DELAY_FRAMES: InputSequence = 11;
+// RTT Calculation is based off of this:
+// https://www.scs.stanford.edu/08sp-cs144/notes/l6.pdf
+// specifically slide 14
+const RTT_EWMA_ALPHA: f32 = 0.125;
+const RTT_EWMA_BETA: f32 = 0.10;
 
 fn hash_move_state(state: &MoveGameState) -> u64 {
     let bytes = encode_message(state).expect("Should be able to serialize");
@@ -148,56 +144,76 @@ fn hash_move_state(state: &MoveGameState) -> u64 {
     hasher.finish()
 }
 
+fn prune_acknowledged_inputs(
+    pending_inputs: &mut VecDeque<PendingMoveInput>,
+    acknowledged_sequence: InputSequence,
+) {
+    pending_inputs.retain(|input| input.sequence > acknowledged_sequence);
+    while pending_inputs.len() > MAX_PENDING_INPUTS {
+        pending_inputs.pop_front();
+    }
+}
+
+// client side replication taken from: https://www.gabrielgambetta.com/client-side-prediction-live-demo.html
+// (right click and inspect webpage to see the actual javascript)
 fn interpolate_remote_position(
-    snapshots: &mut VecDeque<TimedRemoteSnapshot>,
-    target_time: OffsetDateTime,
+    snapshots: &mut BTreeMap<InputSequence, Vec2>,
+    render_delay_ticks: InputSequence,
 ) -> Option<Vec2> {
-    if snapshots.is_empty() {
-        return None;
-    }
+    let latest_known_tick = *snapshots.keys().next_back()?;
+    let target_time = latest_known_tick.saturating_sub(render_delay_ticks);
 
-    // Keep only snapshots that can bracket the target render time.
-    while snapshots.len() >= 2 {
-        let second = snapshots
-            .get(1)
-            .expect("snapshot index should be in bounds");
-        if second.received_at <= target_time {
-            let _ = snapshots.pop_front();
-        } else {
-            break;
-        }
-    }
+    let oldest_allowed = latest_known_tick.saturating_sub(MAX_REMOTE_SNAPSHOTS);
+    snapshots.retain(|k, _| *k >= oldest_allowed);
 
-    if snapshots.len() == 1 {
-        return snapshots.front().map(|snapshot| snapshot.position);
-    }
+    let before = snapshots.range(..=target_time).next_back();
+    let after = snapshots.range(target_time..).next();
 
-    if let Some(first) = snapshots.front()
-        && target_time <= first.received_at
-    {
-        return Some(first.position);
-    }
-
-    for index in 1..snapshots.len() {
-        let previous = snapshots
-            .get(index - 1)
-            .expect("snapshot index should be in bounds");
-        let next = snapshots
-            .get(index)
-            .expect("snapshot index should be in bounds");
-
-        if target_time <= next.received_at {
-            let span = (next.received_at - previous.received_at).as_seconds_f32();
-            if span <= 0.0 {
-                return Some(next.position);
+    match (before, after) {
+        (Some((t0, p0)), Some((t1, p1))) => {
+            if t0 == t1 {
+                Some(*p0)
+            } else {
+                let frac = (target_time - t0) as f32 / (t1 - t0) as f32;
+                Some(*p0 + (*p1 - *p0) * frac) // lerp by actual gap, not flat average
             }
-            let alpha =
-                ((target_time - previous.received_at).as_seconds_f32() / span).clamp(0.0, 1.0);
-            return Some(previous.position.lerp(next.position, alpha));
+        }
+        (Some((_, p)), None) => Some(*p),
+        (None, Some((_, p))) => Some(*p),
+        (None, None) => None,
+    }
+}
+struct ClientGameLogic {
+    is_input_selected: bool,
+    // Ensure move prediction starts from a clean baseline when a round begins.
+    pending_inputs: VecDeque<PendingMoveInput>,
+    remote_snapshots: BTreeMap<InputSequence, Vec2>,
+    current_input_sequence: InputSequence,
+    last_acknowledged_sequence: InputSequence,
+    dynamic_render_delay_ticks: InputSequence,
+    estimated_rtt: f32,
+    jitter_rtt: f32,
+    game_logic: GameLogic,
+}
+
+impl ClientGameLogic {
+    fn new() -> Self {
+        Self {
+            is_input_selected: false,
+            pending_inputs: VecDeque::new(),
+            remote_snapshots: BTreeMap::new(),
+            current_input_sequence: 0,
+            last_acknowledged_sequence: 0,
+            dynamic_render_delay_ticks: DEFAULT_REMOTE_ACK_DELAY_FRAMES,
+            estimated_rtt: 0.0,
+            jitter_rtt: 0.0,
+            game_logic: GameLogic::new(),
         }
     }
 
-    snapshots.back().map(|snapshot| snapshot.position)
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
 }
 
 #[kiss3d::main]
@@ -243,13 +259,10 @@ async fn main() {
     let mut input = rpc::MoveInputState::default();
 
     // game state
-    let mut game_logic = GameLogic::new();
-    let mut next_input_sequence: InputSequence = 1;
-    let mut pending_inputs: VecDeque<PendingMoveInput> = VecDeque::new();
-    let mut remote_snapshots: VecDeque<TimedRemoteSnapshot> = VecDeque::new();
-    let mut last_acknowledged_sequence: InputSequence = 0;
+    let mut game_logic = ClientGameLogic::new();
 
     let mut remote_state_hash = 0;
+    let mut predicted_state: MoveGameState;
 
     // Client config
     let client_config = include_str!("../client_config.toml");
@@ -298,11 +311,9 @@ async fn main() {
                             // Ensure local simulation entities exist as soon as we know our side.
                             local_player.set_position(Vec2::ZERO);
                             remote_player.set_position(Vec2::ZERO);
-                            game_logic.setup_game();
-                            pending_inputs.clear();
-                            remote_snapshots.clear();
-                            next_input_sequence = 1;
-                            last_acknowledged_sequence = 0;
+                            game_logic.reset();
+                            local_player.set_position(Vec2::ZERO);
+                            remote_player.set_position(Vec2::ZERO);
                         }
                         RPSGameState::WaitingForLeftInput { right_input } => {
                             ui_game_state.remote_right_input = Some(*right_input);
@@ -320,8 +331,6 @@ async fn main() {
                             ui_game_state.remote_left_input = Some(*left_input);
                         }
                     }
-                    ui_game_state.remote_left_score = left_side_score;
-                    ui_game_state.remote_right_score = right_side_score;
                     ui_game_state.current_game_state = Some(state);
                 }
                 ReliableRpcServerMessage::ConnectionAuthentication(oauth_url) => {
@@ -340,14 +349,21 @@ async fn main() {
                 }
                 ReliableRpcServerMessage::LobbyState(state) => {
                     // unless lobby state is finished, we really shouldn't have a win state
-                    match state {
-                        LobbyState::Finished => {}
-                        _ => {
-                            ui_game_state.win_state = None;
-                            is_input_selected = false;
+                    // also don't updadte if the same lobby state has already been set
+                    if ui_game_state.lobby_state != state {
+                        match state {
+                            LobbyState::Finished => {}
+                            LobbyState::Running => {
+                                ui_game_state.win_state = None;
+                                is_input_selected = false;
+                                // Ensure move prediction starts from a clean baseline when a round begins.
+                                game_logic.reset();
+                            }
+                            LobbyState::Empty => {}
+                            LobbyState::Waiting => {}
                         }
+                        ui_game_state.lobby_state = state;
                     }
-                    ui_game_state.lobby_state = state;
                 }
             }
         }
@@ -357,9 +373,10 @@ async fn main() {
             && let Some(rpc_message) = server_rpc_receiver.next().now_or_never().flatten()
         {
             match rpc_message {
-                UnreliableRpcServerMessage::MoveGameState {
+                UnreliableRpcServerMessage::GameState {
                     state,
                     acknowledged_sequence,
+                    tick,
                 } => {
                     // hash state
                     remote_state_hash = hash_move_state(&state);
@@ -370,32 +387,57 @@ async fn main() {
                             PlayerSide::Right => (state.right_position, state.left_position),
                         };
 
-                        if acknowledged_sequence < last_acknowledged_sequence {
+                        if acknowledged_sequence < game_logic.last_acknowledged_sequence {
                             continue;
                         }
-                        last_acknowledged_sequence = acknowledged_sequence;
 
-                        game_logic.update_position_with_vec(local_side, local_position);
+                        // RTT estimate in simulation ticks (30 FPS), inferred from
+                        // local sent sequence vs server-acknowledged sequence.
+                        // Our sample RTT is based on the difference between the current input sequence here,
+                        // and the remote input sequence acknowledged by the server
+                        // Each tick is 1/30 of a second, so it wouldn't be too hard to convert back into milliseconds
+                        let game_time_step = GAME_TIME_STEP.as_secs_f32();
+                        let sample_rtt = (game_logic
+                            .current_input_sequence
+                            .saturating_sub(acknowledged_sequence)
+                            as f32)
+                            * game_time_step;
+                        game_logic.estimated_rtt = ((1. - RTT_EWMA_ALPHA)
+                            * game_logic.estimated_rtt)
+                            + (RTT_EWMA_ALPHA * sample_rtt);
+                        let abs_error = (game_logic.estimated_rtt - sample_rtt).abs();
+                        // jitter is deviation of the estimated RTT
+                        game_logic.jitter_rtt = ((1. - RTT_EWMA_BETA) * game_logic.jitter_rtt)
+                            + (RTT_EWMA_BETA * abs_error);
 
-                        while let Some(pending) = pending_inputs.front() {
-                            if pending.sequence <= acknowledged_sequence {
-                                let _ = pending_inputs.pop_front();
-                            } else {
-                                break;
-                            }
+                        // Interpolation delay ~= one-way latency + jitter buffer
+                        let target_render_delay_ticks = (((game_logic.estimated_rtt / 2.0)
+                            + game_logic.jitter_rtt
+                            + game_time_step)
+                            / game_time_step)
+                            .ceil()
+                            as InputSequence;
+                        game_logic.dynamic_render_delay_ticks = target_render_delay_ticks
+                            .clamp(2, MAX_REMOTE_SNAPSHOTS.saturating_sub(1));
+
+                        game_logic.last_acknowledged_sequence = acknowledged_sequence;
+
+                        prune_acknowledged_inputs(
+                            &mut game_logic.pending_inputs,
+                            acknowledged_sequence,
+                        );
+
+                        game_logic
+                            .game_logic
+                            .update_position_with_vec(local_side, local_position);
+
+                        for pending in game_logic.pending_inputs.iter() {
+                            game_logic
+                                .game_logic
+                                .update_position_with_input(local_side, &pending.input);
                         }
-
-                        for pending in pending_inputs.iter() {
-                            game_logic.update_position_with_input(local_side, &pending.input);
-                        }
-
-                        remote_snapshots.push_back(TimedRemoteSnapshot {
-                            received_at: current_time,
-                            position: remote_position,
-                        });
-                        while remote_snapshots.len() > MAX_REMOTE_SNAPSHOTS {
-                            let _ = remote_snapshots.pop_front();
-                        }
+                        // we want to give each remote snapshot a timestamp from the server itself
+                        game_logic.remote_snapshots.insert(tick, remote_position);
                     }
                 }
             }
@@ -446,49 +488,63 @@ async fn main() {
         game_time_step_timer += time_since_last_frame;
         while game_time_step_timer >= GAME_TIME_STEP {
             game_time_step_timer -= GAME_TIME_STEP;
-            if let Some(side) = ui_game_state.player_side {
-                let sequence = next_input_sequence;
-                next_input_sequence = next_input_sequence.wrapping_add(1);
+            // make sure LobbyState is running, because building up inputs before network syncing is bad
+            if let Some(side) = ui_game_state.player_side
+                && ui_game_state.lobby_state == LobbyState::Running
+            {
+                let sequence = game_logic.current_input_sequence;
+                game_logic.current_input_sequence =
+                    game_logic.current_input_sequence.wrapping_add(1);
 
-                pending_inputs.push_back(PendingMoveInput { input, sequence });
-                while pending_inputs.len() > MAX_PENDING_INPUTS {
-                    let _ = pending_inputs.pop_front();
-                }
+                game_logic
+                    .pending_inputs
+                    .push_back(PendingMoveInput { input, sequence });
 
-                game_logic.update_position_with_input(side, &input);
+                game_logic
+                    .game_logic
+                    .update_position_with_input(side, &input);
                 if let Some(rpc_sender) = unreliable_client_rpc_sender.as_ref() {
                     let _ = rpc_sender
-                        .unbounded_send(UnreliableRpcClientMessage::MoveInput { input, sequence });
+                        .unbounded_send(UnreliableRpcClientMessage::Input { input, sequence });
                 }
             }
-            game_logic.step_physics();
+            game_logic.game_logic.step_physics();
         }
 
         // Hash the simulation state before applying any render-time interpolation.
-        let predicted_state = game_logic.get_state_to_send_to_client();
-        let predicted_state_hash = hash_move_state(&predicted_state);
-
-        // Keep remote interpolation render-only since it isn't "real" game state
-        let mut render_state = predicted_state.clone();
+        // predicted state is just for rendering, it can't be real because the server has the real state.
+        predicted_state = game_logic.game_logic.get_state_to_send_to_client();
+        let pre_predicted_state_hash = hash_move_state(&predicted_state);
+        // actually do the prediction here, which will modify predicted state to fit the server
         if let Some(side) = ui_game_state.player_side {
-            let target_time = current_time - REMOTE_INTERPOLATION_DELAY;
-            if let Some(interpolated_position) =
-                interpolate_remote_position(&mut remote_snapshots, target_time)
-            {
+            if let Some(interpolated_position) = interpolate_remote_position(
+                &mut game_logic.remote_snapshots,
+                game_logic.dynamic_render_delay_ticks,
+            ) {
                 match side {
-                    PlayerSide::Left => render_state.right_position = interpolated_position,
-                    PlayerSide::Right => render_state.left_position = interpolated_position,
+                    PlayerSide::Left => {
+                        predicted_state.right_position = interpolated_position;
+                    }
+                    PlayerSide::Right => {
+                        predicted_state.left_position = interpolated_position;
+                    }
                 }
             }
         }
+        let rendered_state_hash = hash_move_state(&predicted_state);
+        let ms_per_tick = GAME_TIME_STEP.as_secs_f32() * 1000.0;
+        let dynamic_render_delay_ticks = game_logic.dynamic_render_delay_ticks;
+        let dynamic_render_delay_ms = dynamic_render_delay_ticks as f32 * ms_per_tick;
+        let estimated_rtt_ms = game_logic.estimated_rtt * 1000.0;
+        let jitter_rtt_ms = game_logic.jitter_rtt * 1000.0;
         match ui_game_state.player_side {
             Some(PlayerSide::Left) => {
-                local_player.set_position(render_state.left_position);
-                remote_player.set_position(render_state.right_position);
+                local_player.set_position(predicted_state.left_position);
+                remote_player.set_position(predicted_state.right_position);
             }
             Some(PlayerSide::Right) => {
-                local_player.set_position(render_state.right_position);
-                remote_player.set_position(render_state.left_position);
+                local_player.set_position(predicted_state.right_position);
+                remote_player.set_position(predicted_state.left_position);
             }
             None => {
                 local_player.set_position(Vec2::ZERO);
@@ -504,9 +560,21 @@ async fn main() {
                     ui.label(format!("Current Frame Time {}", time_since_last_frame));
                     ui.label(format!("Current remote state hash: {}", remote_state_hash));
                     ui.label(format!(
-                        "Current predicted state hash: {}",
-                        predicted_state_hash
+                        "Reconciled predicted state hash (pre-render interpolation): {}",
+                        pre_predicted_state_hash
                     ));
+                    ui.label(format!(
+                        "Rendered predicted state hash (post-interpolation): {}",
+                        rendered_state_hash
+                    ));
+                    ui.separator();
+                    ui.label(format!(
+                        "Dynamic render delay: {} ticks ({:.1} ms)",
+                        dynamic_render_delay_ticks, dynamic_render_delay_ms
+                    ));
+                    ui.label(format!("RTT estimate: ({:.1} ms)", estimated_rtt_ms));
+                    ui.label(format!("Ping estimate: ({:.1} ms)", estimated_rtt_ms / 2.));
+                    ui.label(format!("RTT jitter estimate: ({:.1} ms)", jitter_rtt_ms));
                     ui.label(format!("{ui_game_state:#?}"));
 
                     ui.separator();

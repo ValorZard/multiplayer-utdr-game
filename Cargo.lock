@@ -4884,7 +4884,6 @@ dependencies = [
  "oauth2",
  "rapier2d",
  "reqwest",
- "rkyv",
  "rpc",
  "rustls",
  "rustls-pemfile",

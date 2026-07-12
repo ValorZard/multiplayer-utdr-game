@@ -1,15 +1,9 @@
+use std::collections::BTreeMap;
+
 use rpc::{
-    GameLogic, InputSequence, MoveGameState, PlayerSide, RPSGameState, RPSWinState, TurnInput,
+    GameLogic, InputSequence, MoveGameState, MoveInputState, PlayerSide, RPSGameState, RPSWinState,
+    TurnInput,
 };
-use std::collections::VecDeque;
-
-const MAX_QUEUED_MOVE_INPUTS: usize = 512;
-
-#[derive(Clone, Copy)]
-struct QueuedMoveInput {
-    input: rpc::MoveInputState,
-    sequence: InputSequence,
-}
 
 #[derive(Debug, PartialEq)]
 pub enum GameError {
@@ -47,10 +41,16 @@ pub struct GameSession {
     left_input: Option<rpc::TurnInput>,
     right_input: Option<rpc::TurnInput>,
     game_logic: GameLogic,
-    left_last_processed_input: InputSequence,
-    right_last_processed_input: InputSequence,
-    left_pending_move_inputs: VecDeque<QueuedMoveInput>,
-    right_pending_move_inputs: VecDeque<QueuedMoveInput>,
+    // the latest ack the server received
+    right_remote_clock_ack: InputSequence,
+    left_remote_clock_ack: InputSequence,
+    left_pending_move_inputs: BTreeMap<InputSequence, MoveInputState>,
+    right_pending_move_inputs: BTreeMap<InputSequence, MoveInputState>,
+    // held/duplicated when nothing new arrived (dead reckoning)
+    left_last_applied_input: MoveInputState,
+    right_last_applied_input: MoveInputState,
+    // this is to add timestamps to the snapshots we're sending to the client
+    tick: InputSequence,
 }
 
 impl GameSession {
@@ -59,10 +59,13 @@ impl GameSession {
             left_input: None,
             right_input: None,
             game_logic: GameLogic::new(),
-            left_last_processed_input: 0,
-            right_last_processed_input: 0,
-            left_pending_move_inputs: VecDeque::new(),
-            right_pending_move_inputs: VecDeque::new(),
+            left_remote_clock_ack: 0,
+            right_remote_clock_ack: 0,
+            left_pending_move_inputs: BTreeMap::new(),
+            right_pending_move_inputs: BTreeMap::new(),
+            left_last_applied_input: MoveInputState::default(),
+            right_last_applied_input: MoveInputState::default(),
+            tick: 0,
         }
     }
 
@@ -131,12 +134,12 @@ impl GameSession {
         }
     }
 
-    pub fn get_left_processed_input(&self) -> InputSequence {
-        self.left_last_processed_input
+    pub fn get_left_remote_clock_ack(&self) -> InputSequence {
+        self.left_remote_clock_ack
     }
 
-    pub fn get_right_processed_input(&self) -> InputSequence {
-        self.right_last_processed_input
+    pub fn get_right_remote_clock_ack(&self) -> InputSequence {
+        self.right_remote_clock_ack
     }
 
     // you can only set this once per turn
@@ -162,55 +165,61 @@ impl GameSession {
     }
 
     pub fn set_left_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
-        if sequence <= self.left_last_processed_input {
-            return;
+        // accept only strictly newer sequence ids than the latest applied
+        if sequence > self.left_remote_clock_ack {
+            self.left_pending_move_inputs
+                .entry(sequence)
+                .or_insert(input);
         }
-        Self::push_move_input(
-            &mut self.left_pending_move_inputs,
-            QueuedMoveInput { input, sequence },
-        );
     }
 
     pub fn set_right_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
-        if sequence <= self.right_last_processed_input {
-            return;
+        // accept only strictly newer sequence ids than the latest applied
+        if sequence > self.right_remote_clock_ack {
+            self.right_pending_move_inputs
+                .entry(sequence)
+                .or_insert(input);
         }
-        Self::push_move_input(
-            &mut self.right_pending_move_inputs,
-            QueuedMoveInput { input, sequence },
-        );
     }
 
     pub fn get_move_state(&mut self) -> MoveGameState {
         self.game_logic.get_state_to_send_to_client()
     }
 
-    pub fn step(&mut self) {
-        if let Some(next_input) = self.left_pending_move_inputs.pop_front() {
-            self.game_logic
-                .update_position_with_input(PlayerSide::Left, &next_input.input);
-            self.left_last_processed_input = next_input.sequence;
-        }
-
-        if let Some(next_input) = self.right_pending_move_inputs.pop_front() {
-            self.game_logic
-                .update_position_with_input(PlayerSide::Right, &next_input.input);
-            self.right_last_processed_input = next_input.sequence;
-        }
-
-        self.game_logic.step_physics();
+    pub fn get_tick(&self) -> InputSequence {
+        self.tick
     }
 
-    fn push_move_input(queue: &mut VecDeque<QueuedMoveInput>, next_input: QueuedMoveInput) {
-        if let Some(last) = queue.back()
-            && next_input.sequence <= last.sequence
-        {
-            return;
-        }
+    pub fn step(&mut self) {
+        // Unreliable packets can be dropped permanently, so do not stall waiting
+        // for contiguous sequences. Apply the next available received input.
+        // TODO: Add server-side prediction maybe?
+        let left_input = self
+            .left_pending_move_inputs
+            .pop_first()
+            .map(|(seq, input)| {
+                self.left_remote_clock_ack = seq;
+                input
+            })
+            .unwrap_or(self.left_last_applied_input);
+        let right_input = self
+            .right_pending_move_inputs
+            .pop_first()
+            .map(|(seq, input)| {
+                self.right_remote_clock_ack = seq;
+                input
+            })
+            .unwrap_or(self.right_last_applied_input);
 
-        queue.push_back(next_input);
-        while queue.len() > MAX_QUEUED_MOVE_INPUTS {
-            let _ = queue.pop_front();
-        }
+        self.left_last_applied_input = left_input;
+        self.right_last_applied_input = right_input;
+
+        self.game_logic
+            .update_position_with_input(PlayerSide::Left, &left_input);
+        self.game_logic
+            .update_position_with_input(PlayerSide::Right, &right_input);
+        self.game_logic.step_physics();
+
+        self.tick = self.tick.wrapping_add(1);
     }
 }
