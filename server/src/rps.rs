@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use rpc::{
-    GameLogic, InputSequence, MoveGameState, MoveInputState, PlayerSide, RPSGameState,
-    RPSWinState, TurnInput,
+    GameLogic, InputSequence, MoveGameState, MoveInputState, PlayerSide, RPSGameState, RPSWinState,
+    TurnInput,
 };
 
 #[derive(Debug, PartialEq)]
@@ -167,14 +167,18 @@ impl GameSession {
     pub fn set_left_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
         // accept only strictly newer sequence ids than the latest applied
         if sequence > self.left_remote_clock_ack {
-            self.left_pending_move_inputs.entry(sequence).or_insert(input);
+            self.left_pending_move_inputs
+                .entry(sequence)
+                .or_insert(input);
         }
     }
 
     pub fn set_right_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
         // accept only strictly newer sequence ids than the latest applied
         if sequence > self.right_remote_clock_ack {
-            self.right_pending_move_inputs.entry(sequence).or_insert(input);
+            self.right_pending_move_inputs
+                .entry(sequence)
+                .or_insert(input);
         }
     }
 
@@ -182,7 +186,9 @@ impl GameSession {
         self.game_logic.get_state_to_send_to_client()
     }
 
-    pub fn get_tick(&self) -> InputSequence { self.tick }
+    pub fn get_tick(&self) -> InputSequence {
+        self.tick
+    }
 
     pub fn step(&mut self) {
         // Unreliable packets can be dropped permanently, so do not stall waiting
@@ -208,8 +214,10 @@ impl GameSession {
         self.left_last_applied_input = left_input;
         self.right_last_applied_input = right_input;
 
-        self.game_logic.update_position_with_input(PlayerSide::Left, &left_input);
-        self.game_logic.update_position_with_input(PlayerSide::Right, &right_input);
+        self.game_logic
+            .update_position_with_input(PlayerSide::Left, &left_input);
+        self.game_logic
+            .update_position_with_input(PlayerSide::Right, &right_input);
         self.game_logic.step_physics();
 
         self.tick = self.tick.wrapping_add(1);

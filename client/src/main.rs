@@ -175,8 +175,9 @@ fn interpolate_remote_position(
 
     match (before, after) {
         (Some((t0, p0)), Some((t1, p1))) => {
-            if t0 == t1 { Some(*p0) }
-            else {
+            if t0 == t1 {
+                Some(*p0)
+            } else {
                 let frac = (target_time - t0) as f32 / (t1 - t0) as f32;
                 Some(*p0 + (*p1 - *p0) * frac) // lerp by actual gap, not flat average
             }
@@ -406,9 +407,7 @@ async fn main() {
                                 .update_position_with_input(local_side, &pending.input);
                         }
 
-                        game_logic
-                            .remote_snapshots
-                            .insert(tick, remote_position);
+                        game_logic.remote_snapshots.insert(tick, remote_position);
                     }
                 }
             }
