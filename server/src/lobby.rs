@@ -20,7 +20,7 @@ pub enum LobbySessionMessage {
         oneshot::Sender<Result<(PlayerSide, LobbyState), LobbyError>>,
     ),
     RPSInput(UserId, TurnInput, oneshot::Sender<RPSGameState>),
-    MoveInput(UserId, MoveInputState, InputSequence),
+    MoveInput(UserId, MoveInputState, InputSequence, i64),
     SendReliableMessageToUser(
         ReliableRpcServerMessage,
         UserId,
@@ -434,11 +434,18 @@ impl LobbySession {
                 };
                 let _ = oneshot.send(current_state);
             }
-            LobbySessionMessage::MoveInput(player_addr, input, sequence) => {
+            LobbySessionMessage::MoveInput(player_addr, input, sequence, client_send_time_ms) => {
                 let player_side = self.get_player_side(player_addr)?;
                 match player_side {
-                    PlayerSide::Left => self.current_round.set_left_move_input(input, sequence),
-                    PlayerSide::Right => self.current_round.set_right_move_input(input, sequence),
+                    PlayerSide::Left => {
+                        self.current_round
+                            .set_left_move_input(input, sequence, client_send_time_ms)
+                    }
+                    PlayerSide::Right => self.current_round.set_right_move_input(
+                        input,
+                        sequence,
+                        client_send_time_ms,
+                    ),
                 }
             }
             LobbySessionMessage::SendReliableMessageToUser(message, addr, oneshot) => {
@@ -492,8 +499,8 @@ async fn run_lobby_session(mut lobby: LobbySession) -> Result<(), LobbyError> {
                 lobby.broadcast_game_state()?;
                 if let Ok(move_state) = lobby.step_game() {
                     // broadcast state to both right and left (it's okay if these fail)
-                    let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::GameState {state:move_state.clone(), acknowledged_sequence: lobby.current_round.get_left_remote_clock_ack(), tick: lobby.current_round.get_tick()}, PlayerSide::Left);
-                    let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::GameState {state:move_state, acknowledged_sequence: lobby.current_round.get_right_remote_clock_ack(), tick: lobby.current_round.get_tick()}, PlayerSide::Right);
+                    let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::GameState {state:move_state.clone(), acknowledged_sequence: lobby.current_round.get_left_remote_clock_ack(), tick: lobby.current_round.get_tick(), echo_client_time_ms: lobby.current_round.get_left_last_client_time_ms()}, PlayerSide::Left);
+                    let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::GameState {state:move_state, acknowledged_sequence: lobby.current_round.get_right_remote_clock_ack(), tick: lobby.current_round.get_tick(), echo_client_time_ms: lobby.current_round.get_right_last_client_time_ms()}, PlayerSide::Right);
                 }
             }
         }
@@ -610,8 +617,9 @@ impl LobbySessionHandle {
         user_addr: UserId,
         input: MoveInputState,
         sequence: InputSequence,
+        client_send_time_ms: i64,
     ) {
-        let msg = LobbySessionMessage::MoveInput(user_addr, input, sequence);
+        let msg = LobbySessionMessage::MoveInput(user_addr, input, sequence, client_send_time_ms);
         let _ = self.sender.send(msg).await;
     }
 

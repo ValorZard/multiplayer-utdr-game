@@ -9,9 +9,9 @@ use include_dir::{Dir, include_dir};
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
 use rpc::{
-    GAME_TIME_STEP, GameLogic, InputSequence, LobbyId, LobbyState, MoveGameState, PlayerSide,
-    RPSGameState, RPSWinState, ReliableRpcClientMessage, ReliableRpcServerMessage, ScoreSize,
-    TurnInput, UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId, YesOrNo,
+    GAME_TIME_STEP, GameLogic, InputSequence, LobbyId, LobbyState, MoveGameState, PendingMoveInput,
+    PlayerSide, RPSGameState, RPSWinState, ReliableRpcClientMessage, ReliableRpcServerMessage,
+    ScoreSize, TurnInput, UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId, YesOrNo,
     encode_message,
 };
 use std::collections::{BTreeMap, VecDeque};
@@ -121,19 +121,11 @@ struct ClientConfig {
     servers: Vec<String>,
 }
 
-#[derive(Clone, Copy)]
-struct PendingMoveInput {
-    input: rpc::MoveInputState,
-    sequence: InputSequence,
-}
-
 const MAX_PENDING_INPUTS: usize = 256;
+const MAX_INPUTS_TO_SEND: usize = 8;
 const MAX_REMOTE_SNAPSHOTS: InputSequence = 64;
 // We assume both client and server run on 30 fps
 const DEFAULT_REMOTE_INTERPOLATION_DELAY_FRAMES: InputSequence = 2;
-// RTT Calculation is based off of this:
-// https://www.scs.stanford.edu/08sp-cs144/notes/l6.pdf
-// specifically slide 14
 const RTT_EWMA_ALPHA: f32 = 0.125;
 const RTT_EWMA_BETA: f32 = 0.10;
 
@@ -271,6 +263,8 @@ async fn main() {
     let mut direct_connect_addr = String::new();
     while window.render_2d(&mut scene, &mut camera).await {
         let current_time = OffsetDateTime::now_utc();
+        // current time in milliseconds
+        let current_time_ms = (current_time.unix_timestamp_nanos() / 1_000_000) as i64;
         let time_since_last_frame = {
             let frame_time = current_time - previous_time;
             if frame_time > max_time_between_frames {
@@ -377,6 +371,7 @@ async fn main() {
                     state,
                     acknowledged_sequence,
                     tick,
+                    echo_client_time_ms,
                 } => {
                     // hash state
                     remote_state_hash = hash_move_state(&state);
@@ -391,24 +386,27 @@ async fn main() {
                             continue;
                         }
 
-                        // RTT estimate in simulation ticks (30 FPS), inferred from
-                        // local sent sequence vs server-acknowledged sequence.
-                        // Our sample RTT is based on the difference between the current input sequence here,
-                        // and the remote input sequence acknowledged by the server
-                        // Each tick is 1/30 of a second, so it wouldn't be too hard to convert back into milliseconds
                         let game_time_step = GAME_TIME_STEP.as_secs_f32();
-                        let sample_rtt = (game_logic
-                            .current_input_sequence
-                            .saturating_sub(acknowledged_sequence)
-                            as f32)
-                            * game_time_step;
-                        game_logic.estimated_rtt = ((1. - RTT_EWMA_ALPHA)
-                            * game_logic.estimated_rtt)
-                            + (RTT_EWMA_ALPHA * sample_rtt);
-                        let abs_error = (game_logic.estimated_rtt - sample_rtt).abs();
-                        // jitter is deviation of the estimated RTT
-                        game_logic.jitter_rtt = ((1. - RTT_EWMA_BETA) * game_logic.jitter_rtt)
-                            + (RTT_EWMA_BETA * abs_error);
+                        // RTT estimate from wall-clock time: echo_client_time_ms is the
+                        // client_send_time_ms of the most recent input packet the server had
+                        // received, echoed back verbatim.
+                        // Comparing it against "now" gives a real send-to-receive-echo latency sample
+                        // A sentinel of 0 means the server hasn't received any input from us
+                        // yet, so there's nothing valid to sample.
+                        // RTT Calculation is based off of this:
+                        // https://www.scs.stanford.edu/08sp-cs144/notes/l6.pdf
+                        // specifically slide 14
+                        if echo_client_time_ms > 0 {
+                            let sample_rtt =
+                                (current_time_ms - echo_client_time_ms).max(0) as f32 / 1000.0;
+                            game_logic.estimated_rtt = ((1. - RTT_EWMA_ALPHA)
+                                * game_logic.estimated_rtt)
+                                + (RTT_EWMA_ALPHA * sample_rtt);
+                            let abs_error = (game_logic.estimated_rtt - sample_rtt).abs();
+                            // jitter is deviation of the estimated RTT
+                            game_logic.jitter_rtt = ((1. - RTT_EWMA_BETA) * game_logic.jitter_rtt)
+                                + (RTT_EWMA_BETA * abs_error);
+                        }
 
                         // Interpolation delay ~= one-way latency + jitter buffer
                         let target_render_delay_ticks =
@@ -503,9 +501,20 @@ async fn main() {
                 game_logic
                     .game_logic
                     .update_position_with_input(side, &input);
+                // send all inputs that haven't been acknowledged yet
+                // (there is a max amount of inputs we can send before the message gets too big)
                 if let Some(rpc_sender) = unreliable_client_rpc_sender.as_ref() {
-                    let _ = rpc_sender
-                        .unbounded_send(UnreliableRpcClientMessage::Input { input, sequence });
+                    // only resend the newest MAX_INPUTS_TO_SEND unacked inputs per packet so
+                    // message size stays bounded regardless of how deep the backlog gets
+                    let len = game_logic.pending_inputs.len();
+                    let start = len.saturating_sub(MAX_INPUTS_TO_SEND);
+
+                    let pending_inputs_to_send: VecDeque<PendingMoveInput> =
+                        game_logic.pending_inputs.range(start..).cloned().collect();
+                    let _ = rpc_sender.unbounded_send(UnreliableRpcClientMessage::Input {
+                        pending_inputs: pending_inputs_to_send,
+                        client_send_time_ms: current_time_ms,
+                    });
                 }
             }
             game_logic.game_logic.step_physics();

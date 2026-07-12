@@ -1,7 +1,8 @@
 use anyhow::{anyhow, bail};
 use rpc::{
-    ConnectionInitMessage, LobbyId, PlayerSide, RPSGameState, ReliableRpcClientMessage,
-    ReliableRpcServerMessage, UnreliableRpcClientMessage, UserId, YesOrNo,
+    ConnectionInitMessage, LobbyId, PendingMoveInput, PlayerSide, RPSGameState,
+    ReliableRpcClientMessage, ReliableRpcServerMessage, UnreliableRpcClientMessage, UserId,
+    YesOrNo,
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
@@ -479,7 +480,10 @@ impl ServerStateInner {
             match lobby_entry {
                 LobbyEntry::Running(lobby) => {
                     match user_rpc_message.message {
-                        UnreliableRpcClientMessage::Input { input, sequence } => {
+                        UnreliableRpcClientMessage::Input {
+                            pending_inputs,
+                            client_send_time_ms,
+                        } => {
                             /*
                             info!(
                                 "Lobby input: {input:?} sent from {:?}",
@@ -487,9 +491,16 @@ impl ServerStateInner {
                             );
                             info!("Lobby session: {lobby:?}");
                             */
-                            lobby
-                                .send_move_input(user_rpc_message.send_addr, input, sequence)
-                                .await;
+                            for PendingMoveInput { input, sequence } in pending_inputs {
+                                lobby
+                                    .send_move_input(
+                                        user_rpc_message.send_addr,
+                                        input,
+                                        sequence,
+                                        client_send_time_ms,
+                                    )
+                                    .await;
+                            }
                         }
                     }
                     self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));

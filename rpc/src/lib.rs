@@ -3,6 +3,7 @@ use rapier2d::prelude::*;
 use rkyv::api::high::{HighSerializer, HighValidator};
 use rkyv::bytecheck::CheckBytes;
 use rkyv::{Archive, Deserialize, Serialize, rancor, util::AlignedVec};
+use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -80,10 +81,29 @@ pub enum ReliableRpcClientMessage {
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
+pub struct PendingMoveInput {
+    pub input: MoveInputState,
+    pub sequence: InputSequence,
+}
+
+// Right now, this is milliseconds in unix epoch time
+pub type RemoteTimestamp = i64;
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
 pub enum UnreliableRpcClientMessage {
     Input {
-        input: MoveInputState,
-        sequence: InputSequence,
+        pending_inputs: VecDeque<PendingMoveInput>,
+        // client-local send time (ms since Unix epoch). The server echoes this back
+        // verbatim so the client can measure real round-trip time from its own clock,
+        // instead of inferring latency from how far the input backlog has grown.
+        client_send_time_ms: RemoteTimestamp,
     },
 }
 
@@ -218,6 +238,9 @@ pub enum UnreliableRpcServerMessage {
         acknowledged_sequence: InputSequence,
         // the server timestamp for this message
         tick: InputSequence,
+        // client_send_time_ms echoed back verbatim from the most recent input message
+        // received from this client, used purely for round-trip timing
+        echo_client_time_ms: RemoteTimestamp,
     },
 }
 

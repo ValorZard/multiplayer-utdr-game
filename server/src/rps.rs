@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use rpc::{
     GameLogic, InputSequence, MoveGameState, MoveInputState, PlayerSide, RPSGameState, RPSWinState,
-    TurnInput,
+    RemoteTimestamp, TurnInput,
 };
 
 #[derive(Debug, PartialEq)]
@@ -51,6 +51,10 @@ pub struct GameSession {
     right_last_applied_input: MoveInputState,
     // this is to add timestamps to the snapshots we're sending to the client
     tick: InputSequence,
+    // client_send_time_ms from the most recently received input message per side,
+    // echoed back to the client for round-trip timing (see get_move_state callers)
+    left_last_client_time_ms: RemoteTimestamp,
+    right_last_client_time_ms: RemoteTimestamp,
 }
 
 impl GameSession {
@@ -66,6 +70,8 @@ impl GameSession {
             left_last_applied_input: MoveInputState::default(),
             right_last_applied_input: MoveInputState::default(),
             tick: 0,
+            left_last_client_time_ms: 0,
+            right_last_client_time_ms: 0,
         }
     }
 
@@ -164,7 +170,15 @@ impl GameSession {
         Ok(self.compute_state())
     }
 
-    pub fn set_left_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
+    pub fn set_left_move_input(
+        &mut self,
+        input: rpc::MoveInputState,
+        sequence: InputSequence,
+        client_send_time_ms: RemoteTimestamp,
+    ) {
+        // recorded unconditionally (not gated on sequence dedup) so the echoed
+        // timestamp always reflects the most recent packet actually received
+        self.left_last_client_time_ms = client_send_time_ms;
         // accept only strictly newer sequence ids than the latest applied
         if sequence > self.left_remote_clock_ack {
             self.left_pending_move_inputs
@@ -173,13 +187,27 @@ impl GameSession {
         }
     }
 
-    pub fn set_right_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
+    pub fn set_right_move_input(
+        &mut self,
+        input: rpc::MoveInputState,
+        sequence: InputSequence,
+        client_send_time_ms: RemoteTimestamp,
+    ) {
+        self.right_last_client_time_ms = client_send_time_ms;
         // accept only strictly newer sequence ids than the latest applied
         if sequence > self.right_remote_clock_ack {
             self.right_pending_move_inputs
                 .entry(sequence)
                 .or_insert(input);
         }
+    }
+
+    pub fn get_left_last_client_time_ms(&self) -> RemoteTimestamp {
+        self.left_last_client_time_ms
+    }
+
+    pub fn get_right_last_client_time_ms(&self) -> RemoteTimestamp {
+        self.right_last_client_time_ms
     }
 
     pub fn get_move_state(&mut self) -> MoveGameState {
