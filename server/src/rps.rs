@@ -1,5 +1,8 @@
-use rpc::{GameLogic, InputSequence, MoveGameState, PlayerSide, RPSGameState, RPSWinState, TurnInput, UnreliableRpcClientMessage};
 use ringbuffer::{AllocRingBuffer, RingBuffer};
+use rpc::{
+    GameLogic, InputSequence, MoveGameState, PlayerSide, RPSGameState, RPSWinState, TurnInput,
+    UnreliableRpcClientMessage,
+};
 
 const MAX_QUEUED_MOVE_INPUTS: usize = 512;
 
@@ -162,11 +165,13 @@ impl GameSession {
     }
 
     pub fn set_left_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
-        self.left_pending_move_inputs.enqueue(QueuedMoveInput { input, sequence });
+        self.left_pending_move_inputs
+            .enqueue(QueuedMoveInput { input, sequence });
     }
 
     pub fn set_right_move_input(&mut self, input: rpc::MoveInputState, sequence: InputSequence) {
-        self.right_pending_move_inputs.enqueue(QueuedMoveInput { input, sequence });
+        self.right_pending_move_inputs
+            .enqueue(QueuedMoveInput { input, sequence });
     }
 
     pub fn get_move_state(&mut self) -> MoveGameState {

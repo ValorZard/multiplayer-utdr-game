@@ -8,6 +8,7 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
+use ringbuffer::{AllocRingBuffer, RingBuffer};
 use rpc::{
     GAME_TIME_STEP, GameLogic, InputSequence, LobbyId, LobbyState, MoveGameState, PlayerSide,
     RPSGameState, RPSWinState, ReliableRpcClientMessage, ReliableRpcServerMessage, ScoreSize,
@@ -19,7 +20,6 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 use time::{Duration, OffsetDateTime};
-use ringbuffer::{AllocRingBuffer, RingBuffer};
 
 mod connection;
 
@@ -152,8 +152,7 @@ fn prune_acknowledged_inputs(
     pending_inputs: &mut AllocRingBuffer<PendingMoveInput>,
     acknowledged_sequence: InputSequence,
 ) {
-    let mut remaining: AllocRingBuffer<PendingMoveInput> =
-        AllocRingBuffer::new(MAX_PENDING_INPUTS);
+    let mut remaining: AllocRingBuffer<PendingMoveInput> = AllocRingBuffer::new(MAX_PENDING_INPUTS);
 
     for pending in pending_inputs.drain() {
         if pending.sequence > acknowledged_sequence {
@@ -251,7 +250,8 @@ async fn main() {
     // game state
     let mut game_logic = GameLogic::new();
     let mut next_input_sequence: InputSequence = 1;
-    let mut pending_inputs: AllocRingBuffer<PendingMoveInput> = AllocRingBuffer::new(MAX_PENDING_INPUTS);
+    let mut pending_inputs: AllocRingBuffer<PendingMoveInput> =
+        AllocRingBuffer::new(MAX_PENDING_INPUTS);
     let mut remote_snapshots: BTreeMap<InputSequence, Vec2> = BTreeMap::new();
     let mut last_acknowledged_sequence: InputSequence = 0;
 
@@ -398,7 +398,6 @@ async fn main() {
                         prune_acknowledged_inputs(&mut pending_inputs, acknowledged_sequence);
 
                         game_logic.update_position_with_vec(local_side, local_position);
-
 
                         for pending in pending_inputs.iter() {
                             game_logic.update_position_with_input(local_side, &pending.input);
