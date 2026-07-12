@@ -92,8 +92,6 @@ struct UiGameState {
     lobby_id: Option<LobbyId>,
     remote_right_input: Option<TurnInput>,
     remote_left_input: Option<TurnInput>,
-    remote_right_score: ScoreSize,
-    remote_left_score: ScoreSize,
     player_side: Option<PlayerSide>,
     win_state: Option<RPSWinState>,
     current_game_state: Option<RPSGameState>,
@@ -107,8 +105,6 @@ impl UiGameState {
             lobby_id: None,
             remote_right_input: None,
             remote_left_input: None,
-            remote_right_score: 0,
-            remote_left_score: 0,
             player_side: None,
             win_state: None,
             current_game_state: None,
@@ -193,7 +189,7 @@ struct ClientGameLogic {
     // Ensure move prediction starts from a clean baseline when a round begins.
     pending_inputs: VecDeque<PendingMoveInput>,
     remote_snapshots: BTreeMap<InputSequence, Vec2>,
-    next_input_sequence: InputSequence,
+    current_input_sequence: InputSequence,
     last_acknowledged_sequence: InputSequence,
     dynamic_render_delay_ticks: InputSequence,
     estimated_rtt: f32,
@@ -207,7 +203,7 @@ impl ClientGameLogic {
             is_input_selected: false,
             pending_inputs: VecDeque::new(),
             remote_snapshots: BTreeMap::new(),
-            next_input_sequence: 0,
+            current_input_sequence: 0,
             last_acknowledged_sequence: 0,
             dynamic_render_delay_ticks: DEFAULT_REMOTE_ACK_DELAY_FRAMES,
             estimated_rtt: 0.0,
@@ -336,8 +332,6 @@ async fn main() {
                             ui_game_state.remote_left_input = Some(*left_input);
                         }
                     }
-                    ui_game_state.remote_left_score = left_side_score;
-                    ui_game_state.remote_right_score = right_side_score;
                     ui_game_state.current_game_state = Some(state);
                 }
                 ReliableRpcServerMessage::ConnectionAuthentication(oauth_url) => {
@@ -405,7 +399,7 @@ async fn main() {
                         // Each tick is 1/30 of a second, so it wouldn't be too hard to convert back into milliseconds
                         let game_time_step = GAME_TIME_STEP.as_secs_f32();
                         let sample_rtt = (game_logic
-                            .next_input_sequence
+                            .current_input_sequence
                             .saturating_sub(acknowledged_sequence)
                             as f32)
                             * game_time_step;
@@ -499,8 +493,9 @@ async fn main() {
             if let Some(side) = ui_game_state.player_side
                 && ui_game_state.lobby_state == LobbyState::Running
             {
-                let sequence = game_logic.next_input_sequence;
-                game_logic.next_input_sequence = game_logic.next_input_sequence.wrapping_add(1);
+                let sequence = game_logic.current_input_sequence;
+                game_logic.current_input_sequence =
+                    game_logic.current_input_sequence.wrapping_add(1);
 
                 game_logic
                     .pending_inputs
@@ -520,7 +515,8 @@ async fn main() {
         // Hash the simulation state before applying any render-time interpolation.
         // predicted state is just for rendering, it can't be real because the server has the real state.
         predicted_state = game_logic.game_logic.get_state_to_send_to_client();
-        let reconciled_state_hash = hash_move_state(&predicted_state);
+        let pre_predicted_state_hash = hash_move_state(&predicted_state);
+        // actually do the prediction here, which will modify predicted state to fit the server
         if let Some(side) = ui_game_state.player_side {
             if let Some(interpolated_position) = interpolate_remote_position(
                 &mut game_logic.remote_snapshots,
@@ -566,7 +562,7 @@ async fn main() {
                     ui.label(format!("Current remote state hash: {}", remote_state_hash));
                     ui.label(format!(
                         "Reconciled predicted state hash (pre-render interpolation): {}",
-                        reconciled_state_hash
+                        pre_predicted_state_hash
                     ));
                     ui.label(format!(
                         "Rendered predicted state hash (post-interpolation): {}",
@@ -578,6 +574,7 @@ async fn main() {
                         dynamic_render_delay_ticks, dynamic_render_delay_ms
                     ));
                     ui.label(format!("RTT estimate: ({:.1} ms)", estimated_rtt_ms));
+                    ui.label(format!("Ping estimate: ({:.1} ms)", estimated_rtt_ms / 2.));
                     ui.label(format!("RTT jitter estimate: ({:.1} ms)", jitter_rtt_ms));
                     ui.label(format!("{ui_game_state:#?}"));
 
