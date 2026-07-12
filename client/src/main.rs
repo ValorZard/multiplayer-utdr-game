@@ -134,12 +134,10 @@ struct PendingMoveInput {
 
 const MAX_PENDING_INPUTS: usize = 256;
 const MAX_REMOTE_SNAPSHOTS: InputSequence = 64;
-// this should be based on our delay to the server
-const REMOTE_INTERPOLATION_DELAY: Duration = Duration::milliseconds(330);
-// TODO: make a proper calculation based on acknowledgement + actual network delay
 // We assume both client and server run on 30 fps
-const REMOTE_ACK_DELAY_FRAMES: InputSequence = 11;
-const REMOTE_SNAPSHOT_HISTORY: Duration = Duration::milliseconds(500);
+const DEFAULT_REMOTE_ACK_DELAY_FRAMES: InputSequence = 11;
+const RTT_EWMA_ALPHA: f32 = 0.10;
+const RTT_JITTER_EWMA_ALPHA: f32 = 0.10;
 
 fn hash_move_state(state: &MoveGameState) -> u64 {
     let bytes = encode_message(state).expect("Should be able to serialize");
@@ -194,6 +192,9 @@ struct ClientGameLogic {
     remote_snapshots: BTreeMap<InputSequence, Vec2>,
     next_input_sequence: InputSequence,
     last_acknowledged_sequence: InputSequence,
+    dynamic_render_delay_ticks: InputSequence,
+    smoothed_rtt_ticks: f32,
+    rtt_jitter_ticks: f32,
     game_logic: GameLogic,
 }
 
@@ -205,6 +206,9 @@ impl ClientGameLogic {
             remote_snapshots: BTreeMap::new(),
             next_input_sequence: 0,
             last_acknowledged_sequence: 0,
+            dynamic_render_delay_ticks: DEFAULT_REMOTE_ACK_DELAY_FRAMES,
+            smoothed_rtt_ticks: DEFAULT_REMOTE_ACK_DELAY_FRAMES as f32,
+            rtt_jitter_ticks: 0.0,
             game_logic: GameLogic::new(),
         }
     }
@@ -390,7 +394,31 @@ async fn main() {
                         if acknowledged_sequence < game_logic.last_acknowledged_sequence {
                             continue;
                         }
+
+                        // RTT estimate in simulation ticks (30 FPS), inferred from
+                        // local sent sequence vs server-acknowledged sequence.
+                        // TODO: Actually understand the math going on here
+                        let inflight_ticks = game_logic.next_input_sequence.saturating_sub(
+                            acknowledged_sequence.saturating_add(1),
+                        ) as f32;
+                        game_logic.smoothed_rtt_ticks +=
+                            RTT_EWMA_ALPHA * (inflight_ticks - game_logic.smoothed_rtt_ticks);
+                        let abs_err = (inflight_ticks - game_logic.smoothed_rtt_ticks).abs();
+                        game_logic.rtt_jitter_ticks += RTT_JITTER_EWMA_ALPHA
+                            * (abs_err - game_logic.rtt_jitter_ticks);
+
+                        // Interpolation delay ~= one-way latency + jitter buffer + 1 tick safety.
+                        let target_render_delay =
+                            ((game_logic.smoothed_rtt_ticks * 0.5) + game_logic.rtt_jitter_ticks
+                                + 1.0)
+                                .ceil() as InputSequence;
+                        game_logic.dynamic_render_delay_ticks = target_render_delay
+                            .clamp(2, MAX_REMOTE_SNAPSHOTS.saturating_sub(1));
+
                         game_logic.last_acknowledged_sequence = acknowledged_sequence;
+
+                        let current_local_position = game_logic.game_logic.get_position(local_side);
+                        let local_error = current_local_position.distance(local_position);
 
                         prune_acknowledged_inputs(
                             &mut game_logic.pending_inputs,
@@ -483,10 +511,11 @@ async fn main() {
         // Hash the simulation state before applying any render-time interpolation.
         // predicted state is just for rendering, it can't be real because the server has the real state.
         predicted_state = game_logic.game_logic.get_state_to_send_to_client();
+        let reconciled_state_hash = hash_move_state(&predicted_state);
         if let Some(side) = ui_game_state.player_side {
             if let Some(interpolated_position) = interpolate_remote_position(
                 &mut game_logic.remote_snapshots,
-                REMOTE_ACK_DELAY_FRAMES,
+                game_logic.dynamic_render_delay_ticks,
             ) {
                 match side {
                     PlayerSide::Left => {
@@ -498,7 +527,14 @@ async fn main() {
                 }
             }
         }
-        let predicted_state_hash = hash_move_state(&predicted_state);
+        let rendered_state_hash = hash_move_state(&predicted_state);
+        let ms_per_tick = GAME_TIME_STEP.as_secs_f32() * 1000.0;
+        let dynamic_render_delay_ticks = game_logic.dynamic_render_delay_ticks;
+        let dynamic_render_delay_ms = dynamic_render_delay_ticks as f32 * ms_per_tick;
+        let smoothed_rtt_ticks = game_logic.smoothed_rtt_ticks;
+        let smoothed_rtt_ms = smoothed_rtt_ticks * ms_per_tick;
+        let rtt_jitter_ticks = game_logic.rtt_jitter_ticks;
+        let rtt_jitter_ms = rtt_jitter_ticks * ms_per_tick;
         match ui_game_state.player_side {
             Some(PlayerSide::Left) => {
                 local_player.set_position(predicted_state.left_position);
@@ -522,8 +558,25 @@ async fn main() {
                     ui.label(format!("Current Frame Time {}", time_since_last_frame));
                     ui.label(format!("Current remote state hash: {}", remote_state_hash));
                     ui.label(format!(
-                        "Current predicted state hash: {}",
-                        predicted_state_hash
+                        "Reconciled predicted state hash (pre-render interpolation): {}",
+                        reconciled_state_hash
+                    ));
+                    ui.label(format!(
+                        "Rendered predicted state hash (post-interpolation): {}",
+                        rendered_state_hash
+                    ));
+                    ui.separator();
+                    ui.label(format!(
+                        "Dynamic render delay: {} ticks ({:.1} ms)",
+                        dynamic_render_delay_ticks, dynamic_render_delay_ms
+                    ));
+                    ui.label(format!(
+                        "Smoothed RTT estimate: {:.2} ticks ({:.1} ms)",
+                        smoothed_rtt_ticks, smoothed_rtt_ms
+                    ));
+                    ui.label(format!(
+                        "RTT jitter estimate: {:.2} ticks ({:.1} ms)",
+                        rtt_jitter_ticks, rtt_jitter_ms
                     ));
                     ui.label(format!("{ui_game_state:#?}"));
 
