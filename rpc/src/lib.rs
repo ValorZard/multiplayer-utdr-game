@@ -214,7 +214,10 @@ pub enum ReliableRpcServerMessage {
 pub enum UnreliableRpcServerMessage {
     GameState {
         state: MoveGameState,
+        // the latest input the server received from the client and acknowledged
         acknowledged_sequence: InputSequence,
+        // the server timestamp for this message
+        tick: InputSequence,
     },
 }
 

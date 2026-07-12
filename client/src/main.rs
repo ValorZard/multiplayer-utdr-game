@@ -162,36 +162,23 @@ fn prune_acknowledged_inputs(
 // (right click and inspect webpage to see the actual javascript)
 fn interpolate_remote_position(
     snapshots: &mut BTreeMap<InputSequence, Vec2>,
-    current_local_input_sequence: InputSequence,
+    render_delay_ticks: InputSequence,
 ) -> Option<Vec2> {
-    let target_time = if current_local_input_sequence < REMOTE_ACK_DELAY_FRAMES {
-        current_local_input_sequence
-    } else {
-        current_local_input_sequence - REMOTE_ACK_DELAY_FRAMES
-    };
+    let latest_known_tick = *snapshots.keys().next_back()?;
+    let target_time = latest_known_tick.saturating_sub(render_delay_ticks);
 
-    // Keep only recent history so we can bracket target_time with a before/after pair.
-    let oldest_allowed = if current_local_input_sequence < MAX_REMOTE_SNAPSHOTS {
-        current_local_input_sequence
-    } else {
-        current_local_input_sequence - MAX_REMOTE_SNAPSHOTS
-    };
-    snapshots.retain(|k, _| k >= &oldest_allowed);
+    let oldest_allowed = latest_known_tick.saturating_sub(MAX_REMOTE_SNAPSHOTS);
+    snapshots.retain(|k, _| *k >= oldest_allowed);
 
-    if snapshots.is_empty() {
-        return None;
-    }
-
-    // Prefer interpolation between samples surrounding target_time.
     let before = snapshots.range(..=target_time).next_back();
     let after = snapshots.range(target_time..).next();
 
     match (before, after) {
         (Some((t0, p0)), Some((t1, p1))) => {
-            if t0 == t1 {
-                Some(*p0)
-            } else {
-                Some((*p0 + *p1) / 2.)
+            if t0 == t1 { Some(*p0) }
+            else {
+                let frac = (target_time - t0) as f32 / (t1 - t0) as f32;
+                Some(*p0 + (*p1 - *p0) * frac) // lerp by actual gap, not flat average
             }
         }
         (Some((_, p)), None) => Some(*p),
@@ -199,7 +186,6 @@ fn interpolate_remote_position(
         (None, None) => None,
     }
 }
-
 struct ClientGameLogic {
     is_input_selected: bool,
     // Ensure move prediction starts from a clean baseline when a round begins.
@@ -389,6 +375,7 @@ async fn main() {
                 UnreliableRpcServerMessage::GameState {
                     state,
                     acknowledged_sequence,
+                    tick,
                 } => {
                     // hash state
                     remote_state_hash = hash_move_state(&state);
@@ -421,7 +408,7 @@ async fn main() {
 
                         game_logic
                             .remote_snapshots
-                            .insert(acknowledged_sequence, remote_position);
+                            .insert(tick, remote_position);
                     }
                 }
             }
@@ -472,7 +459,10 @@ async fn main() {
         game_time_step_timer += time_since_last_frame;
         while game_time_step_timer >= GAME_TIME_STEP {
             game_time_step_timer -= GAME_TIME_STEP;
-            if let Some(side) = ui_game_state.player_side {
+            // make sure LobbyState is running, because building up inputs before network syncing is bad
+            if let Some(side) = ui_game_state.player_side
+                && ui_game_state.lobby_state == LobbyState::Running
+            {
                 let sequence = game_logic.next_input_sequence;
                 game_logic.next_input_sequence = game_logic.next_input_sequence.wrapping_add(1);
 
@@ -497,7 +487,7 @@ async fn main() {
         if let Some(side) = ui_game_state.player_side {
             if let Some(interpolated_position) = interpolate_remote_position(
                 &mut game_logic.remote_snapshots,
-                game_logic.next_input_sequence,
+                REMOTE_ACK_DELAY_FRAMES,
             ) {
                 match side {
                     PlayerSide::Left => {

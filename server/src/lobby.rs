@@ -492,8 +492,8 @@ async fn run_lobby_session(mut lobby: LobbySession) -> Result<(), LobbyError> {
                 lobby.broadcast_game_state()?;
                 if let Ok(move_state) = lobby.step_game() {
                     // broadcast state to both right and left (it's okay if these fail)
-                    let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::GameState {state:move_state.clone(), acknowledged_sequence: lobby.current_round.get_left_remote_clock_ack()}, PlayerSide::Left);
-                    let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::GameState {state:move_state, acknowledged_sequence: lobby.current_round.get_right_remote_clock_ack()}, PlayerSide::Right);
+                    let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::GameState {state:move_state.clone(), acknowledged_sequence: lobby.current_round.get_left_remote_clock_ack(), tick: lobby.current_round.get_tick()}, PlayerSide::Left);
+                    let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::GameState {state:move_state, acknowledged_sequence: lobby.current_round.get_right_remote_clock_ack(), tick: lobby.current_round.get_tick()}, PlayerSide::Right);
                 }
             }
         }
