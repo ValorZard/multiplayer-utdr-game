@@ -130,7 +130,7 @@ struct PendingMoveInput {
 const MAX_PENDING_INPUTS: usize = 256;
 const MAX_REMOTE_SNAPSHOTS: InputSequence = 64;
 // We assume both client and server run on 30 fps
-const DEFAULT_REMOTE_ACK_DELAY_FRAMES: InputSequence = 11;
+const DEFAULT_REMOTE_INTERPOLATION_DELAY_FRAMES: InputSequence = 2;
 // RTT Calculation is based off of this:
 // https://www.scs.stanford.edu/08sp-cs144/notes/l6.pdf
 // specifically slide 14
@@ -204,7 +204,7 @@ impl ClientGameLogic {
             remote_snapshots: BTreeMap::new(),
             current_input_sequence: 0,
             last_acknowledged_sequence: 0,
-            dynamic_render_delay_ticks: DEFAULT_REMOTE_ACK_DELAY_FRAMES,
+            dynamic_render_delay_ticks: DEFAULT_REMOTE_INTERPOLATION_DELAY_FRAMES,
             estimated_rtt: 0.0,
             jitter_rtt: 0.0,
             game_logic: GameLogic::new(),
@@ -411,14 +411,14 @@ async fn main() {
                             + (RTT_EWMA_BETA * abs_error);
 
                         // Interpolation delay ~= one-way latency + jitter buffer
-                        let target_render_delay_ticks = (((game_logic.estimated_rtt / 2.0)
-                            + game_logic.jitter_rtt
-                            + game_time_step)
-                            / game_time_step)
-                            .ceil()
-                            as InputSequence;
-                        game_logic.dynamic_render_delay_ticks = target_render_delay_ticks
-                            .clamp(2, MAX_REMOTE_SNAPSHOTS.saturating_sub(1));
+                        let target_render_delay_ticks =
+                            (((game_logic.estimated_rtt / 2.0) + game_logic.jitter_rtt)
+                                / game_time_step)
+                                .ceil() as InputSequence;
+                        game_logic.dynamic_render_delay_ticks = target_render_delay_ticks.clamp(
+                            DEFAULT_REMOTE_INTERPOLATION_DELAY_FRAMES,
+                            MAX_REMOTE_SNAPSHOTS.saturating_sub(1),
+                        );
 
                         game_logic.last_acknowledged_sequence = acknowledged_sequence;
 
