@@ -437,7 +437,7 @@ async fn main() {
                                 .game_logic
                                 .update_position_with_input(local_side, &pending.input);
                         }
-
+                        // we want to give each remote snapshot a timestamp from the server itself
                         game_logic.remote_snapshots.insert(tick, remote_position);
                     }
                 }
