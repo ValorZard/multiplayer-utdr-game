@@ -152,7 +152,7 @@ fn prune_acknowledged_inputs(
     pending_inputs: &mut VecDeque<PendingMoveInput>,
     acknowledged_sequence: InputSequence,
 ) {
-    pending_inputs.retain(|input| { input.sequence > acknowledged_sequence});
+    pending_inputs.retain(|input| input.sequence > acknowledged_sequence);
     while pending_inputs.len() > MAX_PENDING_INPUTS {
         pending_inputs.pop_front();
     }
@@ -200,15 +200,14 @@ fn interpolate_remote_position(
     }
 }
 
-
 struct ClientGameLogic {
-    is_input_selected : bool,
+    is_input_selected: bool,
     // Ensure move prediction starts from a clean baseline when a round begins.
-    pending_inputs : VecDeque<PendingMoveInput>,
-    remote_snapshots : BTreeMap<InputSequence, Vec2>,
-    next_input_sequence : InputSequence,
-    last_acknowledged_sequence : InputSequence,
-    game_logic : GameLogic,
+    pending_inputs: VecDeque<PendingMoveInput>,
+    remote_snapshots: BTreeMap<InputSequence, Vec2>,
+    next_input_sequence: InputSequence,
+    last_acknowledged_sequence: InputSequence,
+    game_logic: GameLogic,
 }
 
 impl ClientGameLogic {
@@ -219,7 +218,7 @@ impl ClientGameLogic {
             remote_snapshots: BTreeMap::new(),
             next_input_sequence: 0,
             last_acknowledged_sequence: 0,
-            game_logic : GameLogic::new(),
+            game_logic: GameLogic::new(),
         }
     }
 
@@ -405,15 +404,24 @@ async fn main() {
                         }
                         game_logic.last_acknowledged_sequence = acknowledged_sequence;
 
-                        prune_acknowledged_inputs(&mut game_logic.pending_inputs, acknowledged_sequence);
+                        prune_acknowledged_inputs(
+                            &mut game_logic.pending_inputs,
+                            acknowledged_sequence,
+                        );
 
-                        game_logic.game_logic.update_position_with_vec(local_side, local_position);
+                        game_logic
+                            .game_logic
+                            .update_position_with_vec(local_side, local_position);
 
                         for pending in game_logic.pending_inputs.iter() {
-                            game_logic.game_logic.update_position_with_input(local_side, &pending.input);
+                            game_logic
+                                .game_logic
+                                .update_position_with_input(local_side, &pending.input);
                         }
 
-                        game_logic.remote_snapshots.insert(acknowledged_sequence, remote_position);
+                        game_logic
+                            .remote_snapshots
+                            .insert(acknowledged_sequence, remote_position);
                     }
                 }
             }
@@ -468,9 +476,13 @@ async fn main() {
                 let sequence = game_logic.next_input_sequence;
                 game_logic.next_input_sequence = game_logic.next_input_sequence.wrapping_add(1);
 
-                game_logic.pending_inputs.push_back(PendingMoveInput { input, sequence });
+                game_logic
+                    .pending_inputs
+                    .push_back(PendingMoveInput { input, sequence });
 
-                game_logic.game_logic.update_position_with_input(side, &input);
+                game_logic
+                    .game_logic
+                    .update_position_with_input(side, &input);
                 if let Some(rpc_sender) = unreliable_client_rpc_sender.as_ref() {
                     let _ = rpc_sender
                         .unbounded_send(UnreliableRpcClientMessage::Input { input, sequence });
@@ -483,9 +495,10 @@ async fn main() {
         // predicted state is just for rendering, it can't be real because the server has the real state.
         predicted_state = game_logic.game_logic.get_state_to_send_to_client();
         if let Some(side) = ui_game_state.player_side {
-            if let Some(interpolated_position) =
-                interpolate_remote_position(&mut game_logic.remote_snapshots, game_logic.next_input_sequence)
-            {
+            if let Some(interpolated_position) = interpolate_remote_position(
+                &mut game_logic.remote_snapshots,
+                game_logic.next_input_sequence,
+            ) {
                 match side {
                     PlayerSide::Left => {
                         predicted_state.right_position = interpolated_position;
