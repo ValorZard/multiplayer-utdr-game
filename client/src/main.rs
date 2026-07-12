@@ -398,22 +398,24 @@ async fn main() {
                         // RTT estimate in simulation ticks (30 FPS), inferred from
                         // local sent sequence vs server-acknowledged sequence.
                         // TODO: Actually understand the math going on here
-                        let inflight_ticks = game_logic.next_input_sequence.saturating_sub(
-                            acknowledged_sequence.saturating_add(1),
-                        ) as f32;
+                        let inflight_ticks = game_logic
+                            .next_input_sequence
+                            .saturating_sub(acknowledged_sequence.saturating_add(1))
+                            as f32;
                         game_logic.smoothed_rtt_ticks +=
                             RTT_EWMA_ALPHA * (inflight_ticks - game_logic.smoothed_rtt_ticks);
                         let abs_err = (inflight_ticks - game_logic.smoothed_rtt_ticks).abs();
-                        game_logic.rtt_jitter_ticks += RTT_JITTER_EWMA_ALPHA
-                            * (abs_err - game_logic.rtt_jitter_ticks);
+                        game_logic.rtt_jitter_ticks +=
+                            RTT_JITTER_EWMA_ALPHA * (abs_err - game_logic.rtt_jitter_ticks);
 
                         // Interpolation delay ~= one-way latency + jitter buffer + 1 tick safety.
-                        let target_render_delay =
-                            ((game_logic.smoothed_rtt_ticks * 0.5) + game_logic.rtt_jitter_ticks
-                                + 1.0)
-                                .ceil() as InputSequence;
-                        game_logic.dynamic_render_delay_ticks = target_render_delay
-                            .clamp(2, MAX_REMOTE_SNAPSHOTS.saturating_sub(1));
+                        let target_render_delay = ((game_logic.smoothed_rtt_ticks * 0.5)
+                            + game_logic.rtt_jitter_ticks
+                            + 1.0)
+                            .ceil()
+                            as InputSequence;
+                        game_logic.dynamic_render_delay_ticks =
+                            target_render_delay.clamp(2, MAX_REMOTE_SNAPSHOTS.saturating_sub(1));
 
                         game_logic.last_acknowledged_sequence = acknowledged_sequence;
 
