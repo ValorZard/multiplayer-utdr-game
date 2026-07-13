@@ -86,7 +86,18 @@ fn reset_connection_and_join_lobby(
 }
 
 #[derive(Debug)]
+enum UiState {
+    NotConnected,
+    Authenticating,
+    Connected,
+    LobbyWaiting,
+    LobbyRunning,
+    LobbyFinished,
+}
+
+#[derive(Debug)]
 struct UiGameState {
+    ui_state: UiState,
     lobby_state: LobbyState,
     lobby_id: Option<LobbyId>,
     remote_right_input: Option<TurnInput>,
@@ -100,6 +111,7 @@ struct UiGameState {
 impl UiGameState {
     fn new() -> Self {
         Self {
+            ui_state: UiState::NotConnected,
             lobby_state: LobbyState::Empty,
             lobby_id: None,
             remote_right_input: None,
@@ -176,7 +188,6 @@ fn interpolate_remote_position(
     }
 }
 struct ClientGameLogic {
-    is_input_selected: bool,
     // Ensure move prediction starts from a clean baseline when a round begins.
     pending_inputs: VecDeque<PendingMoveInput>,
     remote_snapshots: BTreeMap<InputSequence, Vec2>,
@@ -191,7 +202,6 @@ struct ClientGameLogic {
 impl ClientGameLogic {
     fn new() -> Self {
         Self {
-            is_input_selected: false,
             pending_inputs: VecDeque::new(),
             remote_snapshots: BTreeMap::new(),
             current_input_sequence: 0,
@@ -238,8 +248,6 @@ async fn main() {
 
     // UI state
     let mut ui_game_state = UiGameState::new();
-    let mut is_input_selected = false;
-
     // timer stuff
     let mut previous_time = OffsetDateTime::now_utc();
     // deltarune runs on 30 TPS
@@ -290,6 +298,7 @@ async fn main() {
             && let Ok(Some(_)) = connection_finished_receiver.try_recv()
         {
             log!("Connection dropped.");
+            ui_game_state.ui_state = UiState::NotConnected;
         }
         // immediately pool the receiver even if there isn't a value there.
         while let Some(ref mut server_rpc_receiver) = reliable_server_rpc_receiver
@@ -342,30 +351,37 @@ async fn main() {
                     if webbrowser::open(&oauth_url.0).is_err() {
                         log!("{:?}", oauth_url);
                     }
+                    ui_game_state.ui_state = UiState::Authenticating;
                 }
                 ReliableRpcServerMessage::ConnectionInit(user_id, init_message) => {
                     ui_game_state.reset();
                     ui_game_state.user_id = Some(user_id);
                     log!("Connection init message: {init_message:?}");
+                    ui_game_state.ui_state = UiState::Connected;
                 }
                 ReliableRpcServerMessage::LobbyInit(side, lobby_id) => {
                     ui_game_state.lobby_id = Some(lobby_id);
                     ui_game_state.player_side = Some(side);
+                    ui_game_state.ui_state = UiState::LobbyWaiting;
                 }
                 ReliableRpcServerMessage::LobbyState(state) => {
                     // unless lobby state is finished, we really shouldn't have a win state
                     // also don't updadte if the same lobby state has already been set
                     if ui_game_state.lobby_state != state {
                         match state {
-                            LobbyState::Finished => {}
+                            LobbyState::Finished => {
+                                ui_game_state.ui_state = UiState::LobbyFinished;
+                            }
                             LobbyState::Running => {
                                 ui_game_state.win_state = None;
-                                is_input_selected = false;
+                                ui_game_state.ui_state = UiState::LobbyRunning;
                                 // Ensure move prediction starts from a clean baseline when a round begins.
                                 game_logic.reset();
                             }
                             LobbyState::Empty => {}
-                            LobbyState::Waiting => {}
+                            LobbyState::Waiting => {
+                                ui_game_state.ui_state = UiState::LobbyWaiting;
+                            }
                         }
                         ui_game_state.lobby_state = state;
                     }
@@ -599,8 +615,8 @@ async fn main() {
 
                     ui.separator();
 
-                    match ui_game_state.lobby_state {
-                        LobbyState::Empty => {
+                    match ui_game_state.ui_state {
+                        UiState::NotConnected => {
                             ui.label("Server List");
                             for server_address in &client_config.servers {
                                 if ui.button(server_address).clicked() {
@@ -630,8 +646,14 @@ async fn main() {
                                 );
                             }
                         }
-                        LobbyState::Waiting => {}
-                        LobbyState::Running => {
+                        UiState::Authenticating => {
+                            ui.label("Waiting for server authentication (please click accept on itch.io in your browser)");
+                        }
+                        UiState::Connected => {
+                            ui.label("Successfully connected and authenticated to the server!");
+                        }
+                        UiState::LobbyWaiting => {}
+                        UiState::LobbyRunning => {
                             let client_rpc_sender = reliable_client_rpc_sender
                                 .clone()
                                 .expect("should be setup by this point since the lobby is running");
@@ -673,23 +695,22 @@ async fn main() {
                                 }
                             }
                         }
-                        LobbyState::Finished => {
+                        UiState::LobbyFinished => {
                             let client_rpc_sender = reliable_client_rpc_sender.clone().expect(
                                 "should be setup by this point since the lobby is finished",
                             );
-                            if !is_input_selected {
-                                if ui.button("Yes").clicked() {
-                                    let _ = client_rpc_sender.unbounded_send(
-                                        ReliableRpcClientMessage::ContinueRound(YesOrNo::Yes),
-                                    );
-                                    is_input_selected = true;
-                                }
-                                if ui.button("No").clicked() {
-                                    let _ = client_rpc_sender.unbounded_send(
-                                        ReliableRpcClientMessage::ContinueRound(YesOrNo::No),
-                                    );
-                                    is_input_selected = true;
-                                }
+                            if ui.button("Yes").clicked() {
+                                let _ = client_rpc_sender.unbounded_send(
+                                    ReliableRpcClientMessage::ContinueRound(YesOrNo::Yes),
+                                );
+                                // TODO: make it so that if you disconnect from the lobby you don't disconnect from the server
+                                ui_game_state.ui_state = UiState::NotConnected;
+                            }
+                            if ui.button("No").clicked() {
+                                let _ = client_rpc_sender.unbounded_send(
+                                    ReliableRpcClientMessage::ContinueRound(YesOrNo::No),
+                                );
+                                ui_game_state.ui_state = UiState::NotConnected;
                             }
                         }
                     }
