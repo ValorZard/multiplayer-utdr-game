@@ -264,7 +264,7 @@ async fn main() {
             .set_color(YELLOW);
         // Draw at the collider's actual center (in pixel space) so the visible
         // box lines up with where collision really happens.
-        scene_rect.set_position(convert_vec2_physics_to_pixel(rect.get_physics_position()));
+        scene_rect.set_position(rect.get_pixel_position());
     }
 
     // Client config

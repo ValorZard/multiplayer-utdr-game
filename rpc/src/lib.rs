@@ -395,10 +395,17 @@ impl GameRectangle {
         }
     }
 
+    // both kiss3d and rapier put objects based on their position in the center of the object
+    // so there's no need to adjust for width or height
+    // see: https://docs.rs/kiss3d/latest/kiss3d/camera/enum.CoordinateSystem2d.html#variant.CenterUp
     pub const fn get_physics_position(&self) -> Vec2 {
         let center_x = self.x * PIXEL_TO_PHYSICS_SCALE;
         let center_y = self.y * PIXEL_TO_PHYSICS_SCALE;
         Vec2::new(center_x, center_y)
+    }
+
+    pub const fn get_pixel_position(&self) -> Vec2 {
+        Vec2::new(self.x, self.y)
     }
 
     pub const fn get_half_extents_for_physics(&self) -> Vec2 {
@@ -489,7 +496,11 @@ impl GameLogic {
             .translation(convert_vec2_pixel_to_physics(spawn_position))
             .build();
 
-        let half_extents = PLAYER_GAME_RECTANGLE.get_half_extents_for_physics();
+        let mut player_rect = PLAYER_GAME_RECTANGLE.clone();
+        player_rect.x = spawn_position.x;
+        player_rect.y = spawn_position.y;
+
+        let half_extents = player_rect.get_half_extents_for_physics();
 
         let collider = ColliderBuilder::cuboid(half_extents.x, half_extents.y)
             .collision_groups(InteractionGroups::new(
@@ -507,7 +518,7 @@ impl GameLogic {
             ..Default::default()
         };
 
-        world.spawn((side, body_handle, collider_handle, controller))
+        world.spawn((side, body_handle, collider_handle, controller, player_rect))
     }
 
     pub fn get_rectangles(&mut self) -> Vec<GameRectangle> {
@@ -529,6 +540,19 @@ impl GameLogic {
         self.world
             .query_one_mut::<(&RigidBodyHandle, &KinematicCharacterController)>(entity)
             .expect("Player should exist here")
+    }
+
+    fn set_position_for_player_rect(&mut self, player_side: PlayerSide, new_position: Vec2) {
+        let entity = match player_side {
+            PlayerSide::Left => self.left_player,
+            PlayerSide::Right => self.right_player,
+        };
+        let rect = self
+            .world
+            .query_one_mut::<&mut GameRectangle>(entity)
+            .expect("Player should exist here");
+        rect.x = new_position.x;
+        rect.y = new_position.y;
     }
 
     pub fn setup_game(&mut self) {
@@ -600,10 +624,12 @@ impl GameLogic {
         // Kinematic bodies don't move until you tell the physics step
         // where they're going next.
         self.physics.bodies[handle].set_next_kinematic_translation(new_pos);
-        Vec2::new(
+        let new_pixel_position = Vec2::new(
             new_pos.x * PHYSICS_TO_PIXEL_SCALE,
             new_pos.y * PHYSICS_TO_PIXEL_SCALE,
-        )
+        );
+        self.set_position_for_player_rect(player_side, new_pixel_position);
+        new_pixel_position
     }
 
     /// `new_position` is in game (pixel) space, like every other public position.
@@ -616,15 +642,20 @@ impl GameLogic {
         let handle = handle.clone();
         let body = &mut self.physics.bodies[handle];
         body.set_next_kinematic_translation(convert_vec2_pixel_to_physics(new_position));
+        self.set_position_for_player_rect(player_side, new_position);
         new_position
     }
 
     /// Returns position in game (pixel) space, not physics space.
     pub fn get_position(&mut self, player_side: PlayerSide) -> Vec2 {
-        let (handle, _) = self.character_handle_for(player_side);
-        let handle = handle.clone();
-        let t = self.physics.bodies[handle].translation();
-        convert_vec2_physics_to_pixel(Vec2::new(t.x, t.y))
+        let entity = match player_side {
+            PlayerSide::Left => self.left_player,
+            PlayerSide::Right => self.right_player,
+        };
+        self.world
+            .query_one_mut::<&GameRectangle>(entity)
+            .expect("Player should exist here")
+            .get_pixel_position()
     }
 
     /// Advances the physics simulation. Call once per tick, after inputs
