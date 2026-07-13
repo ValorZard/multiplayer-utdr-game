@@ -318,7 +318,7 @@ pub const HEADER_MESSAGE: [u8; 4] = [0, 3, 4, 5];
 pub const GAME_TIME_STEP: Duration = Duration::from_millis(33);
 pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
 /// Player movement speed in game (pixel) space, i.e. pixels per second.
-pub const PLAYER_SPEED: f32 = 250.;
+pub const PLAYER_SPEED: f32 = 100.;
 #[derive(Debug, PartialEq)]
 pub enum LogicError {
     PlayerAlreadyExists(PlayerSide),
@@ -427,8 +427,7 @@ pub const PHYSICS_TO_PIXEL_SCALE: f32 = 50.0; // 1 meter in physics engine equal
 pub const PIXEL_TO_PHYSICS_SCALE: f32 = 1.0 / PHYSICS_TO_PIXEL_SCALE;
 pub const PLAYER_PHYSICS_RADIUS: f32 = 1.0; // in physics scale
 pub const PLAYER_GAME_RECTANGLE: GameRectangle = GameRectangle::new(0., 0., 10., 10.);
-pub const LEFT_PLAYER_STARTING_POSITION: Vec2 = Vec2::new(-50., 0.0);
-pub const RIGHT_PLAYER_STARTING_POSITION: Vec2 = Vec2::new(50., 0.0);
+pub const PLAYER_STARTING_POSITION: Vec2 = Vec2::new(0., 0.);
 
 impl GameLogic {
     pub fn new() -> Self {
@@ -442,13 +441,13 @@ impl GameLogic {
             &mut world,
             &mut physics,
             PlayerSide::Left,
-            LEFT_PLAYER_STARTING_POSITION,
+            PLAYER_STARTING_POSITION,
         );
         let right_player = Self::spawn_player(
             &mut world,
             &mut physics,
             PlayerSide::Right,
-            RIGHT_PLAYER_STARTING_POSITION,
+            PLAYER_STARTING_POSITION,
         );
 
         // spawn physics object for players to collide with
