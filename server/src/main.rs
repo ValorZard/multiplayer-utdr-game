@@ -42,6 +42,7 @@ use rustls::pki_types::CertificateDer;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::task::JoinHandle;
+use tower_http::services::ServeDir;
 use tracing::{info, warn};
 use url::Url;
 use web_transport_quinn::generic::Session;
@@ -54,7 +55,7 @@ mod lobby;
 mod lobby_db;
 mod rps;
 
-const OAUTH_BIND_PORT: u16 = 34567;
+const HTTPS_BIND_PORT: u16 = 443;
 const OAUTH_START_ENDPOINT: &str = "/oauth/start";
 // this endpoint has to be set in itch.io itself when you create the OAuth thing on their end.
 const REDIRECT_ENDPOINT: &str = "/oauth/callback";
@@ -295,7 +296,7 @@ async fn handle_connection(
     // get oauth redirect url
     let oauth_request = http_client
         .post(format!(
-            "https://{}:{OAUTH_BIND_PORT}{OAUTH_START_ENDPOINT}",
+            "https://{}:{HTTPS_BIND_PORT}{OAUTH_START_ENDPOINT}",
             this_server_ip.to_string()
         ))
         .send()
@@ -456,7 +457,15 @@ async fn handle_connection(
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let _ = rustls::crypto::ring::default_provider().install_default();
-    dotenvy::dotenv()?;
+    // dotenvy searches the current working directory and its ancestors, so the
+    // server must be launched from a directory at or below the one holding .env
+    match dotenvy::dotenv() {
+        Ok(path) => info!("Loaded environment from {}", path.display()),
+        Err(e) => warn!(
+            "No .env file found from cwd {} ({e}); relying on process environment",
+            env::current_dir()?.display()
+        ),
+    }
     let database_url = env::var("DATABASE_URL").context("DATABASE_URL missing")?;
     let sqlite_options = SqliteConnectOptions::from_str(&database_url)
         .context("invalid DATABASE_URL for sqlite")?
@@ -554,7 +563,7 @@ async fn main() -> anyhow::Result<()> {
 
         let redirect_address = SocketAddr::new(
             std::net::IpAddr::V4(this_server_ip.clone()),
-            OAUTH_BIND_PORT,
+            HTTPS_BIND_PORT,
         );
         let redirect_url_raw = format!("https://{redirect_address}{REDIRECT_ENDPOINT}");
         let redirect_url =
@@ -572,13 +581,22 @@ async fn main() -> anyhow::Result<()> {
             pending_oauth_requests,
         };
 
+        // Serve the Trunk-built client (index.html, hashed .js/.wasm assets) for
+        // any path that isn't an OAuth endpoint. upload_server.sh places the
+        // build at ~/dist, next to the server binary's working directory.
+        let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| "dist".to_string());
+        info!("Serving client static files from {static_dir}");
+
         let app = Router::new()
             .route("/oauth/start", post(start_oauth))
             .route("/oauth/callback", get(oauth_callback_handler))
             .route(FRAGMENT_CAPTURE_ENDPOINT, get(oauth_fragment_handler))
+            .fallback_service(ServeDir::new(static_dir))
             .with_state(app_state);
 
-        let bind_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), OAUTH_BIND_PORT);
+        info!("Serving static directory at: https://{redirect_address}");
+
+        let bind_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), HTTPS_BIND_PORT);
         let tls_config = RustlsConfig::from_pem_file(oauth_tls_cert, oauth_tls_key).await?;
         info!("OAuth callback server listening on {bind_address}");
 
