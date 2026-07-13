@@ -611,7 +611,7 @@ async fn main() {
                     ui.label(format!("RTT estimate: ({:.1} ms)", estimated_rtt_ms));
                     ui.label(format!("Ping estimate: ({:.1} ms)", estimated_rtt_ms / 2.));
                     ui.label(format!("RTT jitter estimate: ({:.1} ms)", jitter_rtt_ms));
-                    ui.label(format!("{ui_game_state:#?}"));
+                    //ui.label(format!("{ui_game_state:#?}"));
 
                     ui.separator();
 
