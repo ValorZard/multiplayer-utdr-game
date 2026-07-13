@@ -259,7 +259,9 @@ async fn main() {
     // TODO: dynamically set and remove game rectangles, but for now we can just assume there's only a set number right now
     let rectangles = game_logic.game_logic.get_rectangles();
     for rect in rectangles {
-        let mut scene_rect = scene.add_rectangle(rect.width, rect.height).set_color(YELLOW);
+        let mut scene_rect = scene
+            .add_rectangle(rect.width, rect.height)
+            .set_color(YELLOW);
         // Draw at the collider's actual center (in pixel space) so the visible
         // box lines up with where collision really happens.
         scene_rect.set_position(convert_vec2_physics_to_pixel(rect.get_physics_position()));

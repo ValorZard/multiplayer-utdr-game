@@ -431,8 +431,18 @@ impl GameLogic {
 
         // Distinct starting points on opposite sides, clear of the obstacle (spawned
         // below) and of each other, so neither player starts already overlapping it.
-        let left_player = Self::spawn_player(&mut world, &mut physics, PlayerSide::Left, LEFT_PLAYER_STARTING_POSITION);
-        let right_player = Self::spawn_player(&mut world, &mut physics, PlayerSide::Right, RIGHT_PLAYER_STARTING_POSITION);
+        let left_player = Self::spawn_player(
+            &mut world,
+            &mut physics,
+            PlayerSide::Left,
+            LEFT_PLAYER_STARTING_POSITION,
+        );
+        let right_player = Self::spawn_player(
+            &mut world,
+            &mut physics,
+            PlayerSide::Right,
+            RIGHT_PLAYER_STARTING_POSITION,
+        );
 
         // spawn physics object for players to collide with
         // create a rectangle in the game world
@@ -441,18 +451,17 @@ impl GameLogic {
         // set_position), so the physics collider sits at the same point.
         let physics_position = rectangle.get_physics_position();
         let rectangle_half_extents = rectangle.get_half_extents_for_physics();
-        let collider =
-            ColliderBuilder::cuboid(rectangle_half_extents.x, rectangle_half_extents.y)
-                .collision_groups(InteractionGroups::new(
-                    OBSTACLE_GROUP,
-                    PLAYER_GROUP,
-                    InteractionTestMode::And,
-                ))
-                .position(Pose2 {
-                    rotation: Rot2::default(),
-                    translation: physics_position,
-                })
-                .build();
+        let collider = ColliderBuilder::cuboid(rectangle_half_extents.x, rectangle_half_extents.y)
+            .collision_groups(InteractionGroups::new(
+                OBSTACLE_GROUP,
+                PLAYER_GROUP,
+                InteractionTestMode::And,
+            ))
+            .position(Pose2 {
+                rotation: Rot2::default(),
+                translation: physics_position,
+            })
+            .build();
         let collider_handle = physics.colliders.insert(collider);
         world.spawn((rectangle, Obstacle {}, collider_handle));
 
@@ -482,11 +491,13 @@ impl GameLogic {
 
         let half_extents = PLAYER_GAME_RECTANGLE.get_half_extents_for_physics();
 
-        let collider = ColliderBuilder::cuboid(half_extents.x, half_extents.y).collision_groups(InteractionGroups::new(
-            PLAYER_GROUP,
-            OBSTACLE_GROUP,
-            InteractionTestMode::And,
-        )).build();
+        let collider = ColliderBuilder::cuboid(half_extents.x, half_extents.y)
+            .collision_groups(InteractionGroups::new(
+                PLAYER_GROUP,
+                OBSTACLE_GROUP,
+                InteractionTestMode::And,
+            ))
+            .build();
 
         let (body_handle, collider_handle) = physics.insert(rigid_body, collider);
 
@@ -500,16 +511,22 @@ impl GameLogic {
     }
 
     pub fn get_rectangles(&mut self) -> Vec<GameRectangle> {
-        self.world.query_mut::<&GameRectangle>().into_iter().copied().collect()
+        self.world
+            .query_mut::<&GameRectangle>()
+            .into_iter()
+            .copied()
+            .collect()
     }
 
-    fn character_handle_for(&mut self, player_side: PlayerSide) -> (&RigidBodyHandle, &KinematicCharacterController) {
+    fn character_handle_for(
+        &mut self,
+        player_side: PlayerSide,
+    ) -> (&RigidBodyHandle, &KinematicCharacterController) {
         let entity = match player_side {
             PlayerSide::Left => self.left_player,
             PlayerSide::Right => self.right_player,
         };
-        self
-            .world
+        self.world
             .query_one_mut::<(&RigidBodyHandle, &KinematicCharacterController)>(entity)
             .expect("Player should exist here")
     }
@@ -567,9 +584,7 @@ impl GameLogic {
                 translation: current_position,
             },
             desired_movement,
-            |c| {
-                collisions.push(c)
-            },
+            |c| collisions.push(c),
         );
 
         controller.solve_character_collision_impulses(
@@ -585,7 +600,10 @@ impl GameLogic {
         // Kinematic bodies don't move until you tell the physics step
         // where they're going next.
         self.physics.bodies[handle].set_next_kinematic_translation(new_pos);
-        Vec2::new(new_pos.x * PHYSICS_TO_PIXEL_SCALE, new_pos.y  * PHYSICS_TO_PIXEL_SCALE)
+        Vec2::new(
+            new_pos.x * PHYSICS_TO_PIXEL_SCALE,
+            new_pos.y * PHYSICS_TO_PIXEL_SCALE,
+        )
     }
 
     /// `new_position` is in game (pixel) space, like every other public position.
