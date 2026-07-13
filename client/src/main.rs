@@ -257,7 +257,7 @@ async fn main() {
     let mut predicted_state: MoveGameState;
 
     // TODO: dynamically set and remove game rectangles, but for now we can just assume there's only a set number right now
-    let rectangles = game_logic.game_logic.get_rectangles();
+    let rectangles = game_logic.game_logic.get_obstacle_rectangles();
     for rect in rectangles {
         let mut scene_rect = scene
             .add_rectangle(rect.width, rect.height)

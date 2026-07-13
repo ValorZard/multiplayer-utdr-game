@@ -2,7 +2,7 @@ use rpc::{GameLogic, MoveInputState, PLAYER_GAME_RECTANGLE, PlayerSide};
 
 fn main() {
     let mut logic = GameLogic::new();
-    let rect = logic.get_rectangles()[0];
+    let rect = logic.get_obstacle_rectangles()[0];
     println!("rect pixel: {:?}", rect);
     println!("rect physics center: {:?}", rect.get_physics_position());
     println!(
