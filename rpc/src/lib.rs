@@ -1,4 +1,5 @@
 use glam::Vec2;
+use rapier2d::control::KinematicCharacterController;
 use rapier2d::prelude::*;
 use rkyv::api::high::{HighSerializer, HighValidator};
 use rkyv::bytecheck::CheckBytes;
@@ -316,7 +317,8 @@ pub const HEADER_MESSAGE: [u8; 4] = [0, 3, 4, 5];
 // deltarune runs on 30 TPS
 pub const GAME_TIME_STEP: Duration = Duration::from_millis(33);
 pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
-pub const PLAYER_SPEED: f32 = 100.;
+/// Player movement speed in game (pixel) space, i.e. pixels per second.
+pub const PLAYER_SPEED: f32 = 250.;
 #[derive(Debug, PartialEq)]
 pub enum LogicError {
     PlayerAlreadyExists(PlayerSide),
@@ -338,6 +340,75 @@ impl std::fmt::Display for LogicError {
 
 impl std::error::Error for LogicError {}
 
+pub fn convert_vec2_pixel_to_physics(position: Vec2) -> Vec2 {
+    Vec2 {
+        x: position.x * PIXEL_TO_PHYSICS_SCALE,
+        y: position.y * PIXEL_TO_PHYSICS_SCALE,
+    }
+}
+
+pub fn convert_vec2_physics_to_pixel(position: Vec2) -> Vec2 {
+    Vec2 {
+        x: position.x * PHYSICS_TO_PIXEL_SCALE,
+        y: position.y * PHYSICS_TO_PIXEL_SCALE,
+    }
+}
+
+// Collision groups: players collide with obstacles but not with each other
+pub const PLAYER_GROUP: Group = Group::GROUP_1;
+pub const OBSTACLE_GROUP: Group = Group::GROUP_2;
+pub const HITBOX_GROUP: Group = Group::GROUP_3;
+pub const HURTBOX_GROUP: Group = Group::GROUP_4;
+pub const INTERACTION_GROUP: Group = Group::GROUP_5;
+
+pub struct Obstacle {}
+
+// this is how the rectangle is displayed in the game world, not in physics coords
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct GameRectangle {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl From<Aabb> for GameRectangle {
+    fn from(aabb: Aabb) -> Self {
+        let min = convert_vec2_physics_to_pixel(aabb.mins);
+        let max = convert_vec2_physics_to_pixel(aabb.maxs);
+        GameRectangle {
+            x: min.x,
+            y: min.y,
+            width: max.x - min.x,
+            height: max.y - min.y,
+        }
+    }
+}
+
+impl GameRectangle {
+    pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        GameRectangle {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    pub const fn get_physics_position(&self) -> Vec2 {
+        let center_x = self.x * PIXEL_TO_PHYSICS_SCALE;
+        let center_y = self.y * PIXEL_TO_PHYSICS_SCALE;
+        Vec2::new(center_x, center_y)
+    }
+
+    pub const fn get_half_extents_for_physics(&self) -> Vec2 {
+        Vec2::new(
+            (self.width * 0.5) * PIXEL_TO_PHYSICS_SCALE,
+            (self.height * 0.5) * PIXEL_TO_PHYSICS_SCALE,
+        )
+    }
+}
+
 pub struct GameLogic {
     world: hecs::World,
     physics: PhysicsWorld,
@@ -348,6 +419,9 @@ pub struct GameLogic {
 pub const PHYSICS_TO_PIXEL_SCALE: f32 = 50.0; // 1 meter in physics engine equals 50 pixels
 pub const PIXEL_TO_PHYSICS_SCALE: f32 = 1.0 / PHYSICS_TO_PIXEL_SCALE;
 pub const PLAYER_PHYSICS_RADIUS: f32 = 1.0; // in physics scale
+pub const PLAYER_GAME_RECTANGLE: GameRectangle = GameRectangle::new(0., 0., 10., 10.);
+pub const LEFT_PLAYER_STARTING_POSITION: Vec2 = Vec2::new(-50., 0.0);
+pub const RIGHT_PLAYER_STARTING_POSITION: Vec2 = Vec2::new(50., 0.0);
 
 impl GameLogic {
     pub fn new() -> Self {
@@ -355,8 +429,38 @@ impl GameLogic {
         let mut world = hecs::World::new();
         let mut physics = PhysicsWorld::new();
 
-        let left_player = Self::spawn_player(&mut world, &mut physics, PlayerSide::Left);
-        let right_player = Self::spawn_player(&mut world, &mut physics, PlayerSide::Right);
+        // Distinct starting points on opposite sides, clear of the obstacle (spawned
+        // below) and of each other, so neither player starts already overlapping it.
+        let left_player = Self::spawn_player(&mut world, &mut physics, PlayerSide::Left, LEFT_PLAYER_STARTING_POSITION);
+        let right_player = Self::spawn_player(&mut world, &mut physics, PlayerSide::Right, RIGHT_PLAYER_STARTING_POSITION);
+
+        // spawn physics object for players to collide with
+        // create a rectangle in the game world
+        let rectangle = GameRectangle::new(40.0, 30.0, 20.0, 20.0);
+        // GameRectangle's x/y is its center (matching kiss3d's center-based
+        // set_position), so the physics collider sits at the same point.
+        let physics_position = rectangle.get_physics_position();
+        let rectangle_half_extents = rectangle.get_half_extents_for_physics();
+        let collider =
+            ColliderBuilder::cuboid(rectangle_half_extents.x, rectangle_half_extents.y)
+                .collision_groups(InteractionGroups::new(
+                    OBSTACLE_GROUP,
+                    PLAYER_GROUP,
+                    InteractionTestMode::And,
+                ))
+                .position(Pose2 {
+                    rotation: Rot2::default(),
+                    translation: physics_position,
+                })
+                .build();
+        let collider_handle = physics.colliders.insert(collider);
+        world.spawn((rectangle, Obstacle {}, collider_handle));
+
+        // The broad-phase spatial index used by scene queries (incl. the character
+        // controller's move_shape) isn't populated until a step runs; without this,
+        // the very first update_position_with_input call queries a stale/empty index
+        // and misses newly-inserted colliders entirely.
+        physics.step();
 
         Self {
             world,
@@ -370,26 +474,43 @@ impl GameLogic {
         world: &mut hecs::World,
         physics: &mut PhysicsWorld,
         side: PlayerSide,
+        spawn_position: Vec2,
     ) -> hecs::Entity {
         let rigid_body = RigidBodyBuilder::kinematic_position_based()
-            .translation(Vec2::ZERO)
+            .translation(convert_vec2_pixel_to_physics(spawn_position))
             .build();
 
-        let collider = ColliderBuilder::ball(PLAYER_PHYSICS_RADIUS).build();
+        let half_extents = PLAYER_GAME_RECTANGLE.get_half_extents_for_physics();
+
+        let collider = ColliderBuilder::cuboid(half_extents.x, half_extents.y).collision_groups(InteractionGroups::new(
+            PLAYER_GROUP,
+            OBSTACLE_GROUP,
+            InteractionTestMode::And,
+        )).build();
 
         let (body_handle, collider_handle) = physics.insert(rigid_body, collider);
 
-        world.spawn((side, body_handle, collider_handle))
+        // Top-down game, no floor/gravity, so ground-snapping doesn't apply here.
+        let controller = KinematicCharacterController {
+            snap_to_ground: None,
+            ..Default::default()
+        };
+
+        world.spawn((side, body_handle, collider_handle, controller))
     }
 
-    fn physics_handle_for(&mut self, player_side: PlayerSide) -> RigidBodyHandle {
+    pub fn get_rectangles(&mut self) -> Vec<GameRectangle> {
+        self.world.query_mut::<&GameRectangle>().into_iter().copied().collect()
+    }
+
+    fn character_handle_for(&mut self, player_side: PlayerSide) -> (&RigidBodyHandle, &KinematicCharacterController) {
         let entity = match player_side {
             PlayerSide::Left => self.left_player,
             PlayerSide::Right => self.right_player,
         };
-        *self
+        self
             .world
-            .query_one_mut::<&RigidBodyHandle>(entity)
+            .query_one_mut::<(&RigidBodyHandle, &KinematicCharacterController)>(entity)
             .expect("Player should exist here")
     }
 
@@ -398,40 +519,94 @@ impl GameLogic {
         *self = Self::new();
     }
 
+    // returns position in game space not physics space
     pub fn update_position_with_input(
         &mut self,
         player_side: PlayerSide,
         input: &MoveInputState,
     ) -> Vec2 {
-        let handle = self.physics_handle_for(player_side);
-        let body = &mut self.physics.bodies[handle];
+        let (handle, controller) = self.character_handle_for(player_side);
+        let handle = *handle;
+        let controller = *controller;
+        // following code is based off of:
+        // https://github.com/dimforge/rapier/blob/c13133ad293ee70c7f9cec9e498eac016c362169/examples2d/utils/character.rs#L125
+
+        let character_body = &self.physics.bodies[handle];
+        let character_collider = &self.physics.colliders[character_body.colliders()[0]];
+        let character_rotation = character_collider.position().rotation;
+        let character_shape = character_collider.shared_shape().clone();
+        let character_mass = character_body.mass();
+        // QueryFilter ignores each collider's own collision_groups unless told to check
+        // them; without this, the query treats every collider (e.g. the other player) as
+        // an obstacle, not just the ones this player's group is actually set to interact with.
+        let character_groups = character_collider.collision_groups();
+
         // Reconciliation may apply multiple inputs before a physics step;
         // use the pending kinematic target so updates accumulate deterministically.
-        let current_position = body.next_position().translation;
-        let delta = input.as_normalized_vec() * PLAYER_SPEED * GAME_TIME_DELTA;
-        let new_pos = Vec2::new(current_position.x + delta.x, current_position.y + delta.y);
+        let current_position = character_body.next_position().translation;
+        // PLAYER_SPEED is px/s; move_shape works in physics space, so convert.
+        let desired_movement =
+            input.as_normalized_vec() * PLAYER_SPEED * PIXEL_TO_PHYSICS_SCALE * GAME_TIME_DELTA;
+
+        let mut query_pipeline = self.physics.broad_phase.as_query_pipeline_mut(
+            self.physics.narrow_phase.query_dispatcher(),
+            &mut self.physics.bodies,
+            &mut self.physics.colliders,
+            QueryFilter::new()
+                .exclude_rigid_body(handle)
+                .groups(character_groups),
+        );
+
+        let mut collisions = vec![];
+        let movement = controller.move_shape(
+            GAME_TIME_DELTA,
+            &query_pipeline.as_ref(),
+            &*character_shape,
+            &Pose2 {
+                rotation: character_rotation,
+                translation: current_position,
+            },
+            desired_movement,
+            |c| {
+                collisions.push(c)
+            },
+        );
+
+        controller.solve_character_collision_impulses(
+            GAME_TIME_DELTA,
+            &mut query_pipeline,
+            &*character_shape,
+            character_mass,
+            &collisions,
+        );
+
+        let new_pos = current_position + movement.translation;
 
         // Kinematic bodies don't move until you tell the physics step
         // where they're going next.
-        body.set_next_kinematic_translation(new_pos);
-        Vec2::new(new_pos.x, new_pos.y)
+        self.physics.bodies[handle].set_next_kinematic_translation(new_pos);
+        Vec2::new(new_pos.x * PHYSICS_TO_PIXEL_SCALE, new_pos.y  * PHYSICS_TO_PIXEL_SCALE)
     }
 
+    /// `new_position` is in game (pixel) space, like every other public position.
     pub fn update_position_with_vec(
         &mut self,
         player_side: PlayerSide,
         new_position: Vec2,
     ) -> Vec2 {
-        let handle = self.physics_handle_for(player_side);
+        let (handle, _) = self.character_handle_for(player_side);
+        let handle = handle.clone();
         let body = &mut self.physics.bodies[handle];
-        body.set_next_kinematic_translation(new_position);
+        body.set_next_kinematic_translation(convert_vec2_pixel_to_physics(new_position));
         new_position
     }
 
+    /// Returns position in game (pixel) space, not physics space.
     pub fn get_position(&mut self, player_side: PlayerSide) -> Vec2 {
-        let handle = self.physics_handle_for(player_side);
+        let (handle, _) = self.character_handle_for(player_side);
+        let handle = handle.clone();
         let t = self.physics.bodies[handle].translation();
-        Vec2::new(t.x, t.y)
+        convert_vec2_physics_to_pixel(Vec2::new(t.x, t.y))
     }
 
     /// Advances the physics simulation. Call once per tick, after inputs

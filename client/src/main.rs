@@ -12,7 +12,7 @@ use rpc::{
     GAME_TIME_STEP, GameLogic, InputSequence, LobbyId, LobbyState, MoveGameState, PendingMoveInput,
     PlayerSide, RPSGameState, RPSWinState, ReliableRpcClientMessage, ReliableRpcServerMessage,
     ScoreSize, TurnInput, UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId, YesOrNo,
-    encode_message,
+    convert_vec2_physics_to_pixel, encode_message,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -255,6 +255,15 @@ async fn main() {
 
     let mut remote_state_hash = 0;
     let mut predicted_state: MoveGameState;
+
+    // TODO: dynamically set and remove game rectangles, but for now we can just assume there's only a set number right now
+    let rectangles = game_logic.game_logic.get_rectangles();
+    for rect in rectangles {
+        let mut scene_rect = scene.add_rectangle(rect.width, rect.height).set_color(YELLOW);
+        // Draw at the collider's actual center (in pixel space) so the visible
+        // box lines up with where collision really happens.
+        scene_rect.set_position(convert_vec2_physics_to_pixel(rect.get_physics_position()));
+    }
 
     // Client config
     let client_config = include_str!("../client_config.toml");
