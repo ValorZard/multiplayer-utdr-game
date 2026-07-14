@@ -10,7 +10,6 @@ use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
 use shared::game::{
     GAME_TIME_STEP, GameLogic, MoveGameState, PlayerSide, RPSGameState, RPSWinState, TurnInput,
-    convert_vec2_physics_to_pixel,
 };
 use shared::rpc::{
     InputSequence, LobbyId, LobbyState, PendingMoveInput, ReliableRpcClientMessage,

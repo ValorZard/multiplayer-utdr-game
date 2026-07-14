@@ -8,8 +8,6 @@ use axum::{
     routing::get,
 };
 use axum_server::tls_rustls::RustlsConfig;
-use clap::Parser;
-use futures_util::StreamExt;
 use oauth2::basic::{
     BasicClient, BasicErrorResponse, BasicRevocationErrorResponse, BasicTokenIntrospectionResponse,
     BasicTokenResponse,
@@ -21,18 +19,15 @@ use shared::rpc::{
     ConnectionInitMessage, HEADER_MESSAGE, ReliableRpcServerMessage, UserId, decode_message,
     encode_message,
 };
-use std::sync::LazyLock;
 use std::{
     collections::HashMap,
     env,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    path,
     str::FromStr,
     sync::Arc,
 };
 use tokio::{
-    io::AsyncReadExt,
-    sync::{Mutex, mpsc, oneshot},
+    sync::{mpsc, oneshot},
     task::JoinSet,
 };
 use web_transport_quinn::{Request, Server, proto::ConnectResponse};

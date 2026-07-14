@@ -1,12 +1,11 @@
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_channel::oneshot;
-use futures_util::{SinkExt, StreamExt};
-#[cfg(target_arch = "wasm32")]
-use kiss3d::wasm_bindgen_futures::spawn_local;
+use futures_util::StreamExt;
 use shared::rpc::{
     HEADER_MESSAGE, ReliableRpcClientMessage, ReliableRpcServerMessage, UnreliableRpcClientMessage,
     UnreliableRpcServerMessage, decode_message, encode_message,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::LazyLock;
 use url::Url;
 use web_transport::{Client, ClientBuilder, RecvStream, SendStream};

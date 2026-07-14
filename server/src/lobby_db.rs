@@ -46,6 +46,7 @@ enum LobbyEntry {
 }
 
 impl LobbyEntry {
+    #[allow(dead_code)]
     fn session(&self) -> &LobbySessionHandle {
         match self {
             LobbyEntry::Waiting(s) => s,
@@ -54,6 +55,7 @@ impl LobbyEntry {
         }
     }
 
+    #[allow(dead_code)]
     fn lobby_state(&self) -> LobbyState {
         match self {
             LobbyEntry::Waiting(_) => LobbyState::Waiting,
@@ -256,6 +258,7 @@ impl ServerStateInner {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn check_if_lobby_exists(&self, lobby_id: LobbyId) -> bool {
         self.lobby_list.contains_key(&lobby_id)
     }
@@ -558,6 +561,7 @@ impl ServerState {
             .await
     }
 
+    #[allow(dead_code)]
     pub async fn check_if_lobby_exists(&self, lobby_id: LobbyId) -> bool {
         self.server_state
             .lock()
@@ -580,12 +584,9 @@ impl ServerState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        net::{IpAddr, Ipv4Addr},
-        time::Duration,
-    };
+    use std::time::Duration;
     use tokio::sync::mpsc;
-    use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+    use tokio::sync::mpsc::UnboundedReceiver;
     use tokio::time::timeout;
 
     async fn check_if_matches_lobby_state(
@@ -725,7 +726,7 @@ mod tests {
 
         let (replacement_left_reliable_sender, mut replacement_left_reliable_receiver) =
             mpsc::unbounded_channel();
-        let (replacement_left_unreliable_sender, replacement_left_unreliable_receiver) =
+        let (replacement_left_unreliable_sender, _replacement_left_unreliable_receiver) =
             mpsc::unbounded_channel();
         server_state
             .connect_user(
@@ -773,7 +774,7 @@ mod tests {
 
         let (replacement_right_reliable_sender, mut replacement_right_reliable_receiver) =
             mpsc::unbounded_channel();
-        let (replacement_right_unreliable_sender, replacement_right_unreliable_receiver) =
+        let (replacement_right_unreliable_sender, _replacement_right_unreliable_receiver) =
             mpsc::unbounded_channel();
         server_state
             .connect_user(

@@ -24,20 +24,24 @@ pub enum LobbySessionMessage {
     ),
     RPSInput(UserId, TurnInput, oneshot::Sender<RPSGameState>),
     MoveInput(UserId, MoveInputState, InputSequence, i64),
+    #[allow(dead_code)]
     SendReliableMessageToUser(
         ReliableRpcServerMessage,
         UserId,
         oneshot::Sender<Result<(), LobbyError>>,
     ),
+    #[allow(dead_code)]
     SendUnreliableMessageToUser(
         UnreliableRpcServerMessage,
         UserId,
         oneshot::Sender<Result<(), LobbyError>>,
     ),
+    #[allow(dead_code)]
     SendReliableMessageToLobby(
         ReliableRpcServerMessage,
         oneshot::Sender<Result<(), LobbyError>>,
     ),
+    #[allow(dead_code)]
     SendUnreliableMessageToLobby(
         UnreliableRpcServerMessage,
         oneshot::Sender<Result<(), LobbyError>>,
@@ -177,6 +181,7 @@ impl LobbySession {
         Err(LobbyError::NeverExisted(leaving_player))
     }
 
+    #[allow(dead_code)]
     pub fn get_winner(&self) -> Option<RPSWinState> {
         self.winner.clone()
     }
@@ -292,6 +297,7 @@ impl LobbySession {
         }
     }
 
+    #[allow(dead_code)]
     fn send_reliable_message_to_side(
         &self,
         message: ReliableRpcServerMessage,
@@ -560,6 +566,7 @@ impl LobbySessionHandle {
         recv.await.expect("Actor task has been killed")
     }
 
+    #[allow(dead_code)]
     pub async fn send_reliable_message_to_user(
         &self,
         message: ReliableRpcServerMessage,
@@ -575,6 +582,7 @@ impl LobbySessionHandle {
         recv.await.expect("Actor task has been killed")
     }
 
+    #[allow(dead_code)]
     pub async fn send_reliable_message_to_lobby(
         &self,
         message: ReliableRpcServerMessage,
@@ -589,6 +597,7 @@ impl LobbySessionHandle {
         recv.await.expect("Actor task has been killed")
     }
 
+    #[allow(dead_code)]
     pub async fn send_unreliable_message_to_user(
         &self,
         message: UnreliableRpcServerMessage,

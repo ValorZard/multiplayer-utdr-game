@@ -6,6 +6,7 @@ use shared::game::{
 use shared::rpc::{InputSequence, RemoteTimestamp};
 
 #[derive(Debug, PartialEq)]
+#[allow(dead_code)]
 pub enum GameError {
     InvalidInput,
     LeftInputAlreadySet,
