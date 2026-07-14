@@ -352,8 +352,8 @@ async fn main() {
                     {
                         continue;
                     }
-                    // Leaving the dodge segment (next choice phase, or the
-                    // battle ending) clears any predicted bullets still alive.
+                    // Leaving the dodge segment (next choice phase, or the battle ending)
+                    // clears any predicted bullets still alive.
                     match &state {
                         BattleGameState::ChoosingActions { .. } | BattleGameState::Win { .. } => {
                             game_logic.game_logic.clear_projectiles();
@@ -529,6 +529,10 @@ async fn main() {
         while game_time_step_timer >= GAME_TIME_STEP {
             game_time_step_timer -= GAME_TIME_STEP;
             // make sure LobbyState is running, because building up inputs before network syncing is bad
+            // TODO: for now we make all game logic only execute while we're inside a lobby
+            // ideally we would LIKE to be able to do game logic when we're not connected to a server
+            // for training mode or whatever.
+            // TODO: Figure out how a "training mode" would work
             if let Some(side) = ui_game_state.player_side
                 && ui_game_state.lobby_state == LobbyState::Running
             {
@@ -558,38 +562,36 @@ async fn main() {
                         client_send_time_ms: current_time_ms,
                     });
                 }
-            }
-
-            // Dodge phase prediction: the server told us when the pattern
-            // starts (a shared unix timestamp), so spawn the same
-            // deterministic bullets it does, on our own clock.
-            if ui_game_state.lobby_state == LobbyState::Running
-                && let Some(BattleGameState::Dodging {
+                // Dodge phase prediction: the server told us when the pattern
+                // starts (a shared unix timestamp), so spawn the same
+                // deterministic bullets it does, on our own clock.
+                if let Some(BattleGameState::Dodging {
                     pattern_start_time_ms,
                     ..
                 }) = ui_game_state.current_game_state.as_ref()
-            {
-                let scheduled_bullets =
-                    dodge_pattern_bullet_count(*pattern_start_time_ms, current_time_ms);
-                while game_logic.dodge_spawned_bullets < scheduled_bullets {
-                    let (position, velocity) =
-                        dodge_pattern_bullet(game_logic.dodge_spawned_bullets);
-                    game_logic.game_logic.spawn_projectile(position, velocity);
-                    game_logic.dodge_spawned_bullets += 1;
+                {
+                    let scheduled_bullets =
+                        dodge_pattern_bullet_count(*pattern_start_time_ms, current_time_ms);
+                    while game_logic.dodge_spawned_bullets < scheduled_bullets {
+                        let (position, velocity) =
+                            dodge_pattern_bullet(game_logic.dodge_spawned_bullets);
+                        game_logic.game_logic.spawn_projectile(position, velocity);
+                        game_logic.dodge_spawned_bullets += 1;
+                    }
                 }
-            }
 
-            game_logic.game_logic.step_physics();
+                game_logic.game_logic.step_physics();
 
-            // Mirror the server's despawn-on-contact so predicted bullets
-            // visually disappear when they hit someone; the damage itself is
-            // server-authoritative and arrives through the battle stats.
-            if let Some(BattleGameState::Dodging { stats, .. }) =
-                ui_game_state.current_game_state.as_ref()
-            {
-                let _ = game_logic
-                    .game_logic
-                    .detect_projectile_hits(stats.left_health > 0, stats.right_health > 0);
+                // Mirror the server's despawn-on-contact so predicted bullets
+                // visually disappear when they hit someone; the damage itself is
+                // server-authoritative and arrives through the battle stats.
+                if let Some(BattleGameState::Dodging { stats, .. }) =
+                    ui_game_state.current_game_state.as_ref()
+                {
+                    let _ = game_logic
+                        .game_logic
+                        .detect_projectile_hits(stats.left_health > 0, stats.right_health > 0);
+                }
             }
         }
 
