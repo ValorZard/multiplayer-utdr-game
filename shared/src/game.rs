@@ -14,6 +14,11 @@ pub const ATTACK_DAMAGE: Health = 1;
 pub const DEFEND_BLOCK: Health = 1;
 pub const PROJECTILE_HIT_DAMAGE: Health = 1;
 
+/// deltarune runs on 30 TPS
+pub const GAME_TIME_STEP_MS: u64 = 33;
+pub const GAME_TIME_STEP: Duration = Duration::from_millis(GAME_TIME_STEP_MS);
+pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
+
 /// Length of the bullet-hell dodge segment, in game ticks (30 TPS => ~10 seconds).
 pub const DODGE_PHASE_TICKS: u32 = 300;
 /// Wall-clock gap between bullets of a dodge pattern. Spawning is scheduled in
@@ -211,10 +216,6 @@ impl MoveInputState {
         .normalize_or_zero()
     }
 }
-
-// deltarune runs on 30 TPS
-pub const GAME_TIME_STEP: Duration = Duration::from_millis(33);
-pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
 /// Player movement speed in game (pixel) space, i.e. pixels per second.
 pub const PLAYER_SPEED: f32 = 100.;
 #[derive(Debug, PartialEq)]
@@ -330,6 +331,8 @@ pub const PLAYER_PHYSICS_RADIUS: f32 = 1.0; // in physics scale
 pub const PLAYER_GAME_RECTANGLE: GameRectangle = GameRectangle::new(0., 0., 10., 10.);
 pub const PLAYER_STARTING_POSITION: Vec2 = Vec2::new(0., 0.);
 
+/// GameLogic should NEVER leak any physics space vectors outside of the physics world.
+/// As far as the rest of the codebase is concerned, it's ONLY worried about pixel (game) space.
 impl GameLogic {
     pub fn new() -> Self {
         // TODO: for now, we hardcode left and right side players and require there to be only one of each
@@ -573,6 +576,9 @@ impl GameLogic {
     /// space. The bullet is a velocity-driven kinematic body whose sensor
     /// collider lives in HITBOX_GROUP, so it never physically pushes players
     /// or obstacles; hits are picked up by detect_projectile_hits instead.
+    /// Because we are deterministically spawning bullets, we (for now) can't have bullets that follow players or whatever.
+    /// TODO: figure out if we can have bullets that respond to players
+    /// that might require figuring out a better way of doing client side prediction for a lot of bullets
     pub fn spawn_projectile(&mut self, position: Vec2, velocity: Vec2) -> hecs::Entity {
         let rigid_body = RigidBodyBuilder::kinematic_velocity_based()
             .translation(convert_vec2_pixel_to_physics(position))
@@ -627,9 +633,9 @@ impl GameLogic {
         left_hittable: bool,
         right_hittable: bool,
     ) -> (u32, u32) {
-        let mut hits_per_side: [HashSet<ColliderHandle>; 2] = [HashSet::new(), HashSet::new()];
-        let [left_set, right_set] = &mut hits_per_side;
-        for (side, hits) in [(PlayerSide::Left, left_set), (PlayerSide::Right, right_set)] {
+        let mut left_hits_per_side = HashSet::<ColliderHandle>::new();
+        let mut right_hits_per_side = HashSet::<ColliderHandle>::new();
+        for (side, hits) in [(PlayerSide::Left, &mut left_hits_per_side), (PlayerSide::Right, &mut right_hits_per_side)] {
             let hittable = match side {
                 PlayerSide::Left => left_hittable,
                 PlayerSide::Right => right_hittable,
@@ -678,9 +684,9 @@ impl GameLogic {
             .query_mut::<(hecs::Entity, &RigidBodyHandle, &ColliderHandle)>()
             .with::<&Projectile>()
         {
-            if hits_per_side[0].contains(collider_handle) {
+            if left_hits_per_side.contains(collider_handle) {
                 left_hits += 1;
-            } else if hits_per_side[1].contains(collider_handle) {
+            } else if right_hits_per_side.contains(collider_handle) {
                 right_hits += 1;
             } else if self.physics.bodies[*body_handle]
                 .position()

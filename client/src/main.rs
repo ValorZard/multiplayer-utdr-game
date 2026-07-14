@@ -382,7 +382,7 @@ async fn main() {
                 }
                 ReliableRpcServerMessage::LobbyState(state) => {
                     // unless lobby state is finished, we really shouldn't have a win state
-                    // also don't updadte if the same lobby state has already been set
+                    // also don't update if the same lobby state has already been set
                     if ui_game_state.lobby_state != state {
                         match state {
                             LobbyState::Finished => {
