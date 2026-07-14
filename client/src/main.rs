@@ -712,7 +712,9 @@ async fn main() {
                         UiState::Connected => {
                             ui.label("Successfully connected and authenticated to the server!");
                         }
-                        UiState::LobbyWaiting => {}
+                        UiState::LobbyWaiting => {
+                            ui.label("Waiting for lobby to fill up...");
+                        }
                         UiState::LobbyRunning => {
                             let client_rpc_sender = reliable_client_rpc_sender
                                 .clone()
