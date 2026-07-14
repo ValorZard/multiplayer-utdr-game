@@ -428,12 +428,11 @@ impl GameLogic {
         world.spawn((side, body_handle, collider_handle, controller, player_rect))
     }
 
-    pub fn get_obstacle_rectangles(&mut self) -> Vec<GameRectangle> {
+    pub fn get_obstacle_rectangles(&mut self) -> Vec<&GameRectangle> {
         self.world
             .query_mut::<(&GameRectangle, &Obstacle)>()
             .into_iter()
             .map(|(rectangle, _)| rectangle)
-            .copied()
             .collect()
     }
 
