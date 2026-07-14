@@ -1,7 +1,62 @@
+use crate::rpc::RemoteTimestamp;
 use rapier2d::control::KinematicCharacterController;
 use rapier2d::prelude::*;
 use rkyv::{Archive, Deserialize, Serialize};
+use std::collections::HashSet;
 use std::time::Duration;
+
+pub type Health = u32;
+
+pub const PLAYER_MAX_HEALTH: Health = 10;
+pub const ENEMY_MAX_HEALTH: Health = 20;
+pub const ATTACK_DAMAGE: Health = 1;
+/// How much incoming damage a Defend action absorbs during the following dodge phase.
+pub const DEFEND_BLOCK: Health = 1;
+pub const PROJECTILE_HIT_DAMAGE: Health = 1;
+
+/// Length of the bullet-hell dodge segment, in game ticks (30 TPS => ~10 seconds).
+pub const DODGE_PHASE_TICKS: u32 = 300;
+/// Wall-clock gap between bullets of a dodge pattern. Spawning is scheduled in
+/// unix time (not ticks) so client and server can both derive the identical
+/// schedule from the pattern start timestamp alone.
+pub const PROJECTILE_SPAWN_INTERVAL_MS: RemoteTimestamp = 500;
+/// How far in the future the server schedules a pattern start, so the reliable
+/// message announcing it reaches clients before the first bullet spawns.
+pub const PATTERN_START_LEAD_MS: RemoteTimestamp = 1000;
+/// Projectile speed in game (pixel) space, i.e. pixels per second.
+pub const PROJECTILE_SPEED: f32 = 150.0;
+/// Projectiles render and collide as squares with this side length (px).
+pub const PROJECTILE_SIZE: f32 = 6.0;
+/// Where the enemy sits in game (pixel) space; projectiles spawn from here.
+pub const ENEMY_POSITION: Vec2 = Vec2::new(0.0, 120.0);
+/// Projectiles farther than this from the origin are despawned.
+pub const PROJECTILE_DESPAWN_RADIUS: f32 = 500.0;
+
+/// How many bullets of a pattern should exist by `now_ms`, given when the
+/// pattern started. Both client and server run this against their own clocks
+/// so they spawn the same bullets at (approximately) the same instant.
+pub fn dodge_pattern_bullet_count(
+    pattern_start_ms: RemoteTimestamp,
+    now_ms: RemoteTimestamp,
+) -> u32 {
+    if now_ms < pattern_start_ms {
+        return 0;
+    }
+    ((now_ms - pattern_start_ms) / PROJECTILE_SPAWN_INTERVAL_MS + 1) as u32
+}
+
+/// Deterministic dodge pattern: bullet `index` of a segment, as (spawn
+/// position, velocity) in game (pixel) space. A golden-angle fan biased
+/// downward gives spread-out coverage of the arena below the enemy without
+/// any RNG, so both sides generate identical bullets from the index alone.
+pub fn dodge_pattern_bullet(index: u32) -> (Vec2, Vec2) {
+    const GOLDEN_ANGLE: f32 = 2.399_963;
+    // wrap the fan into the lower half circle (pointing at the play area)
+    let sweep = (index as f32 * GOLDEN_ANGLE) % std::f32::consts::PI;
+    let angle = -std::f32::consts::PI + sweep;
+    let direction = Vec2::new(angle.cos(), angle.sin());
+    (ENEMY_POSITION, direction * PROJECTILE_SPEED)
+}
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 #[rkyv(
@@ -11,10 +66,53 @@ use std::time::Duration;
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
-pub enum TurnInput {
-    Rock,
-    Paper,
-    Scissors,
+pub enum TurnAction {
+    Attack,
+    Defend,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum BattleWinner {
+    Players,
+    Enemy,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub struct BattleStats {
+    pub left_health: Health,
+    pub right_health: Health,
+    pub enemy_health: Health,
+}
+
+impl BattleStats {
+    pub fn new() -> Self {
+        Self {
+            left_health: PLAYER_MAX_HEALTH,
+            right_health: PLAYER_MAX_HEALTH,
+            enemy_health: ENEMY_MAX_HEALTH,
+        }
+    }
+
+    pub fn health_for(&self, side: PlayerSide) -> Health {
+        match side {
+            PlayerSide::Left => self.left_health,
+            PlayerSide::Right => self.right_health,
+        }
+    }
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -25,33 +123,24 @@ pub enum TurnInput {
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
-pub enum RPSWinState {
-    Left,
-    Right,
-    Tie,
-}
-
-#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
-#[rkyv(
-    // This will generate a PartialEq impl between our unarchived
-    // and archived types
-    compare(PartialEq),
-    // Derives can be passed through to the generated type:
-    derive(Debug),
-)]
-pub enum RPSGameState {
-    // waiting on inputs from both players here
-    StartRound,
-    WaitingForLeftInput {
-        right_input: TurnInput,
+pub enum BattleGameState {
+    // Both players pick simultaneously; the flags only say who has locked in,
+    // never what they picked, so choices stay hidden until the turn resolves.
+    ChoosingActions {
+        left_ready: bool,
+        right_ready: bool,
+        stats: BattleStats,
     },
-    WaitingForRightInput {
-        left_input: TurnInput,
+    Dodging {
+        ticks_remaining: u32,
+        // unix ms timestamp at which the bullet pattern starts; clients
+        // predict the pattern locally from this shared clock reference
+        pattern_start_time_ms: RemoteTimestamp,
+        stats: BattleStats,
     },
     Win {
-        state: RPSWinState,
-        left_input: TurnInput,
-        right_input: TurnInput,
+        winner: BattleWinner,
+        stats: BattleStats,
     },
 }
 
@@ -172,6 +261,9 @@ pub const INTERACTION_GROUP: Group = Group::GROUP_5;
 
 pub struct Obstacle {}
 
+/// ECS marker for enemy bullets during the dodge phase.
+pub struct Projectile {}
+
 // this is how the rectangle is displayed in the game world, not in physics coords
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct GameRectangle {
@@ -243,6 +335,10 @@ impl GameLogic {
         // TODO: for now, we hardcode left and right side players and require there to be only one of each
         let mut world = hecs::World::new();
         let mut physics = PhysicsWorld::new();
+        // The physics default timestep is 1/60s but the game ticks at 30 TPS;
+        // velocity-driven bodies (projectiles) would move at half speed if the
+        // integration step didn't match the game tick.
+        physics.integration_parameters.dt = GAME_TIME_DELTA;
 
         // Distinct starting points on opposite sides, clear of the obstacle (spawned
         // below) and of each other, so neither player starts already overlapping it.
@@ -471,6 +567,137 @@ impl GameLogic {
     /// have been applied via update_position_with_input/_vec.
     pub fn step_physics(&mut self) {
         self.physics.step();
+    }
+
+    /// Spawns an enemy bullet. Both position and velocity are in game (pixel)
+    /// space. The bullet is a velocity-driven kinematic body whose sensor
+    /// collider lives in HITBOX_GROUP, so it never physically pushes players
+    /// or obstacles; hits are picked up by detect_projectile_hits instead.
+    pub fn spawn_projectile(&mut self, position: Vec2, velocity: Vec2) -> hecs::Entity {
+        let rigid_body = RigidBodyBuilder::kinematic_velocity_based()
+            .translation(convert_vec2_pixel_to_physics(position))
+            .linvel(convert_vec2_pixel_to_physics(velocity))
+            .build();
+        let half_extent = (PROJECTILE_SIZE * 0.5) * PIXEL_TO_PHYSICS_SCALE;
+        let collider = ColliderBuilder::cuboid(half_extent, half_extent)
+            .sensor(true)
+            .collision_groups(InteractionGroups::new(
+                HITBOX_GROUP,
+                PLAYER_GROUP,
+                InteractionTestMode::And,
+            ))
+            .build();
+        let (body_handle, collider_handle) = self.physics.insert(rigid_body, collider);
+        self.world
+            .spawn((Projectile {}, body_handle, collider_handle))
+    }
+
+    /// Positions of all live projectiles in game (pixel) space, for rendering.
+    pub fn get_projectile_positions(&mut self) -> Vec<Vec2> {
+        let bodies = &self.physics.bodies;
+        self.world
+            .query_mut::<&RigidBodyHandle>()
+            .with::<&Projectile>()
+            .into_iter()
+            .map(|handle| convert_vec2_physics_to_pixel(bodies[*handle].position().translation))
+            .collect()
+    }
+
+    pub fn clear_projectiles(&mut self) {
+        let entities: Vec<(hecs::Entity, RigidBodyHandle)> = self
+            .world
+            .query_mut::<(hecs::Entity, &RigidBodyHandle)>()
+            .with::<&Projectile>()
+            .into_iter()
+            .map(|(entity, handle)| (entity, *handle))
+            .collect();
+        for (entity, body_handle) in entities {
+            self.physics.remove_body(body_handle);
+            let _ = self.world.despawn(entity);
+        }
+    }
+
+    /// Finds projectiles overlapping each hittable player, despawns them
+    /// (plus any that flew out of the arena), and returns how many hit each
+    /// side. Call once per tick after step_physics. A projectile overlapping
+    /// both players only counts against the left one, since it despawns on
+    /// its first hit.
+    pub fn detect_projectile_hits(
+        &mut self,
+        left_hittable: bool,
+        right_hittable: bool,
+    ) -> (u32, u32) {
+        let mut hits_per_side: [HashSet<ColliderHandle>; 2] = [HashSet::new(), HashSet::new()];
+        let [left_set, right_set] = &mut hits_per_side;
+        for (side, hits) in [(PlayerSide::Left, left_set), (PlayerSide::Right, right_set)] {
+            let hittable = match side {
+                PlayerSide::Left => left_hittable,
+                PlayerSide::Right => right_hittable,
+            };
+            if !hittable {
+                continue;
+            }
+            let entity = match side {
+                PlayerSide::Left => self.left_player,
+                PlayerSide::Right => self.right_player,
+            };
+            let collider_handle = *self
+                .world
+                .query_one_mut::<&ColliderHandle>(entity)
+                .expect("Player should exist here");
+            let player_collider = &self.physics.colliders[collider_handle];
+            let player_pose = *player_collider.position();
+            let player_shape = player_collider.shared_shape().clone();
+
+            // This query's groups pass the mutual And test only against
+            // projectile colliders (HITBOX memberships, PLAYER filter), so
+            // obstacles and the other player never show up here.
+            let query_pipeline = self.physics.broad_phase.as_query_pipeline(
+                self.physics.narrow_phase.query_dispatcher(),
+                &self.physics.bodies,
+                &self.physics.colliders,
+                QueryFilter::new().groups(InteractionGroups::new(
+                    PLAYER_GROUP,
+                    HITBOX_GROUP,
+                    InteractionTestMode::And,
+                )),
+            );
+            hits.extend(
+                query_pipeline
+                    .intersect_shape(player_pose, &*player_shape)
+                    .map(|(handle, _)| handle),
+            );
+        }
+
+        let despawn_distance = PROJECTILE_DESPAWN_RADIUS * PIXEL_TO_PHYSICS_SCALE;
+        let mut left_hits = 0;
+        let mut right_hits = 0;
+        let mut to_despawn: Vec<(hecs::Entity, RigidBodyHandle)> = Vec::new();
+        for (entity, body_handle, collider_handle) in self
+            .world
+            .query_mut::<(hecs::Entity, &RigidBodyHandle, &ColliderHandle)>()
+            .with::<&Projectile>()
+        {
+            if hits_per_side[0].contains(collider_handle) {
+                left_hits += 1;
+            } else if hits_per_side[1].contains(collider_handle) {
+                right_hits += 1;
+            } else if self.physics.bodies[*body_handle]
+                .position()
+                .translation
+                .length()
+                <= despawn_distance
+            {
+                continue;
+            }
+            to_despawn.push((entity, *body_handle));
+        }
+        for (entity, body_handle) in to_despawn {
+            self.physics.remove_body(body_handle);
+            let _ = self.world.despawn(entity);
+        }
+
+        (left_hits, right_hits)
     }
 
     pub fn get_state_to_send_to_client(&mut self) -> MoveGameState {

@@ -1,14 +1,22 @@
-use crate::rps::{GameError, GameSession};
-use shared::game::{
-    MoveGameState, MoveInputState, PlayerSide, RPSGameState, RPSWinState, TurnInput,
-};
+use crate::battle::{GameError, GameSession};
+use shared::game::{BattleGameState, MoveGameState, MoveInputState, PlayerSide, TurnAction};
 use shared::rpc::{
-    InputSequence, LobbyId, LobbyState, ReliableRpcServerMessage, UnreliableRpcServerMessage,
-    UserId,
+    InputSequence, LobbyId, LobbyState, ReliableRpcServerMessage, RemoteTimestamp,
+    UnreliableRpcServerMessage, UserId,
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
+
+// Wall-clock unix time drives the dodge phase's bullet pattern schedule,
+// which clients replicate against their own clocks.
+fn unix_now_ms() -> RemoteTimestamp {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is set before the unix epoch")
+        .as_millis() as RemoteTimestamp
+}
 
 pub type UserReliableSender = UnboundedSender<ReliableRpcServerMessage>;
 pub type UserUnreliableSender = UnboundedSender<UnreliableRpcServerMessage>;
@@ -22,7 +30,11 @@ pub enum LobbySessionMessage {
         UserId,
         oneshot::Sender<Result<(PlayerSide, LobbyState), LobbyError>>,
     ),
-    RPSInput(UserId, TurnInput, oneshot::Sender<RPSGameState>),
+    TurnAction(
+        UserId,
+        TurnAction,
+        oneshot::Sender<Result<BattleGameState, LobbyError>>,
+    ),
     MoveInput(UserId, MoveInputState, InputSequence, i64),
     #[allow(dead_code)]
     SendReliableMessageToUser(
@@ -59,7 +71,6 @@ struct LobbySession {
     left_side: Option<PlayerDataTuple>,
     right_side: Option<PlayerDataTuple>,
     current_round: GameSession,
-    winner: Option<RPSWinState>,
     receiver: mpsc::Receiver<LobbySessionMessage>,
 }
 
@@ -115,7 +126,6 @@ impl LobbySession {
             id,
             left_side: Some(left_side),
             right_side: None,
-            winner: None,
             current_round: GameSession::new(),
             receiver,
         }
@@ -182,10 +192,6 @@ impl LobbySession {
     }
 
     #[allow(dead_code)]
-    pub fn get_winner(&self) -> Option<RPSWinState> {
-        self.winner.clone()
-    }
-
     fn get_left(&self) -> Result<UserId, LobbyError> {
         if let Some((player, _, _)) = self.left_side.as_ref() {
             return Ok(*player);
@@ -200,35 +206,15 @@ impl LobbySession {
         Err(LobbyError::SideNotFound(PlayerSide::Right))
     }
 
-    fn set_left_turn_input(
-        &mut self,
-        input: shared::game::TurnInput,
-    ) -> Result<RPSGameState, GameError> {
-        let state = self.current_round.set_left_turn_input(input)?;
-        if let RPSGameState::Win { state, .. } = state.clone() {
-            self.winner = Some(state);
-        }
-        Ok(state)
-    }
-
-    fn set_right_turn_input(
-        &mut self,
-        input: shared::game::TurnInput,
-    ) -> Result<RPSGameState, GameError> {
-        let state = self.current_round.set_right_turn_input(input)?;
-        if let RPSGameState::Win { state, .. } = state.clone() {
-            self.winner = Some(state);
-        }
-        Ok(state)
-    }
-
     fn reset_lobby(&mut self) {
-        self.winner = None;
         self.current_round = GameSession::new();
     }
 
     fn get_current_lobby_state(&self) -> LobbyState {
-        if self.winner.is_some() {
+        if matches!(
+            self.current_round.compute_state(),
+            BattleGameState::Win { .. }
+        ) {
             LobbyState::Finished
         } else if self.left_side.is_some() && self.right_side.is_some() {
             LobbyState::Running
@@ -239,7 +225,7 @@ impl LobbySession {
         }
     }
 
-    pub fn get_current_game_state(&self) -> RPSGameState {
+    pub fn get_current_game_state(&self) -> BattleGameState {
         self.current_round.compute_state()
     }
 
@@ -398,7 +384,7 @@ impl LobbySession {
     fn step_game(&mut self) -> Result<MoveGameState, LobbyError> {
         // don't step if the lobby is not running
         if self.get_current_lobby_state() == LobbyState::Running {
-            self.current_round.step();
+            self.current_round.step(unix_now_ms());
             Ok(self.current_round.get_move_state())
         } else {
             Err(LobbyError::NotRunning)
@@ -427,17 +413,16 @@ impl LobbySession {
                     let _ = oneshot.send(self.get_right());
                 }
             },
-            LobbySessionMessage::RPSInput(player_addr, input, oneshot) => {
+            LobbySessionMessage::TurnAction(player_addr, action, oneshot) => {
                 let player_side = self.get_player_side(player_addr)?;
-                let current_state = match player_side {
-                    PlayerSide::Left => self
-                        .set_left_turn_input(input)
-                        .map_err(|e| LobbyError::GameError(e))?,
-                    PlayerSide::Right => self
-                        .set_right_turn_input(input)
-                        .map_err(|e| LobbyError::GameError(e))?,
-                };
-                let _ = oneshot.send(current_state);
+                // Rejections (dead player, wrong phase) go back to the caller
+                // instead of erroring here, so a stray message can't kill the
+                // whole lobby actor.
+                let result = self
+                    .current_round
+                    .set_turn_action(player_side, action, unix_now_ms())
+                    .map_err(LobbyError::GameError);
+                let _ = oneshot.send(result);
             }
             LobbySessionMessage::MoveInput(player_addr, input, sequence, client_send_time_ms) => {
                 let player_side = self.get_player_side(player_addr)?;
@@ -613,9 +598,13 @@ impl LobbySessionHandle {
         recv.await.expect("Actor task has been killed")
     }
 
-    pub async fn send_rps_input(&self, user_addr: UserId, input: TurnInput) -> RPSGameState {
+    pub async fn send_turn_action(
+        &self,
+        user_addr: UserId,
+        action: TurnAction,
+    ) -> Result<BattleGameState, LobbyError> {
         let (send, recv) = oneshot::channel();
-        let msg = LobbySessionMessage::RPSInput(user_addr, input, send);
+        let msg = LobbySessionMessage::TurnAction(user_addr, action, send);
         let _ = self.sender.send(msg).await;
         recv.await.expect("Actor task has been killed")
     }

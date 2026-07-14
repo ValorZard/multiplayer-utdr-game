@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail};
-use shared::game::{PlayerSide, RPSGameState};
+use shared::game::{BattleGameState, PlayerSide};
 use shared::rpc::{
     ConnectionInitMessage, LobbyId, PendingMoveInput, ReliableRpcClientMessage,
     ReliableRpcServerMessage, UnreliableRpcClientMessage, UserId, YesOrNo,
@@ -306,141 +306,68 @@ impl ServerStateInner {
                     self.lobby_list.insert(lobby_id, LobbyEntry::Waiting(lobby));
                 }
 
-                LobbyEntry::Running(lobby) => match user_rpc_message.message {
-                    ReliableRpcClientMessage::TurnInput(input) => {
-                        info!(
-                            "Lobby input: {input:?} sent from {:?}",
-                            user_rpc_message.send_addr
-                        );
-                        info!("Lobby session: {lobby:?}");
-
-                        let current_state = lobby
-                            .send_rps_input(user_rpc_message.send_addr, input)
-                            .await;
-                        if let RPSGameState::Win { state: _, .. } = current_state.clone() {
-                            self.lobby_list.insert(
-                                lobby_id,
-                                LobbyEntry::Finished(FinishedLobbySession {
-                                    lobby_session: lobby,
-                                    left_side_continue: None,
-                                    right_side_continue: None,
-                                }),
-                            );
-                        } else {
-                            self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
-                        }
+                LobbyEntry::Running(lobby) => {
+                    // The battle can end without any client message (the
+                    // enemy wins during the dodge phase), so trust the actor
+                    // over our entry: if it already reports Finished, handle
+                    // this message under finished-lobby rules instead.
+                    if lobby.get_current_lobby_state().await == LobbyState::Finished {
+                        let finished = FinishedLobbySession {
+                            lobby_session: lobby,
+                            left_side_continue: None,
+                            right_side_continue: None,
+                        };
+                        self.handle_finished_lobby_message(lobby_id, finished, user_rpc_message)
+                            .await?;
+                        return Ok(());
                     }
-                    _ => {
-                        info!(
-                            "lobby {lobby_id}: running; non-game input from {} ignored",
-                            user_rpc_message.send_addr
-                        );
-                        self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
-                    }
-                },
 
-                LobbyEntry::Finished(mut finished) => {
                     match user_rpc_message.message {
-                        ReliableRpcClientMessage::ContinueRound(vote) => {
-                            let side = finished
-                                .lobby_session
-                                .get_player_side(user_rpc_message.send_addr)
-                                .await?;
+                        ReliableRpcClientMessage::TurnAction(action) => {
+                            info!(
+                                "Turn action: {action:?} sent from {:?}",
+                                user_rpc_message.send_addr
+                            );
 
-                            match side {
-                                PlayerSide::Left => finished.left_side_continue = Some(vote),
-                                PlayerSide::Right => finished.right_side_continue = Some(vote),
-                            }
-
-                            info!("Finished lobby {lobby_id:?}");
-
-                            match (
-                                finished.left_side_continue.clone(),
-                                finished.right_side_continue.clone(),
-                            ) {
-                                (Some(YesOrNo::Yes), Some(YesOrNo::Yes)) => {
-                                    finished.lobby_session.reset_lobby().await;
+                            match lobby
+                                .send_turn_action(user_rpc_message.send_addr, action)
+                                .await
+                            {
+                                Ok(BattleGameState::Win { .. }) => {
                                     self.lobby_list.insert(
                                         lobby_id,
-                                        LobbyEntry::Running(finished.lobby_session),
+                                        LobbyEntry::Finished(FinishedLobbySession {
+                                            lobby_session: lobby,
+                                            left_side_continue: None,
+                                            right_side_continue: None,
+                                        }),
                                     );
                                 }
-
-                                (Some(YesOrNo::No), Some(YesOrNo::No)) => {
-                                    self.remove_connected_user_from_lobby(
-                                        finished
-                                            .lobby_session
-                                            .get_left()
-                                            .await
-                                            .expect("Should have both players"),
-                                    )?;
-                                    self.remove_connected_user_from_lobby(
-                                        finished
-                                            .lobby_session
-                                            .get_right()
-                                            .await
-                                            .expect("Should have both players"),
-                                    )?;
-                                    // delete lobby entirely
+                                Ok(_) => {
+                                    self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
+                                }
+                                Err(e) => {
                                     info!(
-                                        "Finished Lobby {lobby_id} is now destroyed, both players rejected continuing to play"
+                                        "lobby {lobby_id}: rejected turn action from {}: {e}",
+                                        user_rpc_message.send_addr
                                     );
-                                }
-
-                                (Some(YesOrNo::No), Some(YesOrNo::Yes)) => {
-                                    let leaving = finished
-                                        .lobby_session
-                                        .get_left()
-                                        .await
-                                        .expect("Should have both players in here");
-                                    let (_, state) =
-                                        finished.lobby_session.remove_player(leaving).await?;
-                                    assert_eq!(state, LobbyState::Waiting);
-
-                                    self.remove_connected_user_from_lobby(leaving)?;
-
-                                    finished.lobby_session.reset_lobby().await;
-                                    self.lobby_list.insert(
-                                        lobby_id,
-                                        LobbyEntry::Waiting(finished.lobby_session),
-                                    );
-                                }
-
-                                (Some(YesOrNo::Yes), Some(YesOrNo::No)) => {
-                                    let leaving = finished
-                                        .lobby_session
-                                        .get_right()
-                                        .await
-                                        .expect("Should have both players in here");
-                                    let (_, state) =
-                                        finished.lobby_session.remove_player(leaving).await?;
-                                    assert_eq!(state, LobbyState::Waiting);
-
-                                    self.remove_connected_user_from_lobby(leaving)?;
-
-                                    finished.lobby_session.reset_lobby().await;
-                                    self.lobby_list.insert(
-                                        lobby_id,
-                                        LobbyEntry::Waiting(finished.lobby_session),
-                                    );
-                                }
-
-                                _ => {
-                                    self.lobby_list
-                                        .insert(lobby_id, LobbyEntry::Finished(finished));
+                                    self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
                                 }
                             }
                         }
                         _ => {
-                            // ignore other messages now that we're finished
                             info!(
-                                "lobby {lobby_id}: finished; ignoring message from {}",
+                                "lobby {lobby_id}: running; non-game input from {} ignored",
                                 user_rpc_message.send_addr
                             );
-                            self.lobby_list
-                                .insert(lobby_id, LobbyEntry::Finished(finished));
+                            self.lobby_list.insert(lobby_id, LobbyEntry::Running(lobby));
                         }
                     }
+                }
+
+                LobbyEntry::Finished(finished) => {
+                    self.handle_finished_lobby_message(lobby_id, finished, user_rpc_message)
+                        .await?;
                 }
             }
         } else {
@@ -456,6 +383,110 @@ impl ServerStateInner {
                     "addr {} has no lobby and sent non-JoinServer message: {:?}",
                     user_rpc_message.send_addr, user_rpc_message.message
                 );
+            }
+        }
+        Ok(())
+    }
+
+    // Vote bookkeeping for a finished lobby: both Yes restarts it, both No
+    // destroys it, a split keeps it waiting for a replacement player.
+    async fn handle_finished_lobby_message(
+        &mut self,
+        lobby_id: LobbyId,
+        mut finished: FinishedLobbySession,
+        user_rpc_message: UserReliableRPCMessage,
+    ) -> anyhow::Result<()> {
+        match user_rpc_message.message {
+            ReliableRpcClientMessage::ContinueRound(vote) => {
+                let side = finished
+                    .lobby_session
+                    .get_player_side(user_rpc_message.send_addr)
+                    .await?;
+
+                match side {
+                    PlayerSide::Left => finished.left_side_continue = Some(vote),
+                    PlayerSide::Right => finished.right_side_continue = Some(vote),
+                }
+
+                info!("Finished lobby {lobby_id:?}");
+
+                match (
+                    finished.left_side_continue.clone(),
+                    finished.right_side_continue.clone(),
+                ) {
+                    (Some(YesOrNo::Yes), Some(YesOrNo::Yes)) => {
+                        finished.lobby_session.reset_lobby().await;
+                        self.lobby_list
+                            .insert(lobby_id, LobbyEntry::Running(finished.lobby_session));
+                    }
+
+                    (Some(YesOrNo::No), Some(YesOrNo::No)) => {
+                        self.remove_connected_user_from_lobby(
+                            finished
+                                .lobby_session
+                                .get_left()
+                                .await
+                                .expect("Should have both players"),
+                        )?;
+                        self.remove_connected_user_from_lobby(
+                            finished
+                                .lobby_session
+                                .get_right()
+                                .await
+                                .expect("Should have both players"),
+                        )?;
+                        // delete lobby entirely
+                        info!(
+                            "Finished Lobby {lobby_id} is now destroyed, both players rejected continuing to play"
+                        );
+                    }
+
+                    (Some(YesOrNo::No), Some(YesOrNo::Yes)) => {
+                        let leaving = finished
+                            .lobby_session
+                            .get_left()
+                            .await
+                            .expect("Should have both players in here");
+                        let (_, state) = finished.lobby_session.remove_player(leaving).await?;
+                        assert_eq!(state, LobbyState::Waiting);
+
+                        self.remove_connected_user_from_lobby(leaving)?;
+
+                        finished.lobby_session.reset_lobby().await;
+                        self.lobby_list
+                            .insert(lobby_id, LobbyEntry::Waiting(finished.lobby_session));
+                    }
+
+                    (Some(YesOrNo::Yes), Some(YesOrNo::No)) => {
+                        let leaving = finished
+                            .lobby_session
+                            .get_right()
+                            .await
+                            .expect("Should have both players in here");
+                        let (_, state) = finished.lobby_session.remove_player(leaving).await?;
+                        assert_eq!(state, LobbyState::Waiting);
+
+                        self.remove_connected_user_from_lobby(leaving)?;
+
+                        finished.lobby_session.reset_lobby().await;
+                        self.lobby_list
+                            .insert(lobby_id, LobbyEntry::Waiting(finished.lobby_session));
+                    }
+
+                    _ => {
+                        self.lobby_list
+                            .insert(lobby_id, LobbyEntry::Finished(finished));
+                    }
+                }
+            }
+            _ => {
+                // ignore other messages now that we're finished
+                info!(
+                    "lobby {lobby_id}: finished; ignoring message from {}",
+                    user_rpc_message.send_addr
+                );
+                self.lobby_list
+                    .insert(lobby_id, LobbyEntry::Finished(finished));
             }
         }
         Ok(())

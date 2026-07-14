@@ -9,7 +9,9 @@ use include_dir::{Dir, include_dir};
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
 use shared::game::{
-    GAME_TIME_STEP, GameLogic, MoveGameState, PlayerSide, RPSGameState, RPSWinState, TurnInput,
+    BattleGameState, BattleStats, BattleWinner, ENEMY_POSITION, GAME_TIME_STEP, GameLogic,
+    MoveGameState, PROJECTILE_SIZE, PlayerSide, TurnAction, dodge_pattern_bullet,
+    dodge_pattern_bullet_count,
 };
 use shared::rpc::{
     InputSequence, LobbyId, LobbyState, PendingMoveInput, ReliableRpcClientMessage,
@@ -102,11 +104,8 @@ struct UiGameState {
     ui_state: UiState,
     lobby_state: LobbyState,
     lobby_id: Option<LobbyId>,
-    remote_right_input: Option<TurnInput>,
-    remote_left_input: Option<TurnInput>,
     player_side: Option<PlayerSide>,
-    win_state: Option<RPSWinState>,
-    current_game_state: Option<RPSGameState>,
+    current_game_state: Option<BattleGameState>,
     user_id: Option<UserId>,
 }
 
@@ -116,10 +115,7 @@ impl UiGameState {
             ui_state: UiState::NotConnected,
             lobby_state: LobbyState::Empty,
             lobby_id: None,
-            remote_right_input: None,
-            remote_left_input: None,
             player_side: None,
-            win_state: None,
             current_game_state: None,
             user_id: None,
         }
@@ -200,6 +196,10 @@ struct ClientGameLogic {
     estimated_rtt: f32,
     jitter_rtt: f32,
     game_logic: GameLogic,
+    // How many bullets of the current dodge pattern we've spawned locally.
+    // The pattern itself is deterministic and scheduled on a shared unix
+    // timestamp, so this count is all the state prediction needs.
+    dodge_spawned_bullets: u32,
 }
 
 impl ClientGameLogic {
@@ -213,11 +213,29 @@ impl ClientGameLogic {
             estimated_rtt: 0.0,
             jitter_rtt: 0.0,
             game_logic: GameLogic::new(),
+            dodge_spawned_bullets: 0,
         }
     }
 
     fn reset(&mut self) {
         *self = Self::new();
+    }
+}
+
+fn draw_battle_stats(ui: &mut egui::Ui, stats: &BattleStats, side: PlayerSide) {
+    let (own_health, partner_health) = match side {
+        PlayerSide::Left => (stats.left_health, stats.right_health),
+        PlayerSide::Right => (stats.right_health, stats.left_health),
+    };
+    ui.label(format!("Your HP: {own_health}"));
+    ui.label(format!("Partner HP: {partner_health}"));
+    ui.label(format!("Enemy HP: {}", stats.enemy_health));
+}
+
+fn win_message(winner: &BattleWinner) -> &'static str {
+    match winner {
+        BattleWinner::Players => "The enemy has fallen. You win!",
+        BattleWinner::Enemy => "Both of you have fallen... the enemy wins.",
     }
 }
 
@@ -248,6 +266,22 @@ async fn main() {
     let mut scene = SceneNode2d::empty();
     let mut local_player = scene.add_rectangle(10.0, 10.0).set_color(RED);
     let mut remote_player = scene.add_rectangle(10.0, 10.0).set_color(BLUE);
+    let mut enemy_node = scene.add_rectangle(30.0, 30.0).set_color(GREEN);
+    enemy_node.set_position(ENEMY_POSITION);
+
+    // Fixed pool of nodes for predicted bullets; unused ones are parked far
+    // off-screen since kiss3d nodes are cheapest to keep alive and move.
+    let offscreen = Vec2::new(1_000_000.0, 1_000_000.0);
+    const PROJECTILE_NODE_POOL: usize = 64;
+    let mut projectile_nodes: Vec<_> = (0..PROJECTILE_NODE_POOL)
+        .map(|_| {
+            let mut node = scene
+                .add_rectangle(PROJECTILE_SIZE, PROJECTILE_SIZE)
+                .set_color(WHITE);
+            node.set_position(offscreen);
+            node
+        })
+        .collect();
 
     // UI state
     let mut ui_game_state = UiGameState::new();
@@ -318,31 +352,14 @@ async fn main() {
                     {
                         continue;
                     }
+                    // Leaving the dodge segment (next choice phase, or the
+                    // battle ending) clears any predicted bullets still alive.
                     match &state {
-                        RPSGameState::StartRound => {
-                            // reset all game state on Start Round
-                            // Ensure local simulation entities exist as soon as we know our side.
-                            local_player.set_position(Vec2::ZERO);
-                            remote_player.set_position(Vec2::ZERO);
-                            game_logic.reset();
-                            local_player.set_position(Vec2::ZERO);
-                            remote_player.set_position(Vec2::ZERO);
+                        BattleGameState::ChoosingActions { .. } | BattleGameState::Win { .. } => {
+                            game_logic.game_logic.clear_projectiles();
+                            game_logic.dodge_spawned_bullets = 0;
                         }
-                        RPSGameState::WaitingForLeftInput { right_input } => {
-                            ui_game_state.remote_right_input = Some(*right_input);
-                        }
-                        RPSGameState::WaitingForRightInput { left_input } => {
-                            ui_game_state.remote_left_input = Some(*left_input);
-                        }
-                        RPSGameState::Win {
-                            state,
-                            left_input,
-                            right_input,
-                        } => {
-                            ui_game_state.win_state = Some(state.clone());
-                            ui_game_state.remote_right_input = Some(*right_input);
-                            ui_game_state.remote_left_input = Some(*left_input);
-                        }
+                        BattleGameState::Dodging { .. } => {}
                     }
                     ui_game_state.current_game_state = Some(state);
                 }
@@ -372,7 +389,6 @@ async fn main() {
                                 ui_game_state.ui_state = UiState::LobbyFinished;
                             }
                             LobbyState::Running => {
-                                ui_game_state.win_state = None;
                                 ui_game_state.ui_state = UiState::LobbyRunning;
                                 // Ensure move prediction starts from a clean baseline when a round begins.
                                 game_logic.reset();
@@ -543,7 +559,38 @@ async fn main() {
                     });
                 }
             }
+
+            // Dodge phase prediction: the server told us when the pattern
+            // starts (a shared unix timestamp), so spawn the same
+            // deterministic bullets it does, on our own clock.
+            if ui_game_state.lobby_state == LobbyState::Running
+                && let Some(BattleGameState::Dodging {
+                    pattern_start_time_ms,
+                    ..
+                }) = ui_game_state.current_game_state.as_ref()
+            {
+                let scheduled_bullets =
+                    dodge_pattern_bullet_count(*pattern_start_time_ms, current_time_ms);
+                while game_logic.dodge_spawned_bullets < scheduled_bullets {
+                    let (position, velocity) =
+                        dodge_pattern_bullet(game_logic.dodge_spawned_bullets);
+                    game_logic.game_logic.spawn_projectile(position, velocity);
+                    game_logic.dodge_spawned_bullets += 1;
+                }
+            }
+
             game_logic.game_logic.step_physics();
+
+            // Mirror the server's despawn-on-contact so predicted bullets
+            // visually disappear when they hit someone; the damage itself is
+            // server-authoritative and arrives through the battle stats.
+            if let Some(BattleGameState::Dodging { stats, .. }) =
+                ui_game_state.current_game_state.as_ref()
+            {
+                let _ = game_logic
+                    .game_logic
+                    .detect_projectile_hits(stats.left_health > 0, stats.right_health > 0);
+            }
         }
 
         // Hash the simulation state before applying any render-time interpolation.
@@ -584,6 +631,20 @@ async fn main() {
             None => {
                 local_player.set_position(Vec2::ZERO);
                 remote_player.set_position(Vec2::ZERO);
+            }
+        }
+
+        // Predicted bullets: pool nodes take the simulated positions, the
+        // rest wait off-screen.
+        let projectile_positions = game_logic.game_logic.get_projectile_positions();
+        for (i, node) in projectile_nodes.iter_mut().enumerate() {
+            match projectile_positions.get(i) {
+                Some(position) => {
+                    node.set_position(*position);
+                }
+                None => {
+                    node.set_position(offscreen);
+                }
             }
         }
 
@@ -659,37 +720,59 @@ async fn main() {
                             if let Some(game_state) = &ui_game_state.current_game_state
                                 && let Some(side) = ui_game_state.player_side
                             {
-                                let round_start = matches!(game_state, RPSGameState::StartRound);
-                                let waiting_on_us =
-                                    if let RPSGameState::WaitingForLeftInput { .. } = game_state
-                                        && side == PlayerSide::Left
-                                    {
-                                        true
-                                    } else if let RPSGameState::WaitingForRightInput { .. } =
-                                        game_state
-                                        && side == PlayerSide::Right
-                                    {
-                                        true
-                                    } else {
-                                        false
-                                    };
-                                if round_start || waiting_on_us {
-                                    if ui.button("Rock").clicked() {
-                                        let _ = client_rpc_sender.unbounded_send(
-                                            ReliableRpcClientMessage::TurnInput(TurnInput::Rock),
-                                        );
+                                let stats = match game_state {
+                                    BattleGameState::ChoosingActions { stats, .. }
+                                    | BattleGameState::Dodging { stats, .. }
+                                    | BattleGameState::Win { stats, .. } => stats,
+                                };
+                                draw_battle_stats(ui, stats, side);
+                                ui.separator();
+
+                                match game_state {
+                                    BattleGameState::ChoosingActions {
+                                        left_ready,
+                                        right_ready,
+                                        ..
+                                    } => {
+                                        let we_are_ready = match side {
+                                            PlayerSide::Left => *left_ready,
+                                            PlayerSide::Right => *right_ready,
+                                        };
+                                        if stats.health_for(side) == 0 {
+                                            ui.label(
+                                                "You are down... your partner fights alone.",
+                                            );
+                                        } else if we_are_ready {
+                                            ui.label("Waiting for your partner's choice...");
+                                        } else {
+                                            ui.label("Choose your action:");
+                                            if ui.button("Attack").clicked() {
+                                                let _ = client_rpc_sender.unbounded_send(
+                                                    ReliableRpcClientMessage::TurnAction(
+                                                        TurnAction::Attack,
+                                                    ),
+                                                );
+                                            }
+                                            if ui.button("Defend").clicked() {
+                                                let _ = client_rpc_sender.unbounded_send(
+                                                    ReliableRpcClientMessage::TurnAction(
+                                                        TurnAction::Defend,
+                                                    ),
+                                                );
+                                            }
+                                        }
                                     }
-                                    if ui.button("Paper").clicked() {
-                                        let _ = client_rpc_sender.unbounded_send(
-                                            ReliableRpcClientMessage::TurnInput(TurnInput::Paper),
-                                        );
+                                    BattleGameState::Dodging {
+                                        ticks_remaining, ..
+                                    } => {
+                                        let seconds_remaining = *ticks_remaining as f32
+                                            * GAME_TIME_STEP.as_secs_f32();
+                                        ui.label(format!(
+                                            "DODGE! {seconds_remaining:.1}s remaining"
+                                        ));
                                     }
-                                    if ui.button("Scissors").clicked() {
-                                        let _ = client_rpc_sender.unbounded_send(
-                                            ReliableRpcClientMessage::TurnInput(
-                                                TurnInput::Scissors,
-                                            ),
-                                        );
+                                    BattleGameState::Win { winner, .. } => {
+                                        ui.label(win_message(winner));
                                     }
                                 }
                             }
@@ -698,6 +781,16 @@ async fn main() {
                             let client_rpc_sender = reliable_client_rpc_sender.clone().expect(
                                 "should be setup by this point since the lobby is finished",
                             );
+                            if let Some(BattleGameState::Win { winner, stats }) =
+                                &ui_game_state.current_game_state
+                            {
+                                ui.label(win_message(winner));
+                                if let Some(side) = ui_game_state.player_side {
+                                    draw_battle_stats(ui, stats, side);
+                                }
+                                ui.separator();
+                            }
+                            ui.label("Play again?");
                             if ui.button("Yes").clicked() {
                                 let _ = client_rpc_sender.unbounded_send(
                                     ReliableRpcClientMessage::ContinueRound(YesOrNo::Yes),
