@@ -1,8 +1,8 @@
 use anyhow::{anyhow, bail};
-use shared::{
-    ConnectionInitMessage, LobbyId, PendingMoveInput, PlayerSide, RPSGameState,
-    ReliableRpcClientMessage, ReliableRpcServerMessage, UnreliableRpcClientMessage, UserId,
-    YesOrNo,
+use shared::game::{PlayerSide, RPSGameState};
+use shared::rpc::{
+    ConnectionInitMessage, LobbyId, PendingMoveInput, ReliableRpcClientMessage,
+    ReliableRpcServerMessage, UnreliableRpcClientMessage, UserId, YesOrNo,
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::lobby::LobbySessionHandle;
 
 use crate::lobby::{UserReliableSender, UserUnreliableSender};
-use shared::LobbyState;
+use shared::rpc::LobbyState;
 
 #[derive(Debug, Clone)]
 pub struct UserReliableRPCMessage {

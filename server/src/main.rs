@@ -17,7 +17,7 @@ use oauth2::basic::{
 use oauth2::{
     AuthUrl, ClientId, CsrfToken, EndpointSet, RedirectUrl, Scope, StandardRevocableToken,
 };
-use shared::{
+use shared::rpc::{
     ConnectionInitMessage, HEADER_MESSAGE, ReliableRpcServerMessage, UserId, decode_message,
     encode_message,
 };

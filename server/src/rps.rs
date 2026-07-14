@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
-use shared::{
-    GameLogic, InputSequence, MoveGameState, MoveInputState, PlayerSide, RPSGameState, RPSWinState,
-    RemoteTimestamp, TurnInput,
+use shared::game::{
+    GameLogic, MoveGameState, MoveInputState, PlayerSide, RPSGameState, RPSWinState, TurnInput,
 };
+use shared::rpc::{InputSequence, RemoteTimestamp};
 
 #[derive(Debug, PartialEq)]
 pub enum GameError {
@@ -38,8 +38,8 @@ impl std::error::Error for GameError {
 }
 
 pub struct GameSession {
-    left_input: Option<shared::TurnInput>,
-    right_input: Option<shared::TurnInput>,
+    left_input: Option<shared::game::TurnInput>,
+    right_input: Option<shared::game::TurnInput>,
     game_logic: GameLogic,
     // the latest ack the server received
     right_remote_clock_ack: InputSequence,
@@ -151,7 +151,7 @@ impl GameSession {
     // you can only set this once per turn
     pub fn set_left_turn_input(
         &mut self,
-        input: shared::TurnInput,
+        input: shared::game::TurnInput,
     ) -> Result<RPSGameState, GameError> {
         if self.left_input.is_none() {
             self.left_input = Some(input);
@@ -162,7 +162,7 @@ impl GameSession {
     // you can only set this once per turn
     pub fn set_right_turn_input(
         &mut self,
-        input: shared::TurnInput,
+        input: shared::game::TurnInput,
     ) -> Result<RPSGameState, GameError> {
         if self.right_input.is_none() {
             self.right_input = Some(input);
@@ -172,7 +172,7 @@ impl GameSession {
 
     pub fn set_left_move_input(
         &mut self,
-        input: shared::MoveInputState,
+        input: shared::game::MoveInputState,
         sequence: InputSequence,
         client_send_time_ms: RemoteTimestamp,
     ) {
@@ -189,7 +189,7 @@ impl GameSession {
 
     pub fn set_right_move_input(
         &mut self,
-        input: shared::MoveInputState,
+        input: shared::game::MoveInputState,
         sequence: InputSequence,
         client_send_time_ms: RemoteTimestamp,
     ) {

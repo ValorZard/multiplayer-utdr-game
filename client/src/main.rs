@@ -8,11 +8,14 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use shared::{
-    GAME_TIME_STEP, GameLogic, InputSequence, LobbyId, LobbyState, MoveGameState, PendingMoveInput,
-    PlayerSide, RPSGameState, RPSWinState, ReliableRpcClientMessage, ReliableRpcServerMessage,
-    ScoreSize, TurnInput, UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId, YesOrNo,
-    convert_vec2_physics_to_pixel, encode_message,
+use shared::game::{
+    GAME_TIME_STEP, GameLogic, MoveGameState, PlayerSide, RPSGameState, RPSWinState, TurnInput,
+    convert_vec2_physics_to_pixel,
+};
+use shared::rpc::{
+    InputSequence, LobbyId, LobbyState, PendingMoveInput, ReliableRpcClientMessage,
+    ReliableRpcServerMessage, UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId,
+    YesOrNo, encode_message,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -257,7 +260,7 @@ async fn main() {
     let max_time_between_frames = Duration::milliseconds(250);
 
     // input state
-    let mut input = shared::MoveInputState::default();
+    let mut input = shared::game::MoveInputState::default();
 
     // game state
     let mut game_logic = ClientGameLogic::new();
@@ -310,11 +313,7 @@ async fn main() {
                 ReliableRpcServerMessage::Text(_text) => {
                     // TODO: Do something here I guess
                 }
-                ReliableRpcServerMessage::GameState {
-                    state,
-                    left_side_score,
-                    right_side_score,
-                } => {
+                ReliableRpcServerMessage::GameState(state) => {
                     if let Some(previous_state) = ui_game_state.current_game_state.as_ref()
                         && *previous_state == state
                     {

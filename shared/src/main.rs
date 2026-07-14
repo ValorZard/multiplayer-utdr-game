@@ -1,4 +1,4 @@
-use shared::{GameLogic, MoveInputState, PLAYER_GAME_RECTANGLE, PlayerSide};
+use shared::game::{GameLogic, MoveInputState, PLAYER_GAME_RECTANGLE, PlayerSide};
 
 fn main() {
     let mut logic = GameLogic::new();

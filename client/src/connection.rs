@@ -3,7 +3,7 @@ use futures_channel::oneshot;
 use futures_util::{SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
-use shared::{
+use shared::rpc::{
     HEADER_MESSAGE, ReliableRpcClientMessage, ReliableRpcServerMessage, UnreliableRpcClientMessage,
     UnreliableRpcServerMessage, decode_message, encode_message,
 };

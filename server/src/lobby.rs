@@ -1,7 +1,10 @@
 use crate::rps::{GameError, GameSession};
-use shared::{
-    InputSequence, LobbyId, LobbyState, MoveGameState, MoveInputState, PlayerSide, RPSGameState,
-    RPSWinState, ReliableRpcServerMessage, TurnInput, UnreliableRpcServerMessage, UserId,
+use shared::game::{
+    MoveGameState, MoveInputState, PlayerSide, RPSGameState, RPSWinState, TurnInput,
+};
+use shared::rpc::{
+    InputSequence, LobbyId, LobbyState, ReliableRpcServerMessage, UnreliableRpcServerMessage,
+    UserId,
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot};
@@ -134,11 +137,9 @@ impl LobbySession {
                 self.id,
             ));
             self.left_side = Some(new_player);
-            let _ = self.send_reliable_message_to_lobby(ReliableRpcServerMessage::GameState {
-                state: self.current_round.compute_state(),
-                left_side_score: 0,
-                right_side_score: 0,
-            });
+            let _ = self.send_reliable_message_to_lobby(ReliableRpcServerMessage::GameState(
+                self.current_round.compute_state(),
+            ));
             Ok((PlayerSide::Left, self.get_current_lobby_state()))
         } else if self.right_side.is_none() {
             let _ = new_player.1.send(ReliableRpcServerMessage::LobbyInit(
@@ -146,11 +147,9 @@ impl LobbySession {
                 self.id,
             ));
             self.right_side = Some(new_player);
-            let _ = self.send_reliable_message_to_lobby(ReliableRpcServerMessage::GameState {
-                state: self.current_round.compute_state(),
-                left_side_score: 0,
-                right_side_score: 0,
-            });
+            let _ = self.send_reliable_message_to_lobby(ReliableRpcServerMessage::GameState(
+                self.current_round.compute_state(),
+            ));
             Ok((PlayerSide::Right, self.get_current_lobby_state()))
         } else {
             Err(LobbyError::AlreadyFull)
@@ -196,7 +195,10 @@ impl LobbySession {
         Err(LobbyError::SideNotFound(PlayerSide::Right))
     }
 
-    fn set_left_turn_input(&mut self, input: shared::TurnInput) -> Result<RPSGameState, GameError> {
+    fn set_left_turn_input(
+        &mut self,
+        input: shared::game::TurnInput,
+    ) -> Result<RPSGameState, GameError> {
         let state = self.current_round.set_left_turn_input(input)?;
         if let RPSGameState::Win { state, .. } = state.clone() {
             self.winner = Some(state);
@@ -206,7 +208,7 @@ impl LobbySession {
 
     fn set_right_turn_input(
         &mut self,
-        input: shared::TurnInput,
+        input: shared::game::TurnInput,
     ) -> Result<RPSGameState, GameError> {
         let state = self.current_round.set_right_turn_input(input)?;
         if let RPSGameState::Win { state, .. } = state.clone() {
@@ -384,13 +386,7 @@ impl LobbySession {
 
     fn broadcast_game_state(&mut self) -> Result<(), LobbyError> {
         let state = self.get_current_game_state();
-        let left_side_score = 0;
-        let right_side_score = 0;
-        self.send_reliable_message_to_lobby(ReliableRpcServerMessage::GameState {
-            state,
-            left_side_score,
-            right_side_score,
-        })
+        self.send_reliable_message_to_lobby(ReliableRpcServerMessage::GameState(state))
     }
 
     fn step_game(&mut self) -> Result<MoveGameState, LobbyError> {
