@@ -925,8 +925,8 @@ dependencies = [
  "kiss3d",
  "rapier2d",
  "rkyv",
- "rpc",
  "serde",
+ "shared",
  "time",
  "tokio",
  "tokio-stream",
@@ -4553,18 +4553,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
 
 [[package]]
-name = "rpc"
-version = "0.1.0"
-dependencies = [
- "glam 0.33.2",
- "hecs",
- "rapier2d",
- "rkyv",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4929,11 +4917,11 @@ dependencies = [
  "oauth2",
  "rapier2d",
  "reqwest",
- "rpc",
  "rustls",
  "rustls-pemfile",
  "serde",
  "serde_json",
+ "shared",
  "sqlx",
  "tokio",
  "tokio-stream",
@@ -5006,6 +4994,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "shared"
+version = "0.1.0"
+dependencies = [
+ "glam 0.33.2",
+ "hecs",
+ "rapier2d",
+ "rkyv",
+ "url",
+ "uuid",
 ]
 
 [[package]]

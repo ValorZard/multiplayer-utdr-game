@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["client", "rpc", "server"]
+members = ["client", "shared", "server"]
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

@@ -8,7 +8,7 @@ workspace = true
 
 [dependencies]
 anyhow = {version = "1"}
-rpc = {path = "../rpc"}
+shared = {path = "../shared" }
 futures-util = "0.3"
 futures-channel = "0.3"
 include_dir = "0.7.4"

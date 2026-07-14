@@ -17,7 +17,7 @@ use oauth2::basic::{
 use oauth2::{
     AuthUrl, ClientId, CsrfToken, EndpointSet, RedirectUrl, Scope, StandardRevocableToken,
 };
-use rpc::{
+use shared::{
     ConnectionInitMessage, HEADER_MESSAGE, ReliableRpcServerMessage, UserId, decode_message,
     encode_message,
 };
@@ -393,7 +393,7 @@ async fn handle_connection(
                 server_state
                     .handle_user_reliable_rpc(user_rpc_message)
                     .await
-                    .expect("Error handling user rpc");
+                    .expect("Error handling user shared");
             } else if let Err(e) = message_read_result {
                 warn!("Incoming messages have stopped, error {e}");
                 break;

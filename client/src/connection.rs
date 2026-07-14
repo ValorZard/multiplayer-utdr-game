@@ -3,7 +3,7 @@ use futures_channel::oneshot;
 use futures_util::{SinkExt, StreamExt};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
-use rpc::{
+use shared::{
     HEADER_MESSAGE, ReliableRpcClientMessage, ReliableRpcServerMessage, UnreliableRpcClientMessage,
     UnreliableRpcServerMessage, decode_message, encode_message,
 };
@@ -64,7 +64,7 @@ async fn reliable_send_loop(
     mut send_stream: SendStream,
 ) {
     while let Some(rpc_message) = client_rpc_receiver.next().await {
-        //log!("sending rpc message {rpc_message:?}");
+        //log!("sending shared message {rpc_message:?}");
         let bytes = encode_message(&rpc_message).expect("should have message encoded");
         if let Err(error) = send_stream.write(&bytes).await {
             log!("send stopped while writing message: {error:?}");
@@ -138,7 +138,7 @@ async fn unreliable_send_loop(
     session: web_transport::Session,
 ) {
     while let Some(message) = unreliable_client_rpc_receiver.next().await {
-        //log!("sending unreliable rpc message {message:?}");
+        //log!("sending unreliable shared message {message:?}");
         let bytes = encode_message(&message).expect("should have message encoded");
         let _ = session.send_datagram(bytes.into()).await;
     }

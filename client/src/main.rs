@@ -8,7 +8,7 @@ use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
-use rpc::{
+use shared::{
     GAME_TIME_STEP, GameLogic, InputSequence, LobbyId, LobbyState, MoveGameState, PendingMoveInput,
     PlayerSide, RPSGameState, RPSWinState, ReliableRpcClientMessage, ReliableRpcServerMessage,
     ScoreSize, TurnInput, UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId, YesOrNo,
@@ -257,7 +257,7 @@ async fn main() {
     let max_time_between_frames = Duration::milliseconds(250);
 
     // input state
-    let mut input = rpc::MoveInputState::default();
+    let mut input = shared::MoveInputState::default();
 
     // game state
     let mut game_logic = ClientGameLogic::new();

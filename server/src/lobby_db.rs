@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail};
-use rpc::{
+use shared::{
     ConnectionInitMessage, LobbyId, PendingMoveInput, PlayerSide, RPSGameState,
     ReliableRpcClientMessage, ReliableRpcServerMessage, UnreliableRpcClientMessage, UserId,
     YesOrNo,
@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::lobby::LobbySessionHandle;
 
 use crate::lobby::{UserReliableSender, UserUnreliableSender};
-use rpc::LobbyState;
+use shared::LobbyState;
 
 #[derive(Debug, Clone)]
 pub struct UserReliableRPCMessage {

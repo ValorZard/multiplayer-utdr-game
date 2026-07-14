@@ -1,5 +1,5 @@
 use crate::rps::{GameError, GameSession};
-use rpc::{
+use shared::{
     InputSequence, LobbyId, LobbyState, MoveGameState, MoveInputState, PlayerSide, RPSGameState,
     RPSWinState, ReliableRpcServerMessage, TurnInput, UnreliableRpcServerMessage, UserId,
 };
@@ -196,7 +196,7 @@ impl LobbySession {
         Err(LobbyError::SideNotFound(PlayerSide::Right))
     }
 
-    fn set_left_turn_input(&mut self, input: rpc::TurnInput) -> Result<RPSGameState, GameError> {
+    fn set_left_turn_input(&mut self, input: shared::TurnInput) -> Result<RPSGameState, GameError> {
         let state = self.current_round.set_left_turn_input(input)?;
         if let RPSGameState::Win { state, .. } = state.clone() {
             self.winner = Some(state);
@@ -204,7 +204,10 @@ impl LobbySession {
         Ok(state)
     }
 
-    fn set_right_turn_input(&mut self, input: rpc::TurnInput) -> Result<RPSGameState, GameError> {
+    fn set_right_turn_input(
+        &mut self,
+        input: shared::TurnInput,
+    ) -> Result<RPSGameState, GameError> {
         let state = self.current_round.set_right_turn_input(input)?;
         if let RPSGameState::Win { state, .. } = state.clone() {
             self.winner = Some(state);
