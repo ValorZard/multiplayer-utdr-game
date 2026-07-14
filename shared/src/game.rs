@@ -634,7 +634,10 @@ impl GameLogic {
     ) -> (u32, u32) {
         let mut left_hits_per_side = HashSet::<ColliderHandle>::new();
         let mut right_hits_per_side = HashSet::<ColliderHandle>::new();
-        for (side, hits) in [(PlayerSide::Left, &mut left_hits_per_side), (PlayerSide::Right, &mut right_hits_per_side)] {
+        for (side, hits) in [
+            (PlayerSide::Left, &mut left_hits_per_side),
+            (PlayerSide::Right, &mut right_hits_per_side),
+        ] {
             let hittable = match side {
                 PlayerSide::Left => left_hittable,
                 PlayerSide::Right => right_hittable,
