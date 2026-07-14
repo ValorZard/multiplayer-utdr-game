@@ -173,6 +173,7 @@ fn interpolate_remote_position(
     let before = snapshots.range(..=target_time).next_back();
     let after = snapshots.range(target_time..).next();
 
+    // TODO: Explain the math behind this better.
     match (before, after) {
         (Some((t0, p0)), Some((t1, p1))) => {
             if t0 == t1 {
