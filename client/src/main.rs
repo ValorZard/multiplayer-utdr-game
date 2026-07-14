@@ -199,7 +199,7 @@ struct ClientGameLogic {
     // How many bullets of the current dodge pattern we've spawned locally.
     // The pattern itself is deterministic and scheduled on a shared unix
     // timestamp, so this count is all the state prediction needs.
-    dodge_spawned_bullets: u32,
+    amount_of_spawned_bullets: u32,
 }
 
 impl ClientGameLogic {
@@ -213,7 +213,7 @@ impl ClientGameLogic {
             estimated_rtt: 0.0,
             jitter_rtt: 0.0,
             game_logic: GameLogic::new(),
-            dodge_spawned_bullets: 0,
+            amount_of_spawned_bullets: 0,
         }
     }
 
@@ -357,7 +357,7 @@ async fn main() {
                     match &state {
                         BattleGameState::ChoosingActions { .. } | BattleGameState::Win { .. } => {
                             game_logic.game_logic.clear_projectiles();
-                            game_logic.dodge_spawned_bullets = 0;
+                            game_logic.amount_of_spawned_bullets = 0;
                         }
                         BattleGameState::Dodging { .. } => {}
                     }
@@ -467,10 +467,13 @@ async fn main() {
                             acknowledged_sequence,
                         );
 
+                        // update local position based on what the server sends up
+                        // server is the authority, we can't override it or else desyncs will happen.
                         game_logic
                             .game_logic
                             .update_position_with_vec(local_side, local_position);
 
+                        // however, we can use the inputs we stored to predict what the server SHOULD be.
                         for pending in game_logic.pending_inputs.iter() {
                             game_logic
                                 .game_logic
@@ -572,11 +575,11 @@ async fn main() {
                 {
                     let scheduled_bullets =
                         get_current_bullet_count(*pattern_start_time_ms, current_time_ms);
-                    while game_logic.dodge_spawned_bullets < scheduled_bullets {
+                    while game_logic.amount_of_spawned_bullets < scheduled_bullets {
                         let (position, velocity) =
-                            get_data_for_projectile_from_index(game_logic.dodge_spawned_bullets);
+                            get_data_for_projectile_from_index(game_logic.amount_of_spawned_bullets);
                         game_logic.game_logic.spawn_projectile(position, velocity);
-                        game_logic.dodge_spawned_bullets += 1;
+                        game_logic.amount_of_spawned_bullets += 1;
                     }
                 }
 

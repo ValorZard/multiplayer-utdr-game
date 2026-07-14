@@ -484,18 +484,19 @@ impl GameLogic {
         let character_rotation = character_collider.position().rotation;
         let character_shape = character_collider.shared_shape().clone();
         let character_mass = character_body.mass();
-        // QueryFilter ignores each collider's own collision_groups unless told to check
-        // them; without this, the query treats every collider (e.g. the other player) as
-        // an obstacle, not just the ones this player's group is actually set to interact with.
+        // this is basically like physics masks in other game engines
+        // so who can collide with the character collider, and what the character collider can collide against
+        // (those may not be the same thing.)
         let character_groups = character_collider.collision_groups();
 
         // Reconciliation may apply multiple inputs before a physics step;
         // use the pending kinematic target so updates accumulate deterministically.
         let current_position = character_body.next_position().translation;
-        // PLAYER_SPEED is px/s; move_shape works in physics space, so convert.
+        // PLAYER_SPEED is px/s, we need to convert it to rapier's format
         let desired_movement =
             input.as_normalized_vec() * PLAYER_SPEED * PIXEL_TO_PHYSICS_SCALE * GAME_TIME_DELTA;
 
+        // check all collisions in the physics world against this character body
         let mut query_pipeline = self.physics.broad_phase.as_query_pipeline_mut(
             self.physics.narrow_phase.query_dispatcher(),
             &mut self.physics.bodies,
@@ -531,10 +532,7 @@ impl GameLogic {
         // Kinematic bodies don't move until you tell the physics step
         // where they're going next.
         self.physics.bodies[handle].set_next_kinematic_translation(new_pos);
-        let new_pixel_position = Vec2::new(
-            new_pos.x * PHYSICS_TO_PIXEL_SCALE,
-            new_pos.y * PHYSICS_TO_PIXEL_SCALE,
-        );
+        let new_pixel_position = convert_vec2_physics_to_pixel(new_pos);
         self.set_position_for_player_rect(player_side, new_pixel_position);
         new_pixel_position
     }
@@ -616,6 +614,7 @@ impl GameLogic {
             .into_iter()
             .map(|(entity, handle)| (entity, *handle))
             .collect();
+        // TODO: we have logic for deleting projectiles in two different places, maybe we should just have one?
         for (entity, body_handle) in entities {
             self.physics.remove_body(body_handle);
             let _ = self.world.despawn(entity);
@@ -700,6 +699,8 @@ impl GameLogic {
             }
             to_despawn.push((entity, *body_handle));
         }
+        // TODO: We might want to have a special function for deleting projectiles
+        // like if we want to have a special sound effect or something.
         for (entity, body_handle) in to_despawn {
             self.physics.remove_body(body_handle);
             let _ = self.world.despawn(entity);
