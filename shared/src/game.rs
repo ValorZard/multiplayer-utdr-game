@@ -1,4 +1,4 @@
-use crate::rpc::RemoteTimestamp;
+use crate::rpc::{InputSequence, RemoteTimestamp};
 use rapier2d::control::KinematicCharacterController;
 use rapier2d::prelude::*;
 use rkyv::{Archive, Deserialize, Serialize};
@@ -20,7 +20,7 @@ pub const GAME_TIME_STEP: Duration = Duration::from_millis(GAME_TIME_STEP_MS);
 pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
 
 /// Length of the bullet-hell dodge segment, in game ticks (30 TPS => ~10 seconds).
-pub const DODGE_PHASE_TICKS: u32 = 300;
+pub const DODGE_PHASE_TICKS: InputSequence = 300;
 /// Wall-clock gap between bullets of a dodge pattern. Spawning is scheduled in
 /// unix time (not ticks) so client and server can both derive the identical
 /// schedule from the pattern start timestamp alone.
@@ -37,24 +37,24 @@ pub const ENEMY_POSITION: Vec2 = Vec2::new(0.0, 120.0);
 /// Projectiles farther than this from the origin are despawned.
 pub const PROJECTILE_DESPAWN_RADIUS: f32 = 500.0;
 
-/// How many bullets of a pattern should exist by `now_ms`, given when the
+/// How many bullets of a pattern should exist by `current_time_ms`, given when the
 /// pattern started. Both client and server run this against their own clocks
 /// so they spawn the same bullets at (approximately) the same instant.
-pub fn dodge_pattern_bullet_count(
+pub fn get_current_bullet_count(
     pattern_start_ms: RemoteTimestamp,
-    now_ms: RemoteTimestamp,
+    current_time_ms: RemoteTimestamp,
 ) -> u32 {
-    if now_ms < pattern_start_ms {
+    if current_time_ms < pattern_start_ms {
         return 0;
     }
-    ((now_ms - pattern_start_ms) / PROJECTILE_SPAWN_INTERVAL_MS + 1) as u32
+    ((current_time_ms - pattern_start_ms) / PROJECTILE_SPAWN_INTERVAL_MS + 1) as u32
 }
 
 /// Deterministic dodge pattern: bullet `index` of a segment, as (spawn
 /// position, velocity) in game (pixel) space. A golden-angle fan biased
 /// downward gives spread-out coverage of the arena below the enemy without
 /// any RNG, so both sides generate identical bullets from the index alone.
-pub fn dodge_pattern_bullet(index: u32) -> (Vec2, Vec2) {
+pub fn get_data_for_projectile_from_index(index: u32) -> (Vec2, Vec2) {
     const GOLDEN_ANGLE: f32 = 2.399_963;
     // wrap the fan into the lower half circle (pointing at the play area)
     let sweep = (index as f32 * GOLDEN_ANGLE) % std::f32::consts::PI;
@@ -137,7 +137,7 @@ pub enum BattleGameState {
         stats: BattleStats,
     },
     Dodging {
-        ticks_remaining: u32,
+        ticks_remaining: InputSequence,
         // unix ms timestamp at which the bullet pattern starts; clients
         // predict the pattern locally from this shared clock reference
         pattern_start_time_ms: RemoteTimestamp,

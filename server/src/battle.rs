@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use shared::game::{
     ATTACK_DAMAGE, BattleGameState, BattleStats, BattleWinner, DEFEND_BLOCK, DODGE_PHASE_TICKS,
     GameLogic, Health, MoveGameState, MoveInputState, PATTERN_START_LEAD_MS, PROJECTILE_HIT_DAMAGE,
-    PlayerSide, TurnAction, dodge_pattern_bullet, dodge_pattern_bullet_count,
+    PlayerSide, TurnAction, get_current_bullet_count, get_data_for_projectile_from_index,
 };
 use shared::rpc::{InputSequence, RemoteTimestamp};
 
@@ -325,8 +325,8 @@ impl GameSession {
         // Spawn any bullets whose scheduled time has passed. The client runs
         // this same schedule/pattern against its own clock, which is what
         // keeps the predicted bullets in sync with ours.
-        while spawned_bullets < dodge_pattern_bullet_count(pattern_start_ms, now_ms) {
-            let (position, velocity) = dodge_pattern_bullet(spawned_bullets);
+        while spawned_bullets < get_current_bullet_count(pattern_start_ms, now_ms) {
+            let (position, velocity) = get_data_for_projectile_from_index(spawned_bullets);
             self.game_logic.spawn_projectile(position, velocity);
             spawned_bullets += 1;
         }

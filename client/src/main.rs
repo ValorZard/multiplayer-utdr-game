@@ -10,8 +10,8 @@ use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
 use shared::game::{
     BattleGameState, BattleStats, BattleWinner, ENEMY_POSITION, GAME_TIME_STEP, GameLogic,
-    MoveGameState, PROJECTILE_SIZE, PlayerSide, TurnAction, dodge_pattern_bullet,
-    dodge_pattern_bullet_count,
+    MoveGameState, PROJECTILE_SIZE, PlayerSide, TurnAction, get_current_bullet_count,
+    get_data_for_projectile_from_index,
 };
 use shared::rpc::{
     InputSequence, LobbyId, LobbyState, PendingMoveInput, ReliableRpcClientMessage,
@@ -571,10 +571,10 @@ async fn main() {
                 }) = ui_game_state.current_game_state.as_ref()
                 {
                     let scheduled_bullets =
-                        dodge_pattern_bullet_count(*pattern_start_time_ms, current_time_ms);
+                        get_current_bullet_count(*pattern_start_time_ms, current_time_ms);
                     while game_logic.dodge_spawned_bullets < scheduled_bullets {
                         let (position, velocity) =
-                            dodge_pattern_bullet(game_logic.dodge_spawned_bullets);
+                            get_data_for_projectile_from_index(game_logic.dodge_spawned_bullets);
                         game_logic.game_logic.spawn_projectile(position, velocity);
                         game_logic.dodge_spawned_bullets += 1;
                     }
