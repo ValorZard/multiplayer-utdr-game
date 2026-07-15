@@ -7,8 +7,8 @@ use std::time::Duration;
 
 pub type Health = u32;
 
-pub const PLAYER_MAX_HEALTH: Health = 10;
-pub const ENEMY_MAX_HEALTH: Health = 20;
+pub const PLAYER_MAX_HEALTH: Health = 5;
+pub const ENEMY_MAX_HEALTH: Health = 10;
 pub const ATTACK_DAMAGE: Health = 1;
 /// How much incoming damage a Defend action absorbs during the following dodge phase.
 pub const DEFEND_BLOCK: Health = 1;

@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
-
+use rapier2d::math::Vec2;
 use shared::game::{
     ATTACK_DAMAGE, BattleGameState, BattleStats, BattleWinner, DEFEND_BLOCK, DODGE_PHASE_TICKS,
     GameLogic, Health, MoveGameState, MoveInputState, PATTERN_START_LEAD_MS, PROJECTILE_HIT_DAMAGE,
     PlayerSide, TurnAction, get_current_bullet_count, get_data_for_projectile_from_index,
 };
 use shared::rpc::{InputSequence, RemoteTimestamp};
+use std::collections::BTreeMap;
 
 #[derive(Debug, PartialEq)]
 pub enum GameError {
@@ -318,6 +318,11 @@ impl GameSession {
             mut spawned_bullets,
         } = self.phase
         else {
+            // players should be reset back to center of the box and should not be allowed to move until dodging phase has commenced.
+            self.game_logic
+                .update_position_with_vec(PlayerSide::Left, Vec2::ZERO);
+            self.game_logic
+                .update_position_with_vec(PlayerSide::Right, Vec2::ZERO);
             return;
         };
         let ticks_remaining = ticks_remaining.saturating_sub(1);

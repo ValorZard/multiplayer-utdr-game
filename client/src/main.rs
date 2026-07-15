@@ -554,6 +554,11 @@ async fn main() {
             // TODO: Figure out how a "training mode" would work
             if let Some(side) = game_logic.player_side
                 && ui_game_state.lobby_state == LobbyState::Running
+                && let Some(&BattleGameState::Dodging {
+                    ticks_remaining,
+                    pattern_start_time_ms,
+                    stats,
+                }) = ui_game_state.current_game_state.as_ref()
             {
                 let sequence = game_logic.current_input_sequence;
                 game_logic.current_input_sequence =
@@ -584,20 +589,13 @@ async fn main() {
                 // Dodge phase prediction: the server told us when the pattern
                 // starts (a shared unix timestamp), so spawn the same
                 // deterministic bullets it does, on our own clock.
-                if let Some(BattleGameState::Dodging {
-                    pattern_start_time_ms,
-                    ..
-                }) = ui_game_state.current_game_state.as_ref()
-                {
-                    let scheduled_bullets =
-                        get_current_bullet_count(*pattern_start_time_ms, current_time_ms);
-                    while game_logic.amount_of_spawned_bullets < scheduled_bullets {
-                        let (position, velocity) = get_data_for_projectile_from_index(
-                            game_logic.amount_of_spawned_bullets,
-                        );
-                        game_logic.game_logic.spawn_projectile(position, velocity);
-                        game_logic.amount_of_spawned_bullets += 1;
-                    }
+                let scheduled_bullets =
+                    get_current_bullet_count(pattern_start_time_ms, current_time_ms);
+                while game_logic.amount_of_spawned_bullets < scheduled_bullets {
+                    let (position, velocity) =
+                        get_data_for_projectile_from_index(game_logic.amount_of_spawned_bullets);
+                    game_logic.game_logic.spawn_projectile(position, velocity);
+                    game_logic.amount_of_spawned_bullets += 1;
                 }
 
                 game_logic.game_logic.step_physics();
@@ -605,13 +603,9 @@ async fn main() {
                 // Mirror the server's despawn-on-contact so predicted bullets
                 // visually disappear when they hit someone; the damage itself is
                 // server-authoritative and arrives through the battle stats.
-                if let Some(BattleGameState::Dodging { stats, .. }) =
-                    ui_game_state.current_game_state.as_ref()
-                {
-                    let _ = game_logic
-                        .game_logic
-                        .detect_projectile_hits(stats.left_health > 0, stats.right_health > 0);
-                }
+                let _ = game_logic
+                    .game_logic
+                    .detect_projectile_hits(stats.left_health > 0, stats.right_health > 0);
             }
         }
 
