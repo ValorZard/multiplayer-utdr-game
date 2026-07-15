@@ -160,7 +160,6 @@ struct ClientGameLogic {
     latest_remote_snapshot: Option<(InputSequence, MoveGameState)>,
     current_input_sequence: InputSequence,
     last_acknowledged_sequence: InputSequence,
-    dynamic_render_delay_ticks: InputSequence,
     estimated_rtt: f32,
     jitter_rtt: f32,
     game_logic: GameLogic,
@@ -178,7 +177,6 @@ impl ClientGameLogic {
             latest_remote_snapshot: None,
             current_input_sequence: 0,
             last_acknowledged_sequence: 0,
-            dynamic_render_delay_ticks: DEFAULT_REMOTE_INTERPOLATION_DELAY_FRAMES,
             estimated_rtt: 0.0,
             jitter_rtt: 0.0,
             game_logic: GameLogic::new(),
@@ -213,7 +211,6 @@ impl ClientGameLogic {
     // (right click and inspect webpage to see the actual javascript)
     // since this isn't PvP, we don't actually care all that much about hitting another player, we just care about the other enemies
     // Lerp between the last authoritative snapshot (t0 = its acknowledged sequence) and the current predicted state (t1 = current_input_sequence),
-    // rendering dynamic_render_delay_ticks behind the present.
     fn interpolate_remote_position(&self, predicted_state: &mut MoveGameState) {
         let side = match self.player_side {
             Some(side) => side,
@@ -479,16 +476,6 @@ async fn main() {
                                 + (RTT_EWMA_BETA * abs_error);
                         }
 
-                        // Interpolation delay ~= one-way latency + jitter buffer
-                        let target_render_delay_ticks =
-                            (((game_logic.estimated_rtt / 2.0) + game_logic.jitter_rtt)
-                                / game_time_step)
-                                .ceil() as InputSequence;
-                        game_logic.dynamic_render_delay_ticks = target_render_delay_ticks.clamp(
-                            DEFAULT_REMOTE_INTERPOLATION_DELAY_FRAMES,
-                            MAX_REMOTE_SNAPSHOTS.saturating_sub(1),
-                        );
-
                         game_logic.last_acknowledged_sequence = acknowledged_sequence;
 
                         prune_acknowledged_inputs(
@@ -636,8 +623,6 @@ async fn main() {
         game_logic.interpolate_remote_position(&mut predicted_state);
         let rendered_state_hash = hash_move_state(&predicted_state);
         let ms_per_tick = GAME_TIME_STEP.as_secs_f32() * 1000.0;
-        let dynamic_render_delay_ticks = game_logic.dynamic_render_delay_ticks;
-        let dynamic_render_delay_ms = dynamic_render_delay_ticks as f32 * ms_per_tick;
         let estimated_rtt_ms = game_logic.estimated_rtt * 1000.0;
         let jitter_rtt_ms = game_logic.jitter_rtt * 1000.0;
         match game_logic.player_side {
@@ -685,10 +670,6 @@ async fn main() {
                         rendered_state_hash
                     ));
                     ui.separator();
-                    ui.label(format!(
-                        "Dynamic render delay: {} ticks ({:.1} ms)",
-                        dynamic_render_delay_ticks, dynamic_render_delay_ms
-                    ));
                     ui.label(format!("RTT estimate: ({:.1} ms)", estimated_rtt_ms));
                     ui.label(format!("Ping estimate: ({:.1} ms)", estimated_rtt_ms / 2.));
                     ui.label(format!("RTT jitter estimate: ({:.1} ms)", jitter_rtt_ms));
