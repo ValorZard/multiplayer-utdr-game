@@ -22,12 +22,14 @@ pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
 
 /// Length of the bullet-hell dodge segment, in milliseconds (for now, maybe refactor to ticks later?)
 pub const DODGE_PHASE_LENGTH_MS: RemoteTimestamp = 10000;
-pub const DODGE_PHASE_TICKS: InputSequence = (DODGE_PHASE_LENGTH_MS / GAME_TIME_STEP_MS) as InputSequence;
+pub const DODGE_PHASE_TICKS: InputSequence =
+    (DODGE_PHASE_LENGTH_MS / GAME_TIME_STEP_MS) as InputSequence;
 /// Wall-clock gap between bullets of a dodge pattern. Spawning is scheduled in
 /// unix time (not ticks) so client and server can both derive the identical
 /// schedule from the pattern start timestamp alone.
 pub const PROJECTILE_SPAWN_INTERVAL_MS: RemoteTimestamp = 500;
-pub const AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE: u32 = (DODGE_PHASE_LENGTH_MS / PROJECTILE_SPAWN_INTERVAL_MS) as u32;
+pub const AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE: u32 =
+    (DODGE_PHASE_LENGTH_MS / PROJECTILE_SPAWN_INTERVAL_MS) as u32;
 /// How far in the future the server schedules a pattern start, so the reliable
 /// message announcing it reaches clients before the first bullet spawns.
 pub const PATTERN_START_LEAD_MS: RemoteTimestamp = 1000;
@@ -50,7 +52,8 @@ pub fn get_current_bullet_count(
     if current_time_ms < pattern_start_ms {
         return 0;
     }
-    (((current_time_ms - pattern_start_ms) / PROJECTILE_SPAWN_INTERVAL_MS + 1) as u32).clamp(0, AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE)
+    (((current_time_ms - pattern_start_ms) / PROJECTILE_SPAWN_INTERVAL_MS + 1) as u32)
+        .clamp(0, AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE)
 }
 
 /// Deterministic dodge pattern: shoot bullets at the trapped box, alternating
@@ -58,8 +61,8 @@ pub fn get_current_bullet_count(
 /// the box center (the origin) over the course of the phase.
 pub fn get_data_for_projectile_from_index(index: u32) -> (Vec2, Vec2) {
     // 0.0 for the first bullet of the phase, 1.0 for the last.
-    let progress =
-        index.min(AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE) as f32 / AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE as f32;
+    let progress = index.min(AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE) as f32
+        / AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE as f32;
     let edge_x = if index % 2 == 0 {
         -PLAYER_TRAPPED_BOX_WIDTH / 2.
     } else {
