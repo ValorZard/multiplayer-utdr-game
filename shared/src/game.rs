@@ -16,6 +16,7 @@ pub const PROJECTILE_HIT_DAMAGE: Health = 1;
 
 /// deltarune runs on 30 TPS
 pub const GAME_TIME_STEP_MS: RemoteTimestamp = 33;
+// this is fine to cast as a u64, we know the time step isn't negative
 pub const GAME_TIME_STEP: Duration = Duration::from_millis(GAME_TIME_STEP_MS as u64);
 pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
 
@@ -35,7 +36,7 @@ pub const PROJECTILE_SPEED: f32 = 150.0;
 /// Projectiles render and collide as squares with this side length (px).
 pub const PROJECTILE_SIZE: f32 = 6.0;
 /// Where the enemy sits in game (pixel) space; projectiles spawn from here.
-pub const ENEMY_POSITION: Vec2 = Vec2::new(0.0, 120.0);
+pub const ENEMY_POSITION: Vec2 = Vec2::new(0.0, 70.0);
 /// Projectiles farther than this from the origin are despawned.
 pub const PROJECTILE_DESPAWN_RADIUS: f32 = 500.0;
 
@@ -58,7 +59,7 @@ pub fn get_current_bullet_count(
 pub fn get_data_for_projectile_from_index(index: u32) -> (Vec2, Vec2) {
     // 0.0 for the first bullet of the phase, 1.0 for the last.
     let progress =
-        index.min(0) as f32 / AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE as f32;
+        index.min(AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE) as f32 / AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE as f32;
     let edge_x = if index % 2 == 0 {
         -PLAYER_TRAPPED_BOX_WIDTH / 2.
     } else {
