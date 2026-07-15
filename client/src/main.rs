@@ -104,7 +104,6 @@ struct UiGameState {
     ui_state: UiState,
     lobby_state: LobbyState,
     lobby_id: Option<LobbyId>,
-    player_side: Option<PlayerSide>,
     current_game_state: Option<BattleGameState>,
     user_id: Option<UserId>,
 }
@@ -115,7 +114,6 @@ impl UiGameState {
             ui_state: UiState::NotConnected,
             lobby_state: LobbyState::Empty,
             lobby_id: None,
-            player_side: None,
             current_game_state: None,
             user_id: None,
         }
@@ -156,46 +154,17 @@ fn prune_acknowledged_inputs(
     }
 }
 
-// client side replication taken from: https://www.gabrielgambetta.com/client-side-prediction-live-demo.html
-// (right click and inspect webpage to see the actual javascript)
-fn interpolate_remote_position(
-    snapshots: &mut BTreeMap<InputSequence, Vec2>,
-    render_delay_ticks: InputSequence,
-) -> Option<Vec2> {
-    let latest_known_tick = *snapshots.keys().next_back()?;
-    let target_time = latest_known_tick.saturating_sub(render_delay_ticks);
-
-    let oldest_allowed = latest_known_tick.saturating_sub(MAX_REMOTE_SNAPSHOTS);
-    snapshots.retain(|k, _| *k >= oldest_allowed);
-
-    let before = snapshots.range(..=target_time).next_back();
-    let after = snapshots.range(target_time..).next();
-
-    // TODO: Explain the math behind this better.
-    match (before, after) {
-        (Some((t0, p0)), Some((t1, p1))) => {
-            if t0 == t1 {
-                Some(*p0)
-            } else {
-                let frac = (target_time - t0) as f32 / (t1 - t0) as f32;
-                Some(*p0 + (*p1 - *p0) * frac) // lerp by actual gap, not flat average
-            }
-        }
-        (Some((_, p)), None) => Some(*p),
-        (None, Some((_, p))) => Some(*p),
-        (None, None) => None,
-    }
-}
 struct ClientGameLogic {
     // Ensure move prediction starts from a clean baseline when a round begins.
     pending_inputs: VecDeque<PendingMoveInput>,
-    remote_snapshots: BTreeMap<InputSequence, Vec2>,
+    latest_remote_snapshot: Option<(InputSequence, MoveGameState)>,
     current_input_sequence: InputSequence,
     last_acknowledged_sequence: InputSequence,
     dynamic_render_delay_ticks: InputSequence,
     estimated_rtt: f32,
     jitter_rtt: f32,
     game_logic: GameLogic,
+    player_side: Option<PlayerSide>,
     // How many bullets of the current dodge pattern we've spawned locally.
     // The pattern itself is deterministic and scheduled on a shared unix
     // timestamp, so this count is all the state prediction needs.
@@ -206,19 +175,80 @@ impl ClientGameLogic {
     fn new() -> Self {
         Self {
             pending_inputs: VecDeque::new(),
-            remote_snapshots: BTreeMap::new(),
+            latest_remote_snapshot: None,
             current_input_sequence: 0,
             last_acknowledged_sequence: 0,
             dynamic_render_delay_ticks: DEFAULT_REMOTE_INTERPOLATION_DELAY_FRAMES,
             estimated_rtt: 0.0,
             jitter_rtt: 0.0,
             game_logic: GameLogic::new(),
+            player_side: None,
             amount_of_spawned_bullets: 0,
         }
     }
 
     fn reset(&mut self) {
+        // We keep the player side since this should be overridden when we (re)join a lobby
+        let player_side = self.player_side;
         *self = Self::new();
+        self.player_side = player_side;
+    }
+
+    fn update_snapshot(
+        &mut self,
+        acknowledged_sequence: InputSequence,
+        remote_snapshot: MoveGameState,
+    ) {
+        let (remote_side, remote_position) = match self.player_side {
+            Some(PlayerSide::Left) => (PlayerSide::Right, remote_snapshot.right_position),
+            Some(PlayerSide::Right) => (PlayerSide::Left, remote_snapshot.left_position),
+            None => return,
+        };
+        self.game_logic
+            .update_position_with_vec(remote_side, remote_position);
+        self.latest_remote_snapshot = Some((acknowledged_sequence, remote_snapshot));
+    }
+
+    // client side replication taken from: https://www.gabrielgambetta.com/client-side-prediction-live-demo.html
+    // (right click and inspect webpage to see the actual javascript)
+    // since this isn't PvP, we don't actually care all that much about hitting another player, we just care about the other enemies
+    // Lerp between the last authoritative snapshot (t0 = its acknowledged sequence) and the current predicted state (t1 = current_input_sequence),
+    // rendering dynamic_render_delay_ticks behind the present.
+    fn interpolate_remote_position(&self, predicted_state: &mut MoveGameState) {
+        let side = match self.player_side {
+            Some(side) => side,
+            None => return,
+        };
+        let (remote_sequence, snapshot) = match self.latest_remote_snapshot.as_ref() {
+            Some(tuple) => tuple,
+            None => return,
+        };
+
+        // give the position of the opposite side of the local player
+        let remote_position = |state: &MoveGameState| match side {
+            PlayerSide::Left => state.right_position,
+            PlayerSide::Right => state.left_position,
+        };
+        let snapshot_position = remote_position(snapshot);
+        let predicted_position = remote_position(predicted_state);
+
+        // Sequences wrap, so measure the gap with wrapping_sub.
+        let ticks_between_remote_and_local =
+            self.current_input_sequence.wrapping_sub(*remote_sequence);
+        // TODO: For now, lets just lerp by 0.5
+        let lerped_position = if ticks_between_remote_and_local == 0 {
+            snapshot_position
+        } else {
+            snapshot_position.lerp(predicted_position, 0.5)
+        };
+        match side {
+            PlayerSide::Left => {
+                predicted_state.right_position = lerped_position;
+            }
+            PlayerSide::Right => {
+                predicted_state.left_position = lerped_position;
+            }
+        }
     }
 }
 
@@ -299,7 +329,6 @@ async fn main() {
     let mut game_logic = ClientGameLogic::new();
 
     let mut remote_state_hash = 0;
-    let mut predicted_state: MoveGameState;
 
     // TODO: dynamically set and remove game rectangles, but for now we can just assume there's only a set number right now
     let rectangles = game_logic.game_logic.get_obstacle_rectangles();
@@ -377,7 +406,7 @@ async fn main() {
                 }
                 ReliableRpcServerMessage::LobbyInit(side, lobby_id) => {
                     ui_game_state.lobby_id = Some(lobby_id);
-                    ui_game_state.player_side = Some(side);
+                    game_logic.player_side = Some(side);
                     ui_game_state.ui_state = UiState::LobbyWaiting;
                 }
                 ReliableRpcServerMessage::LobbyState(state) => {
@@ -418,7 +447,7 @@ async fn main() {
                     // hash state
                     remote_state_hash = hash_move_state(&state);
 
-                    if let Some(local_side) = ui_game_state.player_side {
+                    if let Some(local_side) = game_logic.player_side {
                         let (local_position, remote_position) = match local_side {
                             PlayerSide::Left => (state.left_position, state.right_position),
                             PlayerSide::Right => (state.right_position, state.left_position),
@@ -480,7 +509,7 @@ async fn main() {
                                 .update_position_with_input(local_side, &pending.input);
                         }
                         // we want to give each remote snapshot a timestamp from the server itself
-                        game_logic.remote_snapshots.insert(tick, remote_position);
+                        game_logic.update_snapshot(acknowledged_sequence, state);
                     }
                 }
             }
@@ -536,7 +565,7 @@ async fn main() {
             // ideally we would LIKE to be able to do game logic when we're not connected to a server
             // for training mode or whatever.
             // TODO: Figure out how a "training mode" would work
-            if let Some(side) = ui_game_state.player_side
+            if let Some(side) = game_logic.player_side
                 && ui_game_state.lobby_state == LobbyState::Running
             {
                 let sequence = game_logic.current_input_sequence;
@@ -576,8 +605,9 @@ async fn main() {
                     let scheduled_bullets =
                         get_current_bullet_count(*pattern_start_time_ms, current_time_ms);
                     while game_logic.amount_of_spawned_bullets < scheduled_bullets {
-                        let (position, velocity) =
-                            get_data_for_projectile_from_index(game_logic.amount_of_spawned_bullets);
+                        let (position, velocity) = get_data_for_projectile_from_index(
+                            game_logic.amount_of_spawned_bullets,
+                        );
                         game_logic.game_logic.spawn_projectile(position, velocity);
                         game_logic.amount_of_spawned_bullets += 1;
                     }
@@ -600,31 +630,17 @@ async fn main() {
 
         // Hash the simulation state before applying any render-time interpolation.
         // predicted state is just for rendering, it can't be real because the server has the real state.
-        predicted_state = game_logic.game_logic.get_state_to_send_to_client();
+        let mut predicted_state = game_logic.game_logic.get_state_to_send_to_client();
         let pre_predicted_state_hash = hash_move_state(&predicted_state);
         // actually do the prediction here, which will modify predicted state to fit the server
-        if let Some(side) = ui_game_state.player_side {
-            if let Some(interpolated_position) = interpolate_remote_position(
-                &mut game_logic.remote_snapshots,
-                game_logic.dynamic_render_delay_ticks,
-            ) {
-                match side {
-                    PlayerSide::Left => {
-                        predicted_state.right_position = interpolated_position;
-                    }
-                    PlayerSide::Right => {
-                        predicted_state.left_position = interpolated_position;
-                    }
-                }
-            }
-        }
+        game_logic.interpolate_remote_position(&mut predicted_state);
         let rendered_state_hash = hash_move_state(&predicted_state);
         let ms_per_tick = GAME_TIME_STEP.as_secs_f32() * 1000.0;
         let dynamic_render_delay_ticks = game_logic.dynamic_render_delay_ticks;
         let dynamic_render_delay_ms = dynamic_render_delay_ticks as f32 * ms_per_tick;
         let estimated_rtt_ms = game_logic.estimated_rtt * 1000.0;
         let jitter_rtt_ms = game_logic.jitter_rtt * 1000.0;
-        match ui_game_state.player_side {
+        match game_logic.player_side {
             Some(PlayerSide::Left) => {
                 local_player.set_position(predicted_state.left_position);
                 remote_player.set_position(predicted_state.right_position);
@@ -725,7 +741,7 @@ async fn main() {
                                 .clone()
                                 .expect("should be setup by this point since the lobby is running");
                             if let Some(game_state) = &ui_game_state.current_game_state
-                                && let Some(side) = ui_game_state.player_side
+                                && let Some(side) = game_logic.player_side
                             {
                                 let stats = match game_state {
                                     BattleGameState::ChoosingActions { stats, .. }
@@ -792,7 +808,7 @@ async fn main() {
                                 &ui_game_state.current_game_state
                             {
                                 ui.label(win_message(winner));
-                                if let Some(side) = ui_game_state.player_side {
+                                if let Some(side) = game_logic.player_side {
                                     draw_battle_stats(ui, stats, side);
                                 }
                                 ui.separator();
