@@ -330,6 +330,9 @@ pub const PIXEL_TO_PHYSICS_SCALE: f32 = 1.0 / PHYSICS_TO_PIXEL_SCALE;
 pub const PLAYER_PHYSICS_RADIUS: f32 = 1.0; // in physics scale
 pub const PLAYER_GAME_RECTANGLE: GameRectangle = GameRectangle::new(0., 0., 10., 10.);
 pub const PLAYER_STARTING_POSITION: Vec2 = Vec2::new(0., 0.);
+pub const PLAYER_TRAPPED_BOX_WIDTH: f32 = 100.;
+pub const PLAYER_TRAPPED_BOX_HEIGHT: f32 = 50.;
+pub const PLAYER_TRAPPED_BOX_WALL_WIDTH: f32 = 10.;
 
 /// GameLogic should NEVER leak any physics space vectors outside of the physics world.
 /// As far as the rest of the codebase is concerned, it's ONLY worried about pixel (game) space.
@@ -358,9 +361,69 @@ impl GameLogic {
             PLAYER_STARTING_POSITION,
         );
 
+        // spawn collision box for the players to be trapped in while bullets are shooting at them
+        // left wall
+        Self::spawn_obstacle(
+            &mut world,
+            &mut physics,
+            -PLAYER_TRAPPED_BOX_WIDTH / 2.,
+            0.,
+            PLAYER_TRAPPED_BOX_WALL_WIDTH,
+            PLAYER_TRAPPED_BOX_HEIGHT,
+        );
+        // right wall
+        Self::spawn_obstacle(
+            &mut world,
+            &mut physics,
+            PLAYER_TRAPPED_BOX_WIDTH / 2.,
+            0.,
+            PLAYER_TRAPPED_BOX_WALL_WIDTH,
+            PLAYER_TRAPPED_BOX_HEIGHT,
+        );
+        // top wall
+        Self::spawn_obstacle(
+            &mut world,
+            &mut physics,
+            0.,
+            PLAYER_TRAPPED_BOX_HEIGHT / 2.,
+            PLAYER_TRAPPED_BOX_WIDTH,
+            PLAYER_TRAPPED_BOX_WALL_WIDTH,
+        );
+        // bottom wall
+        Self::spawn_obstacle(
+            &mut world,
+            &mut physics,
+            0.,
+            -PLAYER_TRAPPED_BOX_HEIGHT / 2.,
+            PLAYER_TRAPPED_BOX_WIDTH,
+            PLAYER_TRAPPED_BOX_WALL_WIDTH,
+        );
+
+        // The broad-phase spatial index used by scene queries (incl. the character
+        // controller's move_shape) isn't populated until a step runs; without this,
+        // the very first update_position_with_input call queries a stale/empty index
+        // and misses newly-inserted colliders entirely.
+        physics.step();
+
+        Self {
+            world,
+            left_player,
+            right_player,
+            physics,
+        }
+    }
+
+    fn spawn_obstacle(
+        world: &mut hecs::World,
+        physics: &mut PhysicsWorld,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) {
         // spawn physics object for players to collide with
         // create a rectangle in the game world
-        let rectangle = GameRectangle::new(40.0, 30.0, 20.0, 20.0);
+        let rectangle = GameRectangle::new(x, y, width, height);
         // GameRectangle's x/y is its center (matching kiss3d's center-based
         // set_position), so the physics collider sits at the same point.
         let physics_position = rectangle.get_physics_position();
@@ -378,19 +441,6 @@ impl GameLogic {
             .build();
         let collider_handle = physics.colliders.insert(collider);
         world.spawn((rectangle, Obstacle {}, collider_handle));
-
-        // The broad-phase spatial index used by scene queries (incl. the character
-        // controller's move_shape) isn't populated until a step runs; without this,
-        // the very first update_position_with_input call queries a stale/empty index
-        // and misses newly-inserted colliders entirely.
-        physics.step();
-
-        Self {
-            world,
-            left_player,
-            right_player,
-            physics,
-        }
     }
 
     fn spawn_player(
