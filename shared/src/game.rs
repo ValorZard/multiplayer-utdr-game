@@ -15,16 +15,18 @@ pub const DEFEND_BLOCK: Health = 1;
 pub const PROJECTILE_HIT_DAMAGE: Health = 1;
 
 /// deltarune runs on 30 TPS
-pub const GAME_TIME_STEP_MS: u64 = 33;
-pub const GAME_TIME_STEP: Duration = Duration::from_millis(GAME_TIME_STEP_MS);
+pub const GAME_TIME_STEP_MS: RemoteTimestamp = 33;
+pub const GAME_TIME_STEP: Duration = Duration::from_millis(GAME_TIME_STEP_MS as u64);
 pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
 
-/// Length of the bullet-hell dodge segment, in game ticks (30 TPS => ~10 seconds).
-pub const DODGE_PHASE_TICKS: InputSequence = 300;
+/// Length of the bullet-hell dodge segment, in milliseconds (for now, maybe refactor to ticks later?)
+pub const DODGE_PHASE_LENGTH_MS: RemoteTimestamp = 10000;
+pub const DODGE_PHASE_TICKS: InputSequence = (DODGE_PHASE_LENGTH_MS / GAME_TIME_STEP_MS) as InputSequence;
 /// Wall-clock gap between bullets of a dodge pattern. Spawning is scheduled in
 /// unix time (not ticks) so client and server can both derive the identical
 /// schedule from the pattern start timestamp alone.
 pub const PROJECTILE_SPAWN_INTERVAL_MS: RemoteTimestamp = 500;
+pub const AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE: u32 = (DODGE_PHASE_LENGTH_MS / PROJECTILE_SPAWN_INTERVAL_MS) as u32;
 /// How far in the future the server schedules a pattern start, so the reliable
 /// message announcing it reaches clients before the first bullet spawns.
 pub const PATTERN_START_LEAD_MS: RemoteTimestamp = 1000;
@@ -47,19 +49,24 @@ pub fn get_current_bullet_count(
     if current_time_ms < pattern_start_ms {
         return 0;
     }
-    ((current_time_ms - pattern_start_ms) / PROJECTILE_SPAWN_INTERVAL_MS + 1) as u32
+    (((current_time_ms - pattern_start_ms) / PROJECTILE_SPAWN_INTERVAL_MS + 1) as u32).clamp(0, AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE)
 }
 
-/// Deterministic dodge pattern: bullet `index` of a segment, as (spawn
-/// position, velocity) in game (pixel) space. A golden-angle fan biased
-/// downward gives spread-out coverage of the arena below the enemy without
-/// any RNG, so both sides generate identical bullets from the index alone.
+/// Deterministic dodge pattern: shoot bullets at the trapped box, alternating
+/// left or right if the index is even or odd respectively, with the aim point eventually converging on
+/// the box center (the origin) over the course of the phase.
 pub fn get_data_for_projectile_from_index(index: u32) -> (Vec2, Vec2) {
-    const GOLDEN_ANGLE: f32 = 2.399_963;
-    // wrap the fan into the lower half circle (pointing at the play area)
-    let sweep = (index as f32 * GOLDEN_ANGLE) % std::f32::consts::PI;
-    let angle = -std::f32::consts::PI + sweep;
-    let direction = Vec2::new(angle.cos(), angle.sin());
+    // 0.0 for the first bullet of the phase, 1.0 for the last.
+    let progress =
+        index.min(0) as f32 / AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE as f32;
+    let edge_x = if index % 2 == 0 {
+        -PLAYER_TRAPPED_BOX_WIDTH / 2.
+    } else {
+        PLAYER_TRAPPED_BOX_WIDTH / 2.
+    };
+    let target = Vec2::new(edge_x * (1. - progress), 0.);
+    let direction = (target - ENEMY_POSITION).normalize_or_zero();
+
     (ENEMY_POSITION, direction * PROJECTILE_SPEED)
 }
 
