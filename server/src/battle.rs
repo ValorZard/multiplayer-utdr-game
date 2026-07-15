@@ -278,7 +278,7 @@ impl GameSession {
         // Unreliable packets can be dropped permanently, so do not stall waiting
         // for contiguous sequences. Apply the next available received input.
         // TODO: Add server-side prediction maybe?
-        let left_input = self
+        let mut left_input = self
             .left_pending_move_inputs
             .pop_first()
             .map(|(seq, input)| {
@@ -286,7 +286,11 @@ impl GameSession {
                 input
             })
             .unwrap_or(self.left_last_applied_input);
-        let right_input = self
+        // only apply input if player isn't dead
+        if self.left_health <= 0 {
+            left_input = MoveInputState::default();
+        }
+        let mut right_input = self
             .right_pending_move_inputs
             .pop_first()
             .map(|(seq, input)| {
@@ -294,6 +298,10 @@ impl GameSession {
                 input
             })
             .unwrap_or(self.right_last_applied_input);
+        // only apply input if player isn't dead
+        if self.right_health <= 0 {
+            right_input = MoveInputState::default();
+        }
 
         self.left_last_applied_input = left_input;
         self.right_last_applied_input = right_input;

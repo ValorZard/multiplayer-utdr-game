@@ -559,6 +559,7 @@ async fn main() {
                     pattern_start_time_ms,
                     stats,
                 }) = ui_game_state.current_game_state.as_ref()
+                && stats.check_if_alive(side)
             {
                 let sequence = game_logic.current_input_sequence;
                 game_logic.current_input_sequence =

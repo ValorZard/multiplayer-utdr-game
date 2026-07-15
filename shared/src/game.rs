@@ -118,6 +118,10 @@ impl BattleStats {
             PlayerSide::Right => self.right_health,
         }
     }
+
+    pub fn check_if_alive(&self, side: PlayerSide) -> bool {
+        self.health_for(side) > 0
+    }
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
