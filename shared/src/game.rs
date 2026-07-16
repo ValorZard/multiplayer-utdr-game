@@ -24,15 +24,20 @@ pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
 pub const DODGE_PHASE_LENGTH_MS: RemoteTimestamp = 10000;
 pub const DODGE_PHASE_TICKS: InputSequence =
     (DODGE_PHASE_LENGTH_MS / GAME_TIME_STEP_MS) as InputSequence;
-/// Wall-clock gap between bullets of a dodge pattern. Spawning is scheduled in
-/// unix time (not ticks) so client and server can both derive the identical
-/// schedule from the pattern start timestamp alone.
-pub const PROJECTILE_SPAWN_INTERVAL_MS: RemoteTimestamp = 500;
+/// Gap between bullets of a dodge pattern (we don't really use MS, that gets converted to ticks).
+/// Spawning is scheduled in simulation ticks so client and server spawn each bullet on the identical tick of the phase,
+/// keeping the physics deterministic with no shared unix clock.
+const PROJECTILE_SPAWN_INTERVAL_MS: RemoteTimestamp = 500;
+pub const PROJECTILE_SPAWN_INTERVAL_TICKS: InputSequence =
+    (PROJECTILE_SPAWN_INTERVAL_MS / GAME_TIME_STEP_MS) as InputSequence;
 pub const AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE: u32 =
-    (DODGE_PHASE_LENGTH_MS / PROJECTILE_SPAWN_INTERVAL_MS) as u32;
-/// How far in the future the server schedules a pattern start, so the reliable
-/// message announcing it reaches clients before the first bullet spawns.
-pub const PATTERN_START_LEAD_MS: RemoteTimestamp = 1000;
+    DODGE_PHASE_TICKS / PROJECTILE_SPAWN_INTERVAL_TICKS;
+/// How far into the dodge phase (in ticks) the first bullet spawns,
+/// so the reliable message announcing the phase reaches clients before any bullet
+/// exists anywhere.
+const PATTERN_START_LEAD_MS: RemoteTimestamp = 1000;
+pub const PATTERN_START_LEAD_TICKS: InputSequence =
+    (PATTERN_START_LEAD_MS / GAME_TIME_STEP_MS) as InputSequence;
 /// Projectile speed in game (pixel) space, i.e. pixels per second.
 pub const PROJECTILE_SPEED: f32 = 150.0;
 /// Projectiles render and collide as squares with this side length (px).
@@ -42,22 +47,20 @@ pub const ENEMY_POSITION: Vec2 = Vec2::new(0.0, 70.0);
 /// Projectiles farther than this from the origin are despawned.
 pub const PROJECTILE_DESPAWN_RADIUS: f32 = 500.0;
 
-/// How many bullets of a pattern should exist by `current_time_ms`, given when the
-/// pattern started. Both client and server run this against their own clocks
-/// so they spawn the same bullets at (approximately) the same instant.
-pub fn get_current_bullet_count(
-    pattern_start_ms: RemoteTimestamp,
-    current_time_ms: RemoteTimestamp,
-) -> u32 {
-    if current_time_ms < pattern_start_ms {
+/// How many bullets of a pattern should exist `elapsed_ticks` into the dodge phase.
+/// Both client and server run this against the phase's tick counter,
+/// so they spawn each bullet on the identical simulation tick.
+pub fn get_current_bullet_count(elapsed_ticks: InputSequence) -> u32 {
+    if elapsed_ticks < PATTERN_START_LEAD_TICKS {
         return 0;
     }
-    (((current_time_ms - pattern_start_ms) / PROJECTILE_SPAWN_INTERVAL_MS + 1) as u32)
-        .clamp(0, AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE)
+    ((elapsed_ticks - PATTERN_START_LEAD_TICKS) / PROJECTILE_SPAWN_INTERVAL_TICKS + 1)
+        .min(AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE)
 }
 
-/// Deterministic dodge pattern: shoot bullets at the trapped box, alternating
-/// left or right if the index is even or odd respectively, with the aim point eventually converging on
+/// Deterministic dodge pattern: shoot bullets at the trapped box,
+/// alternating left or right if the index is even or odd respectively,
+/// with the aim point eventually converging on
 /// the box center (the origin) over the course of the phase.
 pub fn get_data_for_projectile_from_index(index: u32) -> (Vec2, Vec2) {
     // 0.0 for the first bullet of the phase, 1.0 for the last.
@@ -152,10 +155,9 @@ pub enum BattleGameState {
         stats: BattleStats,
     },
     Dodging {
+        // counts down from DODGE_PHASE_TICKS; clients derive the bullet
+        // pattern's elapsed-tick clock from this shared tick reference
         ticks_remaining: InputSequence,
-        // unix ms timestamp at which the bullet pattern starts; clients
-        // predict the pattern locally from this shared clock reference
-        pattern_start_time_ms: RemoteTimestamp,
         stats: BattleStats,
     },
     Win {

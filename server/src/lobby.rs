@@ -1,22 +1,12 @@
 use crate::battle::{GameError, GameSession};
 use shared::game::{BattleGameState, MoveGameState, MoveInputState, PlayerSide, TurnAction};
 use shared::rpc::{
-    InputSequence, LobbyId, LobbyState, ReliableRpcServerMessage, RemoteTimestamp,
-    UnreliableRpcServerMessage, UserId,
+    InputSequence, LobbyId, LobbyState, ReliableRpcServerMessage, UnreliableRpcServerMessage,
+    UserId,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
-
-// Wall-clock unix time drives the dodge phase's bullet pattern schedule,
-// which clients replicate against their own clocks.
-fn unix_now_ms() -> RemoteTimestamp {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock is set before the unix epoch")
-        .as_millis() as RemoteTimestamp
-}
 
 pub type UserReliableSender = UnboundedSender<ReliableRpcServerMessage>;
 pub type UserUnreliableSender = UnboundedSender<UnreliableRpcServerMessage>;
@@ -384,7 +374,7 @@ impl LobbySession {
     fn step_game(&mut self) -> Result<MoveGameState, LobbyError> {
         // don't step if the lobby is not running
         if self.get_current_lobby_state() == LobbyState::Running {
-            self.current_round.step(unix_now_ms());
+            self.current_round.step();
             Ok(self.current_round.get_move_state())
         } else {
             Err(LobbyError::NotRunning)
@@ -420,7 +410,7 @@ impl LobbySession {
                 // whole lobby actor.
                 let result = self
                     .current_round
-                    .set_turn_action(player_side, action, unix_now_ms())
+                    .set_turn_action(player_side, action)
                     .map_err(LobbyError::GameError);
                 let _ = oneshot.send(result);
             }

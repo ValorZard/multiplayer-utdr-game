@@ -9,9 +9,9 @@ use include_dir::{Dir, include_dir};
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
 use shared::game::{
-    BattleGameState, BattleStats, BattleWinner, ENEMY_POSITION, GAME_TIME_STEP, GameLogic,
-    MoveGameState, PROJECTILE_SIZE, PlayerSide, TurnAction, get_current_bullet_count,
-    get_data_for_projectile_from_index,
+    BattleGameState, BattleStats, BattleWinner, DODGE_PHASE_TICKS, ENEMY_POSITION, GAME_TIME_DELTA,
+    GAME_TIME_STEP, GameLogic, MoveGameState, PROJECTILE_SIZE, PlayerSide, TurnAction,
+    get_current_bullet_count, get_data_for_projectile_from_index,
 };
 use shared::rpc::{
     InputSequence, LobbyId, LobbyState, PendingMoveInput, ReliableRpcClientMessage,
@@ -131,9 +131,6 @@ struct ClientConfig {
 
 const MAX_PENDING_INPUTS: usize = 256;
 const MAX_INPUTS_TO_SEND: usize = 8;
-const MAX_REMOTE_SNAPSHOTS: InputSequence = 64;
-// We assume both client and server run on 30 fps
-const DEFAULT_REMOTE_INTERPOLATION_DELAY_FRAMES: InputSequence = 2;
 const RTT_EWMA_ALPHA: f32 = 0.125;
 const RTT_EWMA_BETA: f32 = 0.10;
 
@@ -165,9 +162,14 @@ struct ClientGameLogic {
     game_logic: GameLogic,
     player_side: Option<PlayerSide>,
     // How many bullets of the current dodge pattern we've spawned locally.
-    // The pattern itself is deterministic and scheduled on a shared unix
-    // timestamp, so this count is all the state prediction needs.
+    // The pattern itself is deterministic and scheduled in simulation ticks,
+    // so this count is all the state prediction needs.
     amount_of_spawned_bullets: u32,
+    // Local copy of the current dodge phase's tick clock:
+    // ticks elapsed since the phase began on the server.
+    // initialized from the ticks_remaining in the state message announcing the phase,
+    // then advanced once per local tick.
+    ticks_elapsed_in_current_dodge_phase: InputSequence,
 }
 
 impl ClientGameLogic {
@@ -182,6 +184,7 @@ impl ClientGameLogic {
             game_logic: GameLogic::new(),
             player_side: None,
             amount_of_spawned_bullets: 0,
+            ticks_elapsed_in_current_dodge_phase: 0,
         }
     }
 
@@ -384,8 +387,25 @@ async fn main() {
                         BattleGameState::ChoosingActions { .. } | BattleGameState::Win { .. } => {
                             game_logic.game_logic.clear_projectiles();
                             game_logic.amount_of_spawned_bullets = 0;
+                            game_logic.ticks_elapsed_in_current_dodge_phase = 0;
                         }
-                        BattleGameState::Dodging { .. } => {}
+                        BattleGameState::Dodging {
+                            ticks_remaining, ..
+                        } => {
+                            // sync our copy of the phase's tick clock to the server's,
+                            // plus half an RTT for the time this message spent in flight.
+                            if !matches!(
+                                ui_game_state.current_game_state,
+                                Some(BattleGameState::Dodging { .. })
+                            ) {
+                                let latency_ticks =
+                                    (game_logic.estimated_rtt / 2.0 / GAME_TIME_DELTA).round()
+                                        as InputSequence;
+                                game_logic.ticks_elapsed_in_current_dodge_phase = DODGE_PHASE_TICKS
+                                    .saturating_sub(*ticks_remaining)
+                                    + latency_ticks;
+                            }
+                        }
                     }
                     ui_game_state.current_game_state = Some(state);
                 }
@@ -554,11 +574,8 @@ async fn main() {
             // TODO: Figure out how a "training mode" would work
             if let Some(side) = game_logic.player_side
                 && ui_game_state.lobby_state == LobbyState::Running
-                && let Some(&BattleGameState::Dodging {
-                    ticks_remaining,
-                    pattern_start_time_ms,
-                    stats,
-                }) = ui_game_state.current_game_state.as_ref()
+                && let Some(&BattleGameState::Dodging { stats, .. }) =
+                    ui_game_state.current_game_state.as_ref()
                 && stats.check_if_alive(side)
             {
                 let sequence = game_logic.current_input_sequence;
@@ -587,11 +604,14 @@ async fn main() {
                         client_send_time_ms: current_time_ms,
                     });
                 }
-                // Dodge phase prediction: the server told us when the pattern
-                // starts (a shared unix timestamp), so spawn the same
-                // deterministic bullets it does, on our own clock.
+                // Dodge phase prediction: advance our copy of the phase's tick
+                // clock and spawn the same deterministic bullets the server
+                // does, on the same tick of the pattern that it does.
+                game_logic.ticks_elapsed_in_current_dodge_phase = game_logic
+                    .ticks_elapsed_in_current_dodge_phase
+                    .saturating_add(1);
                 let scheduled_bullets =
-                    get_current_bullet_count(pattern_start_time_ms, current_time_ms);
+                    get_current_bullet_count(game_logic.ticks_elapsed_in_current_dodge_phase);
                 while game_logic.amount_of_spawned_bullets < scheduled_bullets {
                     let (position, velocity) =
                         get_data_for_projectile_from_index(game_logic.amount_of_spawned_bullets);

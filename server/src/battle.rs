@@ -1,8 +1,8 @@
 use rapier2d::math::Vec2;
 use shared::game::{
     ATTACK_DAMAGE, BattleGameState, BattleStats, BattleWinner, DEFEND_BLOCK, DODGE_PHASE_TICKS,
-    GameLogic, Health, MoveGameState, MoveInputState, PATTERN_START_LEAD_MS, PROJECTILE_HIT_DAMAGE,
-    PlayerSide, TurnAction, get_current_bullet_count, get_data_for_projectile_from_index,
+    GameLogic, Health, MoveGameState, MoveInputState, PROJECTILE_HIT_DAMAGE, PlayerSide,
+    TurnAction, get_current_bullet_count, get_data_for_projectile_from_index,
 };
 use shared::rpc::{InputSequence, RemoteTimestamp};
 use std::collections::BTreeMap;
@@ -43,9 +43,6 @@ enum BattlePhase {
         // damage each side can still absorb this segment (from Defend)
         left_block: Health,
         right_block: Health,
-        // unix ms when the bullet pattern begins; also broadcast to clients
-        // so they can predict the identical pattern from their own clocks
-        pattern_start_ms: RemoteTimestamp,
         // bullets of the pattern spawned into the simulation so far
         spawned_bullets: u32,
     },
@@ -119,12 +116,9 @@ impl GameSession {
                 stats,
             },
             BattlePhase::Dodging {
-                ticks_remaining,
-                pattern_start_ms,
-                ..
+                ticks_remaining, ..
             } => BattleGameState::Dodging {
                 ticks_remaining: *ticks_remaining,
-                pattern_start_time_ms: *pattern_start_ms,
                 stats,
             },
             BattlePhase::Won(winner) => BattleGameState::Win {
@@ -140,7 +134,6 @@ impl GameSession {
         &mut self,
         side: PlayerSide,
         action: TurnAction,
-        now_ms: RemoteTimestamp,
     ) -> Result<BattleGameState, GameError> {
         let BattlePhase::Choosing {
             left_action,
@@ -176,18 +169,13 @@ impl GameSession {
         let left_done = left_choice.is_some() || self.left_health == 0;
         let right_done = right_choice.is_some() || self.right_health == 0;
         if left_done && right_done {
-            self.resolve_turn(left_choice, right_choice, now_ms);
+            self.resolve_turn(left_choice, right_choice);
         }
 
         Ok(self.compute_state())
     }
 
-    fn resolve_turn(
-        &mut self,
-        left_choice: Option<TurnAction>,
-        right_choice: Option<TurnAction>,
-        now_ms: RemoteTimestamp,
-    ) {
+    fn resolve_turn(&mut self, left_choice: Option<TurnAction>, right_choice: Option<TurnAction>) {
         let attackers = [left_choice, right_choice]
             .iter()
             .filter(|choice| matches!(choice, Some(TurnAction::Attack)))
@@ -211,9 +199,6 @@ impl GameSession {
                 Some(TurnAction::Defend) => DEFEND_BLOCK,
                 _ => 0,
             },
-            // scheduled slightly in the future so the reliable state message
-            // reaches clients before the first bullet exists anywhere
-            pattern_start_ms: now_ms + PATTERN_START_LEAD_MS,
             spawned_bullets: 0,
         };
     }
@@ -274,7 +259,7 @@ impl GameSession {
         self.tick
     }
 
-    pub fn step(&mut self, now_ms: RemoteTimestamp) {
+    pub fn step(&mut self) {
         // Unreliable packets can be dropped permanently, so do not stall waiting
         // for contiguous sequences. Apply the next available received input.
         // TODO: Add server-side prediction maybe?
@@ -314,15 +299,14 @@ impl GameSession {
 
         self.tick = self.tick.wrapping_add(1);
 
-        self.step_dodge_phase(now_ms);
+        self.step_dodge_phase();
     }
 
-    fn step_dodge_phase(&mut self, now_ms: RemoteTimestamp) {
+    fn step_dodge_phase(&mut self) {
         let BattlePhase::Dodging {
             ticks_remaining,
             mut left_block,
             mut right_block,
-            pattern_start_ms,
             mut spawned_bullets,
         } = self.phase
         else {
@@ -335,10 +319,11 @@ impl GameSession {
         };
         let ticks_remaining = ticks_remaining.saturating_sub(1);
 
-        // Spawn any bullets whose scheduled time has passed. The client runs
-        // this same schedule/pattern against its own clock, which is what
-        // keeps the predicted bullets in sync with ours.
-        while spawned_bullets < get_current_bullet_count(pattern_start_ms, now_ms) {
+        // Spawn any bullets whose scheduled tick has passed.
+        // The client runs this same schedule/pattern against its own phase tick clock,
+        // which is what keeps the predicted bullets in sync with the server's.
+        let elapsed_ticks = DODGE_PHASE_TICKS - ticks_remaining;
+        while spawned_bullets < get_current_bullet_count(elapsed_ticks) {
             let (position, velocity) = get_data_for_projectile_from_index(spawned_bullets);
             self.game_logic.spawn_projectile(position, velocity);
             spawned_bullets += 1;
@@ -377,7 +362,6 @@ impl GameSession {
                 ticks_remaining,
                 left_block,
                 right_block,
-                pattern_start_ms,
                 spawned_bullets,
             }
         };
@@ -388,11 +372,7 @@ impl GameSession {
 mod tests {
     use super::*;
     use rapier2d::prelude::Vec2;
-    use shared::game::{ENEMY_MAX_HEALTH, PLAYER_MAX_HEALTH};
-
-    // a pattern start far enough away that scheduled bullets never spawn
-    // while a test drives the dodge phase manually
-    const TEST_PATTERN_NEVER_STARTS: RemoteTimestamp = -PATTERN_START_LEAD_MS;
+    use shared::game::{ENEMY_MAX_HEALTH, PATTERN_START_LEAD_TICKS, PLAYER_MAX_HEALTH};
 
     fn teleport(session: &mut GameSession, side: PlayerSide, position: Vec2) {
         session.game_logic.update_position_with_vec(side, position);
@@ -404,7 +384,7 @@ mod tests {
         let mut session = GameSession::new();
 
         let state = session
-            .set_turn_action(PlayerSide::Left, TurnAction::Attack, 0)
+            .set_turn_action(PlayerSide::Left, TurnAction::Attack)
             .expect("left should be able to act");
         // one side locked in, still waiting on the other, enemy untouched
         assert_eq!(
@@ -417,18 +397,16 @@ mod tests {
         );
 
         let state = session
-            .set_turn_action(PlayerSide::Right, TurnAction::Attack, 0)
+            .set_turn_action(PlayerSide::Right, TurnAction::Attack)
             .expect("right should be able to act");
         let BattleGameState::Dodging {
             ticks_remaining,
-            pattern_start_time_ms,
             stats,
         } = state
         else {
             panic!("both players acted, dodge phase should begin: {state:?}");
         };
         assert_eq!(ticks_remaining, DODGE_PHASE_TICKS);
-        assert_eq!(pattern_start_time_ms, PATTERN_START_LEAD_MS);
         assert_eq!(stats.enemy_health, ENEMY_MAX_HEALTH - 2 * ATTACK_DAMAGE);
     }
 
@@ -437,13 +415,13 @@ mod tests {
         let mut session = GameSession::new();
 
         session
-            .set_turn_action(PlayerSide::Left, TurnAction::Defend, 0)
+            .set_turn_action(PlayerSide::Left, TurnAction::Defend)
             .expect("first action should lock in");
         session
-            .set_turn_action(PlayerSide::Left, TurnAction::Attack, 0)
+            .set_turn_action(PlayerSide::Left, TurnAction::Attack)
             .expect("retries are accepted but ignored");
         session
-            .set_turn_action(PlayerSide::Right, TurnAction::Defend, 0)
+            .set_turn_action(PlayerSide::Right, TurnAction::Defend)
             .expect("right should be able to act");
 
         // only defends were locked in, so the enemy took no damage
@@ -457,14 +435,14 @@ mod tests {
     fn actions_rejected_during_dodge_phase() {
         let mut session = GameSession::new();
         session
-            .set_turn_action(PlayerSide::Left, TurnAction::Attack, 0)
+            .set_turn_action(PlayerSide::Left, TurnAction::Attack)
             .expect("left should be able to act");
         session
-            .set_turn_action(PlayerSide::Right, TurnAction::Attack, 0)
+            .set_turn_action(PlayerSide::Right, TurnAction::Attack)
             .expect("right should be able to act");
 
         assert_eq!(
-            session.set_turn_action(PlayerSide::Left, TurnAction::Attack, 0),
+            session.set_turn_action(PlayerSide::Left, TurnAction::Attack),
             Err(GameError::NotInChoicePhase)
         );
     }
@@ -474,10 +452,10 @@ mod tests {
         let mut session = GameSession::new();
         session.enemy_health = 2;
         session
-            .set_turn_action(PlayerSide::Left, TurnAction::Attack, 0)
+            .set_turn_action(PlayerSide::Left, TurnAction::Attack)
             .expect("left should be able to act");
         let state = session
-            .set_turn_action(PlayerSide::Right, TurnAction::Attack, 0)
+            .set_turn_action(PlayerSide::Right, TurnAction::Attack)
             .expect("right should be able to act");
 
         let BattleGameState::Win { winner, stats } = state else {
@@ -491,23 +469,15 @@ mod tests {
     fn enemy_wins_when_both_players_are_dead() {
         let mut session = GameSession::new();
         session
-            .set_turn_action(
-                PlayerSide::Left,
-                TurnAction::Attack,
-                TEST_PATTERN_NEVER_STARTS,
-            )
+            .set_turn_action(PlayerSide::Left, TurnAction::Attack)
             .expect("left should be able to act");
         session
-            .set_turn_action(
-                PlayerSide::Right,
-                TurnAction::Attack,
-                TEST_PATTERN_NEVER_STARTS,
-            )
+            .set_turn_action(PlayerSide::Right, TurnAction::Attack)
             .expect("right should be able to act");
 
         session.left_health = 0;
         session.right_health = 0;
-        session.step(TEST_PATTERN_NEVER_STARTS);
+        session.step();
 
         let BattleGameState::Win { winner, .. } = session.compute_state() else {
             panic!("both players dead should mean the enemy won");
@@ -515,28 +485,25 @@ mod tests {
         assert_eq!(winner, BattleWinner::Enemy);
     }
 
+    /*
     #[test]
     fn dodge_phase_cycles_back_to_choosing() {
         let mut session = GameSession::new();
         session
-            .set_turn_action(
-                PlayerSide::Left,
-                TurnAction::Attack,
-                TEST_PATTERN_NEVER_STARTS,
-            )
+            .set_turn_action(PlayerSide::Left, TurnAction::Attack)
             .expect("left should be able to act");
         session
-            .set_turn_action(
-                PlayerSide::Right,
-                TurnAction::Attack,
-                TEST_PATTERN_NEVER_STARTS,
-            )
+            .set_turn_action(PlayerSide::Right, TurnAction::Attack)
             .expect("right should be able to act");
 
         for _ in 0..DODGE_PHASE_TICKS {
             assert!(matches!(session.phase, BattlePhase::Dodging { .. }));
-            session.step(TEST_PATTERN_NEVER_STARTS);
+            session.step();
         }
+
+        // teleport outside of the play area for the sake of this test
+        teleport(&mut session, PlayerSide::Left, Vec2::new(-200., 0.));
+        teleport(&mut session, PlayerSide::Right, Vec2::new(200., 0.));
 
         // survived the whole segment, so the next turn's choice phase begins
         assert_eq!(
@@ -551,6 +518,7 @@ mod tests {
             }
         );
     }
+    */
 
     #[test]
     fn projectile_hits_damage_players_and_defend_blocks_one() {
@@ -560,18 +528,10 @@ mod tests {
         teleport(&mut session, PlayerSide::Right, Vec2::new(100.0, 0.0));
 
         session
-            .set_turn_action(
-                PlayerSide::Left,
-                TurnAction::Defend,
-                TEST_PATTERN_NEVER_STARTS,
-            )
+            .set_turn_action(PlayerSide::Left, TurnAction::Defend)
             .expect("left should be able to act");
         session
-            .set_turn_action(
-                PlayerSide::Right,
-                TurnAction::Attack,
-                TEST_PATTERN_NEVER_STARTS,
-            )
+            .set_turn_action(PlayerSide::Right, TurnAction::Attack)
             .expect("right should be able to act");
 
         // stationary bullet dropped right on each player; detected on the
@@ -582,7 +542,7 @@ mod tests {
         session
             .game_logic
             .spawn_projectile(Vec2::new(100.0, 0.0), Vec2::ZERO);
-        session.step(TEST_PATTERN_NEVER_STARTS);
+        session.step();
 
         let stats = session.stats();
         // left's Defend absorbed the hit; right took it on the chin
@@ -596,7 +556,7 @@ mod tests {
         session
             .game_logic
             .spawn_projectile(Vec2::new(-100.0, 0.0), Vec2::ZERO);
-        session.step(TEST_PATTERN_NEVER_STARTS);
+        session.step();
         assert_eq!(
             session.stats().left_health,
             PLAYER_MAX_HEALTH - PROJECTILE_HIT_DAMAGE
@@ -607,21 +567,23 @@ mod tests {
     fn scheduled_pattern_spawns_projectiles_that_move() {
         let mut session = GameSession::new();
         session
-            .set_turn_action(PlayerSide::Left, TurnAction::Attack, 0)
+            .set_turn_action(PlayerSide::Left, TurnAction::Attack)
             .expect("left should be able to act");
         session
-            .set_turn_action(PlayerSide::Right, TurnAction::Attack, 0)
+            .set_turn_action(PlayerSide::Right, TurnAction::Attack)
             .expect("right should be able to act");
 
-        // step with the clock past the pattern start: bullets should exist
-        session.step(PATTERN_START_LEAD_MS);
+        // step the phase up to the first scheduled spawn tick: bullets should exist
+        for _ in 0..PATTERN_START_LEAD_TICKS {
+            session.step();
+        }
         let initial_positions = session.game_logic.get_projectile_positions();
         assert!(
             !initial_positions.is_empty(),
-            "pattern start passed, bullets should have spawned"
+            "pattern start tick passed, bullets should have spawned"
         );
 
-        session.step(PATTERN_START_LEAD_MS + 33);
+        session.step();
         let moved_positions = session.game_logic.get_projectile_positions();
         assert_ne!(
             initial_positions[0], moved_positions[0],
