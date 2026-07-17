@@ -9,9 +9,9 @@ use include_dir::{Dir, include_dir};
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
 use shared::game::{
-    BattleGameState, BattleStats, BattleWinner, DODGE_PHASE_TICKS, ENEMY_POSITION, GAME_TIME_DELTA,
-    GAME_TIME_STEP, GameLogic, MoveGameState, PROJECTILE_SIZE, PlayerSide, TurnAction,
-    get_current_bullet_count, get_data_for_projectile_from_index,
+    BattleGameState, BattleStats, BattleWinner, ENEMY_POSITION, ENEMY_TURN_PHASE_TICKS,
+    GAME_TIME_DELTA, GAME_TIME_STEP, GameLogic, MoveGameState, PROJECTILE_SIZE, PlayerSide,
+    TurnAction, get_current_bullet_count, get_data_for_projectile_from_index,
 };
 use shared::rpc::{
     InputSequence, LobbyId, LobbyState, PendingMoveInput, ReliableRpcClientMessage,
@@ -384,26 +384,26 @@ async fn main() {
                     // Leaving the dodge segment (next choice phase, or the battle ending)
                     // clears any predicted bullets still alive.
                     match &state {
-                        BattleGameState::ChoosingActions { .. } | BattleGameState::Win { .. } => {
+                        BattleGameState::PlayerTurn { .. } | BattleGameState::Win { .. } => {
                             game_logic.game_logic.clear_projectiles();
                             game_logic.amount_of_spawned_bullets = 0;
                             game_logic.ticks_elapsed_in_current_dodge_phase = 0;
                         }
-                        BattleGameState::Dodging {
+                        BattleGameState::EnemyTurn {
                             ticks_remaining, ..
                         } => {
                             // sync our copy of the phase's tick clock to the server's,
                             // plus half an RTT for the time this message spent in flight.
                             if !matches!(
                                 ui_game_state.current_game_state,
-                                Some(BattleGameState::Dodging { .. })
+                                Some(BattleGameState::EnemyTurn { .. })
                             ) {
                                 let latency_ticks =
                                     (game_logic.estimated_rtt / 2.0 / GAME_TIME_DELTA).round()
                                         as InputSequence;
-                                game_logic.ticks_elapsed_in_current_dodge_phase = DODGE_PHASE_TICKS
-                                    .saturating_sub(*ticks_remaining)
-                                    + latency_ticks;
+                                game_logic.ticks_elapsed_in_current_dodge_phase =
+                                    ENEMY_TURN_PHASE_TICKS.saturating_sub(*ticks_remaining)
+                                        + latency_ticks;
                             }
                         }
                     }
@@ -574,7 +574,7 @@ async fn main() {
             // TODO: Figure out how a "training mode" would work
             if let Some(side) = game_logic.player_side
                 && ui_game_state.lobby_state == LobbyState::Running
-                && let Some(&BattleGameState::Dodging { stats, .. }) =
+                && let Some(&BattleGameState::EnemyTurn { stats, .. }) =
                     ui_game_state.current_game_state.as_ref()
                 && stats.check_if_alive(side)
             {
@@ -740,15 +740,15 @@ async fn main() {
                                 && let Some(side) = game_logic.player_side
                             {
                                 let stats = match game_state {
-                                    BattleGameState::ChoosingActions { stats, .. }
-                                    | BattleGameState::Dodging { stats, .. }
+                                    BattleGameState::PlayerTurn { stats, .. }
+                                    | BattleGameState::EnemyTurn { stats, .. }
                                     | BattleGameState::Win { stats, .. } => stats,
                                 };
                                 draw_battle_stats(ui, stats, side);
                                 ui.separator();
 
                                 match game_state {
-                                    BattleGameState::ChoosingActions {
+                                    BattleGameState::PlayerTurn {
                                         left_ready,
                                         right_ready,
                                         ..
@@ -781,7 +781,7 @@ async fn main() {
                                             }
                                         }
                                     }
-                                    BattleGameState::Dodging {
+                                    BattleGameState::EnemyTurn {
                                         ticks_remaining, ..
                                     } => {
                                         let seconds_remaining = *ticks_remaining as f32

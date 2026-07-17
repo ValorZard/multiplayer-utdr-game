@@ -1,8 +1,9 @@
 use rapier2d::math::Vec2;
 use shared::game::{
-    ATTACK_DAMAGE, BattleGameState, BattleStats, BattleWinner, DEFEND_BLOCK, DODGE_PHASE_TICKS,
-    GameLogic, Health, MoveGameState, MoveInputState, PROJECTILE_HIT_DAMAGE, PlayerSide,
-    TurnAction, get_current_bullet_count, get_data_for_projectile_from_index,
+    ATTACK_DAMAGE, BattleGameState, BattleStats, BattleWinner, DEFEND_BLOCK,
+    ENEMY_TURN_PHASE_TICKS, GameLogic, Health, MoveGameState, MoveInputState,
+    PROJECTILE_HIT_DAMAGE, PlayerSide, TurnAction, get_current_bullet_count,
+    get_data_for_projectile_from_index,
 };
 use shared::rpc::{InputSequence, RemoteTimestamp};
 use std::collections::BTreeMap;
@@ -34,11 +35,11 @@ impl std::error::Error for GameError {}
 // until the timer runs out and the next choice phase begins.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum BattlePhase {
-    Choosing {
+    PlayerTurn {
         left_action: Option<TurnAction>,
         right_action: Option<TurnAction>,
     },
-    Dodging {
+    EnemyTurn {
         ticks_remaining: u32,
         // damage each side can still absorb this segment (from Defend)
         left_block: Health,
@@ -75,7 +76,7 @@ impl GameSession {
     pub fn new() -> Self {
         let stats = BattleStats::new();
         Self {
-            phase: BattlePhase::Choosing {
+            phase: BattlePhase::PlayerTurn {
                 left_action: None,
                 right_action: None,
             },
@@ -106,18 +107,18 @@ impl GameSession {
     pub fn compute_state(&self) -> BattleGameState {
         let stats = self.stats();
         match &self.phase {
-            BattlePhase::Choosing {
+            BattlePhase::PlayerTurn {
                 left_action,
                 right_action,
-            } => BattleGameState::ChoosingActions {
+            } => BattleGameState::PlayerTurn {
                 // dead players don't get a vote, so they always read as ready
                 left_ready: left_action.is_some() || self.left_health == 0,
                 right_ready: right_action.is_some() || self.right_health == 0,
                 stats,
             },
-            BattlePhase::Dodging {
+            BattlePhase::EnemyTurn {
                 ticks_remaining, ..
-            } => BattleGameState::Dodging {
+            } => BattleGameState::EnemyTurn {
                 ticks_remaining: *ticks_remaining,
                 stats,
             },
@@ -130,12 +131,13 @@ impl GameSession {
 
     // First action per side per turn wins; repeats are ignored so packet
     // retries can't change a locked-in choice.
+    // think the proper term for this is "idempotent"
     pub fn set_turn_action(
         &mut self,
         side: PlayerSide,
         action: TurnAction,
     ) -> Result<BattleGameState, GameError> {
-        let BattlePhase::Choosing {
+        let BattlePhase::PlayerTurn {
             left_action,
             right_action,
         } = &mut self.phase
@@ -189,8 +191,8 @@ impl GameSession {
             return;
         }
 
-        self.phase = BattlePhase::Dodging {
-            ticks_remaining: DODGE_PHASE_TICKS,
+        self.phase = BattlePhase::EnemyTurn {
+            ticks_remaining: ENEMY_TURN_PHASE_TICKS,
             left_block: match left_choice {
                 Some(TurnAction::Defend) => DEFEND_BLOCK,
                 _ => 0,
@@ -260,6 +262,13 @@ impl GameSession {
     }
 
     pub fn step(&mut self) {
+        self.step_player_inputs();
+        self.game_logic.step_physics();
+        self.step_enemy_turn_phase();
+        self.tick = self.tick.wrapping_add(1);
+    }
+
+    fn step_player_inputs(&mut self) {
         // Unreliable packets can be dropped permanently, so do not stall waiting
         // for contiguous sequences. Apply the next available received input.
         // TODO: Add server-side prediction maybe?
@@ -295,15 +304,10 @@ impl GameSession {
             .update_position_with_input(PlayerSide::Left, &left_input);
         self.game_logic
             .update_position_with_input(PlayerSide::Right, &right_input);
-        self.game_logic.step_physics();
-
-        self.tick = self.tick.wrapping_add(1);
-
-        self.step_dodge_phase();
     }
 
-    fn step_dodge_phase(&mut self) {
-        let BattlePhase::Dodging {
+    fn step_enemy_turn_phase(&mut self) {
+        let BattlePhase::EnemyTurn {
             ticks_remaining,
             mut left_block,
             mut right_block,
@@ -322,7 +326,7 @@ impl GameSession {
         // Spawn any bullets whose scheduled tick has passed.
         // The client runs this same schedule/pattern against its own phase tick clock,
         // which is what keeps the predicted bullets in sync with the server's.
-        let elapsed_ticks = DODGE_PHASE_TICKS - ticks_remaining;
+        let elapsed_ticks = ENEMY_TURN_PHASE_TICKS - ticks_remaining;
         while spawned_bullets < get_current_bullet_count(elapsed_ticks) {
             let (position, velocity) = get_data_for_projectile_from_index(spawned_bullets);
             self.game_logic.spawn_projectile(position, velocity);
@@ -353,12 +357,12 @@ impl GameSession {
             BattlePhase::Won(BattleWinner::Enemy)
         } else if ticks_remaining == 0 {
             self.game_logic.clear_projectiles();
-            BattlePhase::Choosing {
+            BattlePhase::PlayerTurn {
                 left_action: None,
                 right_action: None,
             }
         } else {
-            BattlePhase::Dodging {
+            BattlePhase::EnemyTurn {
                 ticks_remaining,
                 left_block,
                 right_block,
@@ -389,7 +393,7 @@ mod tests {
         // one side locked in, still waiting on the other, enemy untouched
         assert_eq!(
             state,
-            BattleGameState::ChoosingActions {
+            BattleGameState::PlayerTurn {
                 left_ready: true,
                 right_ready: false,
                 stats: BattleStats::new(),
@@ -399,14 +403,14 @@ mod tests {
         let state = session
             .set_turn_action(PlayerSide::Right, TurnAction::Attack)
             .expect("right should be able to act");
-        let BattleGameState::Dodging {
+        let BattleGameState::EnemyTurn {
             ticks_remaining,
             stats,
         } = state
         else {
             panic!("both players acted, dodge phase should begin: {state:?}");
         };
-        assert_eq!(ticks_remaining, DODGE_PHASE_TICKS);
+        assert_eq!(ticks_remaining, ENEMY_TURN_PHASE_TICKS);
         assert_eq!(stats.enemy_health, ENEMY_MAX_HEALTH - 2 * ATTACK_DAMAGE);
     }
 
@@ -425,7 +429,7 @@ mod tests {
             .expect("right should be able to act");
 
         // only defends were locked in, so the enemy took no damage
-        let BattleGameState::Dodging { stats, .. } = session.compute_state() else {
+        let BattleGameState::EnemyTurn { stats, .. } = session.compute_state() else {
             panic!("dodge phase should have begun");
         };
         assert_eq!(stats.enemy_health, ENEMY_MAX_HEALTH);

@@ -20,18 +20,18 @@ pub const GAME_TIME_STEP_MS: RemoteTimestamp = 33;
 pub const GAME_TIME_STEP: Duration = Duration::from_millis(GAME_TIME_STEP_MS as u64);
 pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
 
-/// Length of the bullet-hell dodge segment, in milliseconds (for now, maybe refactor to ticks later?)
-pub const DODGE_PHASE_LENGTH_MS: RemoteTimestamp = 10000;
-pub const DODGE_PHASE_TICKS: InputSequence =
-    (DODGE_PHASE_LENGTH_MS / GAME_TIME_STEP_MS) as InputSequence;
+/// Length of the bullet-hell dodge segment, in milliseconds (gets converted to tick for use by client/server)
+pub const ENEMY_TURN_PHASE_LENGTH_MS: RemoteTimestamp = 10000;
+pub const ENEMY_TURN_PHASE_TICKS: InputSequence =
+    (ENEMY_TURN_PHASE_LENGTH_MS / GAME_TIME_STEP_MS) as InputSequence;
 /// Gap between bullets of a dodge pattern (we don't really use MS, that gets converted to ticks).
 /// Spawning is scheduled in simulation ticks so client and server spawn each bullet on the identical tick of the phase,
 /// keeping the physics deterministic with no shared unix clock.
 const PROJECTILE_SPAWN_INTERVAL_MS: RemoteTimestamp = 500;
 pub const PROJECTILE_SPAWN_INTERVAL_TICKS: InputSequence =
     (PROJECTILE_SPAWN_INTERVAL_MS / GAME_TIME_STEP_MS) as InputSequence;
-pub const AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE: u32 =
-    DODGE_PHASE_TICKS / PROJECTILE_SPAWN_INTERVAL_TICKS;
+pub const AMOUNT_OF_PROJECTILES_IN_ENEMY_TURN_PHASE: u32 =
+    ENEMY_TURN_PHASE_TICKS / PROJECTILE_SPAWN_INTERVAL_TICKS;
 /// How far into the dodge phase (in ticks) the first bullet spawns,
 /// so the reliable message announcing the phase reaches clients before any bullet
 /// exists anywhere.
@@ -55,7 +55,7 @@ pub fn get_current_bullet_count(elapsed_ticks: InputSequence) -> u32 {
         return 0;
     }
     ((elapsed_ticks - PATTERN_START_LEAD_TICKS) / PROJECTILE_SPAWN_INTERVAL_TICKS + 1)
-        .min(AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE)
+        .min(AMOUNT_OF_PROJECTILES_IN_ENEMY_TURN_PHASE)
 }
 
 /// Deterministic dodge pattern: shoot bullets at the trapped box,
@@ -64,8 +64,8 @@ pub fn get_current_bullet_count(elapsed_ticks: InputSequence) -> u32 {
 /// the box center (the origin) over the course of the phase.
 pub fn get_data_for_projectile_from_index(index: u32) -> (Vec2, Vec2) {
     // 0.0 for the first bullet of the phase, 1.0 for the last.
-    let progress = index.min(AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE) as f32
-        / AMOUNT_OF_PROJECTILES_IN_DODGE_PHASE as f32;
+    let progress = index.min(AMOUNT_OF_PROJECTILES_IN_ENEMY_TURN_PHASE) as f32
+        / AMOUNT_OF_PROJECTILES_IN_ENEMY_TURN_PHASE as f32;
     let edge_x = if index % 2 == 0 {
         -PLAYER_TRAPPED_BOX_WIDTH / 2.
     } else {
@@ -149,14 +149,14 @@ impl BattleStats {
 pub enum BattleGameState {
     // Both players pick simultaneously; the flags only say who has locked in,
     // never what they picked, so choices stay hidden until the turn resolves.
-    ChoosingActions {
+    PlayerTurn {
         left_ready: bool,
         right_ready: bool,
         stats: BattleStats,
     },
-    Dodging {
-        // counts down from DODGE_PHASE_TICKS; clients derive the bullet
-        // pattern's elapsed-tick clock from this shared tick reference
+    EnemyTurn {
+        // counts down from ENEMY_TURN_PHASE_TICKS
+        // clients figure out the bullet pattern's elapsed-tick clock from this shared tick reference
         ticks_remaining: InputSequence,
         stats: BattleStats,
     },
