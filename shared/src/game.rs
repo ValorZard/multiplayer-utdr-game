@@ -302,8 +302,6 @@ pub struct Projectile {}
 // this is how the rectangle is displayed in the game world, not in physics coords
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct GameRectangle {
-    pub x: f32,
-    pub y: f32,
     pub width: f32,
     pub height: f32,
 }
@@ -313,8 +311,6 @@ impl From<Aabb> for GameRectangle {
         let min = convert_vec2_physics_to_pixel(aabb.mins);
         let max = convert_vec2_physics_to_pixel(aabb.maxs);
         GameRectangle {
-            x: min.x,
-            y: min.y,
             width: max.x - min.x,
             height: max.y - min.y,
         }
@@ -322,26 +318,8 @@ impl From<Aabb> for GameRectangle {
 }
 
 impl GameRectangle {
-    pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        GameRectangle {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    // both kiss3d and rapier put objects based on their position in the center of the object
-    // so there's no need to adjust for width or height
-    // see: https://docs.rs/kiss3d/latest/kiss3d/camera/enum.CoordinateSystem2d.html#variant.CenterUp
-    pub const fn get_physics_position(&self) -> Vec2 {
-        let center_x = self.x * PIXEL_TO_PHYSICS_SCALE;
-        let center_y = self.y * PIXEL_TO_PHYSICS_SCALE;
-        Vec2::new(center_x, center_y)
-    }
-
-    pub const fn get_pixel_position(&self) -> Vec2 {
-        Vec2::new(self.x, self.y)
+    pub const fn new(width: f32, height: f32) -> Self {
+        GameRectangle { width, height }
     }
 
     pub const fn get_half_extents_for_physics(&self) -> Vec2 {
@@ -362,7 +340,7 @@ pub struct GameLogic {
 pub const PHYSICS_TO_PIXEL_SCALE: f32 = 50.0; // 1 meter in physics engine equals 50 pixels
 pub const PIXEL_TO_PHYSICS_SCALE: f32 = 1.0 / PHYSICS_TO_PIXEL_SCALE;
 pub const PLAYER_PHYSICS_RADIUS: f32 = 1.0; // in physics scale
-pub const PLAYER_GAME_RECTANGLE: GameRectangle = GameRectangle::new(0., 0., 10., 10.);
+pub const PLAYER_GAME_RECTANGLE: GameRectangle = GameRectangle::new(10., 10.);
 pub const PLAYER_STARTING_POSITION: Vec2 = Vec2::new(0., 0.);
 pub const PLAYER_TRAPPED_BOX_WIDTH: f32 = 100.;
 pub const PLAYER_TRAPPED_BOX_HEIGHT: f32 = 50.;
@@ -457,10 +435,10 @@ impl GameLogic {
     ) {
         // spawn physics object for players to collide with
         // create a rectangle in the game world
-        let rectangle = GameRectangle::new(x, y, width, height);
+        let rectangle = GameRectangle::new(width, height);
         // GameRectangle's x/y is its center (matching kiss3d's center-based
         // set_position), so the physics collider sits at the same point.
-        let physics_position = rectangle.get_physics_position();
+        let physics_position = Vec2::new(x, y) * PIXEL_TO_PHYSICS_SCALE;
         let rectangle_half_extents = rectangle.get_half_extents_for_physics();
         let collider = ColliderBuilder::cuboid(rectangle_half_extents.x, rectangle_half_extents.y)
             .collision_groups(InteractionGroups::new(
@@ -488,8 +466,6 @@ impl GameLogic {
             .build();
 
         let mut player_rect = PLAYER_GAME_RECTANGLE.clone();
-        player_rect.x = spawn_position.x;
-        player_rect.y = spawn_position.y;
 
         let half_extents = player_rect.get_half_extents_for_physics();
 
@@ -512,11 +488,20 @@ impl GameLogic {
         world.spawn((side, body_handle, collider_handle, controller, player_rect))
     }
 
-    pub fn get_obstacle_rectangles(&mut self) -> Vec<&GameRectangle> {
+    pub fn get_obstacle_rectangles_with_position(&mut self) -> Vec<(&GameRectangle, Vec2)> {
+        // The collider is the source of truth for where the wall sits, so read
+        // its position straight from the physics world (converted to pixel space)
+        // rather than duplicating it as a separate component.
+        let colliders = &self.physics.colliders;
         self.world
-            .query_mut::<(&GameRectangle, &Obstacle)>()
+            .query_mut::<(&GameRectangle, &ColliderHandle, &Obstacle)>()
             .into_iter()
-            .map(|(rectangle, _)| rectangle)
+            .map(|(rectangle, collider_handle, _)| {
+                let position = convert_vec2_physics_to_pixel(
+                    colliders[*collider_handle].position().translation,
+                );
+                (rectangle, position)
+            })
             .collect()
     }
 
@@ -531,19 +516,6 @@ impl GameLogic {
         self.world
             .query_one_mut::<(&RigidBodyHandle, &KinematicCharacterController)>(entity)
             .expect("Player should exist here")
-    }
-
-    fn set_position_for_player_rect(&mut self, player_side: PlayerSide, new_position: Vec2) {
-        let entity = match player_side {
-            PlayerSide::Left => self.left_player,
-            PlayerSide::Right => self.right_player,
-        };
-        let rect = self
-            .world
-            .query_one_mut::<&mut GameRectangle>(entity)
-            .expect("Player should exist here");
-        rect.x = new_position.x;
-        rect.y = new_position.y;
     }
 
     pub fn setup_game(&mut self) {
@@ -617,7 +589,6 @@ impl GameLogic {
         // where they're going next.
         self.physics.bodies[handle].set_next_kinematic_translation(new_pos);
         let new_pixel_position = convert_vec2_physics_to_pixel(new_pos);
-        self.set_position_for_player_rect(player_side, new_pixel_position);
         new_pixel_position
     }
 
@@ -631,20 +602,15 @@ impl GameLogic {
         let handle = handle.clone();
         let body = &mut self.physics.bodies[handle];
         body.set_next_kinematic_translation(convert_vec2_pixel_to_physics(new_position));
-        self.set_position_for_player_rect(player_side, new_position);
         new_position
     }
 
     /// Returns position in game (pixel) space, not physics space.
     pub fn get_position(&mut self, player_side: PlayerSide) -> Vec2 {
-        let entity = match player_side {
-            PlayerSide::Left => self.left_player,
-            PlayerSide::Right => self.right_player,
-        };
-        self.world
-            .query_one_mut::<&GameRectangle>(entity)
-            .expect("Player should exist here")
-            .get_pixel_position()
+        let (handle, _) = self.character_handle_for(player_side);
+        let handle = handle.clone();
+        let body = &mut self.physics.bodies[handle];
+        body.position().translation * PHYSICS_TO_PIXEL_SCALE
     }
 
     /// Advances the physics simulation. Call once per tick, after inputs

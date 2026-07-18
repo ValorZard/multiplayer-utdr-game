@@ -337,14 +337,16 @@ async fn main() {
     let mut remote_state_hash = 0;
 
     // TODO: dynamically set and remove game rectangles, but for now we can just assume there's only a set number right now
-    let rectangles = game_logic.game_logic.get_obstacle_rectangles();
-    for rect in rectangles {
+    let rectangles = game_logic
+        .game_logic
+        .get_obstacle_rectangles_with_position();
+    for (rect, position) in rectangles {
         let mut scene_rect = scene
             .add_rectangle(rect.width, rect.height)
             .set_color(YELLOW);
         // Draw at the collider's actual center (in pixel space) so the visible
         // box lines up with where collision really happens.
-        scene_rect.set_position(rect.get_pixel_position());
+        scene_rect.set_position(position);
     }
 
     // Client config
