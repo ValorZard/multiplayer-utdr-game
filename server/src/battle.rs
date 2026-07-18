@@ -50,6 +50,12 @@ enum BattlePhase {
     Won(BattleWinner),
 }
 
+impl BattlePhase {
+    pub fn is_player_turn(&self) -> bool {
+        matches!(self, Self::PlayerTurn { .. })
+    }
+}
+
 pub struct GameSession {
     phase: BattlePhase,
     left_health: Health,
@@ -280,8 +286,8 @@ impl GameSession {
                 input
             })
             .unwrap_or(self.left_last_applied_input);
-        // only apply input if player isn't dead
-        if self.left_health <= 0 {
+        // only apply input if player isn't dead or we're in player turn state and shouldn't move
+        if self.left_health <= 0 || self.phase.is_player_turn() {
             left_input = MoveInputState::default();
         }
         let mut right_input = self
@@ -292,8 +298,8 @@ impl GameSession {
                 input
             })
             .unwrap_or(self.right_last_applied_input);
-        // only apply input if player isn't dead
-        if self.right_health <= 0 {
+        // only apply input if player isn't dead or we're in player turn state
+        if self.right_health <= 0 || self.phase.is_player_turn() {
             right_input = MoveInputState::default();
         }
 

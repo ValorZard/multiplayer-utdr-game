@@ -15,8 +15,8 @@ use shared::game::{
 };
 use shared::rpc::{
     InputSequence, LobbyId, LobbyState, PendingMoveInput, ReliableRpcClientMessage,
-    ReliableRpcServerMessage, UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId,
-    YesOrNo, encode_message,
+    ReliableRpcServerMessage, RemoteTimestamp, UnreliableRpcClientMessage,
+    UnreliableRpcServerMessage, UserId, YesOrNo, encode_message,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -159,6 +159,11 @@ struct ClientGameLogic {
     last_acknowledged_sequence: InputSequence,
     estimated_rtt: f32,
     jitter_rtt: f32,
+    // The echo_client_time_ms of the last snapshot we sampled RTT from.
+    // The server echoes the newest input timestamp verbatim, so an unchanged
+    // echo means no new input has reached it (e.g. during PlayerTurn, when we
+    // send none) and the sample would measure idle time instead of latency.
+    last_sampled_echo_time_ms: RemoteTimestamp,
     game_logic: GameLogic,
     player_side: Option<PlayerSide>,
     // How many bullets of the current dodge pattern we've spawned locally.
@@ -181,6 +186,7 @@ impl ClientGameLogic {
             last_acknowledged_sequence: 0,
             estimated_rtt: 0.0,
             jitter_rtt: 0.0,
+            last_sampled_echo_time_ms: 0,
             game_logic: GameLogic::new(),
             player_side: None,
             amount_of_spawned_bullets: 0,
@@ -484,7 +490,12 @@ async fn main() {
                         // RTT Calculation is based off of this:
                         // https://www.scs.stanford.edu/08sp-cs144/notes/l6.pdf
                         // specifically slide 14
-                        if echo_client_time_ms > 0 {
+                        // Karn's algorithm, roughly: only sample when the echo is for a
+                        // new input packet. An unchanged echo (PlayerTurn, dropped inputs)
+                        // would measure time-since-last-input, not latency.
+                        // Karn's algorithim is explained here: https://www.cs.unc.edu/~jasleen/Courses/COMP631/papers/karn-algo.pdf
+                        if echo_client_time_ms > game_logic.last_sampled_echo_time_ms {
+                            game_logic.last_sampled_echo_time_ms = echo_client_time_ms;
                             let sample_rtt =
                                 (current_time_ms - echo_client_time_ms).max(0) as f32 / 1000.0;
                             game_logic.estimated_rtt = ((1. - RTT_EWMA_ALPHA)
@@ -574,21 +585,58 @@ async fn main() {
             // TODO: Figure out how a "training mode" would work
             if let Some(side) = game_logic.player_side
                 && ui_game_state.lobby_state == LobbyState::Running
-                && let Some(&BattleGameState::EnemyTurn { stats, .. }) =
-                    ui_game_state.current_game_state.as_ref()
+                && let Some(state) = ui_game_state.current_game_state.as_ref()
+                && let stats = state.get_stats()
                 && stats.check_if_alive(side)
             {
+                let in_enemy_turn = matches!(state, BattleGameState::EnemyTurn { .. });
+                // Outside the enemy turn phase the server discards movement (see
+                // is_player_turn in step_player_inputs) and holds players at center,
+                // so send neutral input and skip local prediction. We still send a
+                // packet every tick: it refreshes the server's echoed timestamp,
+                // which is what keeps the RTT estimate fresh between enemy turn phases.
+                let input_to_send = if in_enemy_turn {
+                    input
+                } else {
+                    shared::game::MoveInputState::default()
+                };
+
                 let sequence = game_logic.current_input_sequence;
                 game_logic.current_input_sequence =
                     game_logic.current_input_sequence.wrapping_add(1);
 
-                game_logic
-                    .pending_inputs
-                    .push_back(PendingMoveInput { input, sequence });
+                game_logic.pending_inputs.push_back(PendingMoveInput {
+                    input: input_to_send,
+                    sequence,
+                });
 
-                game_logic
-                    .game_logic
-                    .update_position_with_input(side, &input);
+                // do all of the specific game logic during an enemies turn
+                if in_enemy_turn {
+                    game_logic
+                        .game_logic
+                        .update_position_with_input(side, &input_to_send);
+                    game_logic.ticks_elapsed_in_current_dodge_phase = game_logic
+                        .ticks_elapsed_in_current_dodge_phase
+                        .saturating_add(1);
+                    let scheduled_bullets =
+                        get_current_bullet_count(game_logic.ticks_elapsed_in_current_dodge_phase);
+                    while game_logic.amount_of_spawned_bullets < scheduled_bullets {
+                        let (position, velocity) = get_data_for_projectile_from_index(
+                            game_logic.amount_of_spawned_bullets,
+                        );
+                        game_logic.game_logic.spawn_projectile(position, velocity);
+                        game_logic.amount_of_spawned_bullets += 1;
+                    }
+
+                    game_logic.game_logic.step_physics();
+
+                    // Mirror the server's despawn-on-contact so predicted bullets
+                    // visually disappear when they hit someone; the damage itself is
+                    // server-authoritative and arrives through the battle stats.
+                    let _ = game_logic
+                        .game_logic
+                        .detect_projectile_hits(stats.left_health > 0, stats.right_health > 0);
+                }
                 // send all inputs that haven't been acknowledged yet
                 // (there is a max amount of inputs we can send before the message gets too big)
                 if let Some(rpc_sender) = unreliable_client_rpc_sender.as_ref() {
@@ -604,29 +652,6 @@ async fn main() {
                         client_send_time_ms: current_time_ms,
                     });
                 }
-                // Dodge phase prediction: advance our copy of the phase's tick
-                // clock and spawn the same deterministic bullets the server
-                // does, on the same tick of the pattern that it does.
-                game_logic.ticks_elapsed_in_current_dodge_phase = game_logic
-                    .ticks_elapsed_in_current_dodge_phase
-                    .saturating_add(1);
-                let scheduled_bullets =
-                    get_current_bullet_count(game_logic.ticks_elapsed_in_current_dodge_phase);
-                while game_logic.amount_of_spawned_bullets < scheduled_bullets {
-                    let (position, velocity) =
-                        get_data_for_projectile_from_index(game_logic.amount_of_spawned_bullets);
-                    game_logic.game_logic.spawn_projectile(position, velocity);
-                    game_logic.amount_of_spawned_bullets += 1;
-                }
-
-                game_logic.game_logic.step_physics();
-
-                // Mirror the server's despawn-on-contact so predicted bullets
-                // visually disappear when they hit someone; the damage itself is
-                // server-authoritative and arrives through the battle stats.
-                let _ = game_logic
-                    .game_logic
-                    .detect_projectile_hits(stats.left_health > 0, stats.right_health > 0);
             }
         }
 

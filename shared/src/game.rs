@@ -166,6 +166,23 @@ pub enum BattleGameState {
     },
 }
 
+impl BattleGameState {
+    pub fn get_stats(&self) -> &BattleStats {
+        match self {
+            BattleGameState::PlayerTurn {
+                left_ready,
+                right_ready,
+                stats,
+            } => stats,
+            BattleGameState::EnemyTurn {
+                ticks_remaining,
+                stats,
+            } => stats,
+            BattleGameState::Win { winner, stats } => stats,
+        }
+    }
+}
+
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 #[rkyv(
     // This will generate a PartialEq impl between our unarchived
