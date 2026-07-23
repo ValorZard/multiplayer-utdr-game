@@ -9,12 +9,14 @@ use include_dir::{Dir, include_dir};
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
 use shared::game::{
-    GAME_TIME_STEP, GameLogic, MoveGameState, PlayerSide, RPSGameState, RPSWinState, TurnInput,
+    BattleGameState, BattleStats, BattleWinner, ENEMY_POSITION, ENEMY_TURN_PHASE_TICKS,
+    GAME_TIME_DELTA, GAME_TIME_STEP, GameLogic, MoveGameState, PROJECTILE_SIZE, PlayerSide,
+    TurnAction, get_current_bullet_count, get_data_for_projectile_from_index,
 };
 use shared::rpc::{
     InputSequence, LobbyId, LobbyState, PendingMoveInput, ReliableRpcClientMessage,
-    ReliableRpcServerMessage, UnreliableRpcClientMessage, UnreliableRpcServerMessage, UserId,
-    YesOrNo, encode_message,
+    ReliableRpcServerMessage, RemoteTimestamp, UnreliableRpcClientMessage,
+    UnreliableRpcServerMessage, UserId, YesOrNo, encode_message,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -102,11 +104,7 @@ struct UiGameState {
     ui_state: UiState,
     lobby_state: LobbyState,
     lobby_id: Option<LobbyId>,
-    remote_right_input: Option<TurnInput>,
-    remote_left_input: Option<TurnInput>,
-    player_side: Option<PlayerSide>,
-    win_state: Option<RPSWinState>,
-    current_game_state: Option<RPSGameState>,
+    current_game_state: Option<BattleGameState>,
     user_id: Option<UserId>,
 }
 
@@ -116,10 +114,6 @@ impl UiGameState {
             ui_state: UiState::NotConnected,
             lobby_state: LobbyState::Empty,
             lobby_id: None,
-            remote_right_input: None,
-            remote_left_input: None,
-            player_side: None,
-            win_state: None,
             current_game_state: None,
             user_id: None,
         }
@@ -137,9 +131,6 @@ struct ClientConfig {
 
 const MAX_PENDING_INPUTS: usize = 256;
 const MAX_INPUTS_TO_SEND: usize = 8;
-const MAX_REMOTE_SNAPSHOTS: InputSequence = 64;
-// We assume both client and server run on 30 fps
-const DEFAULT_REMOTE_INTERPOLATION_DELAY_FRAMES: InputSequence = 2;
 const RTT_EWMA_ALPHA: f32 = 0.125;
 const RTT_EWMA_BETA: f32 = 0.10;
 
@@ -160,64 +151,127 @@ fn prune_acknowledged_inputs(
     }
 }
 
-// client side replication taken from: https://www.gabrielgambetta.com/client-side-prediction-live-demo.html
-// (right click and inspect webpage to see the actual javascript)
-fn interpolate_remote_position(
-    snapshots: &mut BTreeMap<InputSequence, Vec2>,
-    render_delay_ticks: InputSequence,
-) -> Option<Vec2> {
-    let latest_known_tick = *snapshots.keys().next_back()?;
-    let target_time = latest_known_tick.saturating_sub(render_delay_ticks);
-
-    let oldest_allowed = latest_known_tick.saturating_sub(MAX_REMOTE_SNAPSHOTS);
-    snapshots.retain(|k, _| *k >= oldest_allowed);
-
-    let before = snapshots.range(..=target_time).next_back();
-    let after = snapshots.range(target_time..).next();
-
-    // TODO: Explain the math behind this better.
-    match (before, after) {
-        (Some((t0, p0)), Some((t1, p1))) => {
-            if t0 == t1 {
-                Some(*p0)
-            } else {
-                let frac = (target_time - t0) as f32 / (t1 - t0) as f32;
-                Some(*p0 + (*p1 - *p0) * frac) // lerp by actual gap, not flat average
-            }
-        }
-        (Some((_, p)), None) => Some(*p),
-        (None, Some((_, p))) => Some(*p),
-        (None, None) => None,
-    }
-}
 struct ClientGameLogic {
     // Ensure move prediction starts from a clean baseline when a round begins.
     pending_inputs: VecDeque<PendingMoveInput>,
-    remote_snapshots: BTreeMap<InputSequence, Vec2>,
+    latest_remote_snapshot: Option<(InputSequence, MoveGameState)>,
     current_input_sequence: InputSequence,
     last_acknowledged_sequence: InputSequence,
-    dynamic_render_delay_ticks: InputSequence,
     estimated_rtt: f32,
     jitter_rtt: f32,
+    // The echo_client_time_ms of the last snapshot we sampled RTT from.
+    // The server echoes the newest input timestamp verbatim, so an unchanged
+    // echo means no new input has reached it (e.g. during PlayerTurn, when we
+    // send none) and the sample would measure idle time instead of latency.
+    last_sampled_echo_time_ms: RemoteTimestamp,
     game_logic: GameLogic,
+    player_side: Option<PlayerSide>,
+    // How many bullets of the current dodge pattern we've spawned locally.
+    // The pattern itself is deterministic and scheduled in simulation ticks,
+    // so this count is all the state prediction needs.
+    amount_of_spawned_bullets: u32,
+    // Local copy of the current dodge phase's tick clock:
+    // ticks elapsed since the phase began on the server.
+    // initialized from the ticks_remaining in the state message announcing the phase,
+    // then advanced once per local tick.
+    ticks_elapsed_in_current_dodge_phase: InputSequence,
 }
 
 impl ClientGameLogic {
     fn new() -> Self {
         Self {
             pending_inputs: VecDeque::new(),
-            remote_snapshots: BTreeMap::new(),
+            latest_remote_snapshot: None,
             current_input_sequence: 0,
             last_acknowledged_sequence: 0,
-            dynamic_render_delay_ticks: DEFAULT_REMOTE_INTERPOLATION_DELAY_FRAMES,
             estimated_rtt: 0.0,
             jitter_rtt: 0.0,
+            last_sampled_echo_time_ms: 0,
             game_logic: GameLogic::new(),
+            player_side: None,
+            amount_of_spawned_bullets: 0,
+            ticks_elapsed_in_current_dodge_phase: 0,
         }
     }
 
     fn reset(&mut self) {
+        // We keep the player side since this should be overridden when we (re)join a lobby
+        let player_side = self.player_side;
         *self = Self::new();
+        self.player_side = player_side;
+    }
+
+    fn update_snapshot(
+        &mut self,
+        acknowledged_sequence: InputSequence,
+        remote_snapshot: MoveGameState,
+    ) {
+        let (remote_side, remote_position) = match self.player_side {
+            Some(PlayerSide::Left) => (PlayerSide::Right, remote_snapshot.right_position),
+            Some(PlayerSide::Right) => (PlayerSide::Left, remote_snapshot.left_position),
+            None => return,
+        };
+        self.game_logic
+            .update_position_with_vec(remote_side, remote_position);
+        self.latest_remote_snapshot = Some((acknowledged_sequence, remote_snapshot));
+    }
+
+    // client side replication taken from: https://www.gabrielgambetta.com/client-side-prediction-live-demo.html
+    // (right click and inspect webpage to see the actual javascript)
+    // since this isn't PvP, we don't actually care all that much about hitting another player, we just care about the other enemies
+    // Lerp between the last authoritative snapshot (t0 = its acknowledged sequence) and the current predicted state (t1 = current_input_sequence),
+    fn interpolate_remote_position(&self, predicted_state: &mut MoveGameState) {
+        let side = match self.player_side {
+            Some(side) => side,
+            None => return,
+        };
+        let (remote_sequence, snapshot) = match self.latest_remote_snapshot.as_ref() {
+            Some(tuple) => tuple,
+            None => return,
+        };
+
+        // give the position of the opposite side of the local player
+        let remote_position = |state: &MoveGameState| match side {
+            PlayerSide::Left => state.right_position,
+            PlayerSide::Right => state.left_position,
+        };
+        let snapshot_position = remote_position(snapshot);
+        let predicted_position = remote_position(predicted_state);
+
+        // Sequences wrap, so measure the gap with wrapping_sub.
+        let ticks_between_remote_and_local =
+            self.current_input_sequence.wrapping_sub(*remote_sequence);
+        // TODO: For now, lets just lerp by 0.5
+        let lerped_position = if ticks_between_remote_and_local == 0 {
+            snapshot_position
+        } else {
+            snapshot_position.lerp(predicted_position, 0.5)
+        };
+        match side {
+            PlayerSide::Left => {
+                predicted_state.right_position = lerped_position;
+            }
+            PlayerSide::Right => {
+                predicted_state.left_position = lerped_position;
+            }
+        }
+    }
+}
+
+fn draw_battle_stats(ui: &mut egui::Ui, stats: &BattleStats, side: PlayerSide) {
+    let (own_health, partner_health) = match side {
+        PlayerSide::Left => (stats.left_health, stats.right_health),
+        PlayerSide::Right => (stats.right_health, stats.left_health),
+    };
+    ui.label(format!("Your HP: {own_health}"));
+    ui.label(format!("Partner HP: {partner_health}"));
+    ui.label(format!("Enemy HP: {}", stats.enemy_health));
+}
+
+fn win_message(winner: &BattleWinner) -> &'static str {
+    match winner {
+        BattleWinner::Players => "The enemy has fallen. You win!",
+        BattleWinner::Enemy => "Both of you have fallen... the enemy wins.",
     }
 }
 
@@ -248,6 +302,22 @@ async fn main() {
     let mut scene = SceneNode2d::empty();
     let mut local_player = scene.add_rectangle(10.0, 10.0).set_color(RED);
     let mut remote_player = scene.add_rectangle(10.0, 10.0).set_color(BLUE);
+    let mut enemy_node = scene.add_rectangle(30.0, 30.0).set_color(GREEN);
+    enemy_node.set_position(ENEMY_POSITION);
+
+    // Fixed pool of nodes for predicted bullets; unused ones are parked far
+    // off-screen since kiss3d nodes are cheapest to keep alive and move.
+    let offscreen = Vec2::new(1_000_000.0, 1_000_000.0);
+    const PROJECTILE_NODE_POOL: usize = 64;
+    let mut projectile_nodes: Vec<_> = (0..PROJECTILE_NODE_POOL)
+        .map(|_| {
+            let mut node = scene
+                .add_rectangle(PROJECTILE_SIZE, PROJECTILE_SIZE)
+                .set_color(WHITE);
+            node.set_position(offscreen);
+            node
+        })
+        .collect();
 
     // UI state
     let mut ui_game_state = UiGameState::new();
@@ -265,17 +335,18 @@ async fn main() {
     let mut game_logic = ClientGameLogic::new();
 
     let mut remote_state_hash = 0;
-    let mut predicted_state: MoveGameState;
 
     // TODO: dynamically set and remove game rectangles, but for now we can just assume there's only a set number right now
-    let rectangles = game_logic.game_logic.get_obstacle_rectangles();
-    for rect in rectangles {
+    let rectangles = game_logic
+        .game_logic
+        .get_obstacle_rectangles_with_position();
+    for (rect, position) in rectangles {
         let mut scene_rect = scene
             .add_rectangle(rect.width, rect.height)
             .set_color(YELLOW);
         // Draw at the collider's actual center (in pixel space) so the visible
         // box lines up with where collision really happens.
-        scene_rect.set_position(rect.get_pixel_position());
+        scene_rect.set_position(position);
     }
 
     // Client config
@@ -318,30 +389,30 @@ async fn main() {
                     {
                         continue;
                     }
+                    // Leaving the dodge segment (next choice phase, or the battle ending)
+                    // clears any predicted bullets still alive.
                     match &state {
-                        RPSGameState::StartRound => {
-                            // reset all game state on Start Round
-                            // Ensure local simulation entities exist as soon as we know our side.
-                            local_player.set_position(Vec2::ZERO);
-                            remote_player.set_position(Vec2::ZERO);
-                            game_logic.reset();
-                            local_player.set_position(Vec2::ZERO);
-                            remote_player.set_position(Vec2::ZERO);
+                        BattleGameState::PlayerTurn { .. } | BattleGameState::Win { .. } => {
+                            game_logic.game_logic.clear_projectiles();
+                            game_logic.amount_of_spawned_bullets = 0;
+                            game_logic.ticks_elapsed_in_current_dodge_phase = 0;
                         }
-                        RPSGameState::WaitingForLeftInput { right_input } => {
-                            ui_game_state.remote_right_input = Some(*right_input);
-                        }
-                        RPSGameState::WaitingForRightInput { left_input } => {
-                            ui_game_state.remote_left_input = Some(*left_input);
-                        }
-                        RPSGameState::Win {
-                            state,
-                            left_input,
-                            right_input,
+                        BattleGameState::EnemyTurn {
+                            ticks_remaining, ..
                         } => {
-                            ui_game_state.win_state = Some(state.clone());
-                            ui_game_state.remote_right_input = Some(*right_input);
-                            ui_game_state.remote_left_input = Some(*left_input);
+                            // sync our copy of the phase's tick clock to the server's,
+                            // plus half an RTT for the time this message spent in flight.
+                            if !matches!(
+                                ui_game_state.current_game_state,
+                                Some(BattleGameState::EnemyTurn { .. })
+                            ) {
+                                let latency_ticks =
+                                    (game_logic.estimated_rtt / 2.0 / GAME_TIME_DELTA).round()
+                                        as InputSequence;
+                                game_logic.ticks_elapsed_in_current_dodge_phase =
+                                    ENEMY_TURN_PHASE_TICKS.saturating_sub(*ticks_remaining)
+                                        + latency_ticks;
+                            }
                         }
                     }
                     ui_game_state.current_game_state = Some(state);
@@ -360,19 +431,18 @@ async fn main() {
                 }
                 ReliableRpcServerMessage::LobbyInit(side, lobby_id) => {
                     ui_game_state.lobby_id = Some(lobby_id);
-                    ui_game_state.player_side = Some(side);
+                    game_logic.player_side = Some(side);
                     ui_game_state.ui_state = UiState::LobbyWaiting;
                 }
                 ReliableRpcServerMessage::LobbyState(state) => {
                     // unless lobby state is finished, we really shouldn't have a win state
-                    // also don't updadte if the same lobby state has already been set
+                    // also don't update if the same lobby state has already been set
                     if ui_game_state.lobby_state != state {
                         match state {
                             LobbyState::Finished => {
                                 ui_game_state.ui_state = UiState::LobbyFinished;
                             }
                             LobbyState::Running => {
-                                ui_game_state.win_state = None;
                                 ui_game_state.ui_state = UiState::LobbyRunning;
                                 // Ensure move prediction starts from a clean baseline when a round begins.
                                 game_logic.reset();
@@ -402,7 +472,7 @@ async fn main() {
                     // hash state
                     remote_state_hash = hash_move_state(&state);
 
-                    if let Some(local_side) = ui_game_state.player_side {
+                    if let Some(local_side) = game_logic.player_side {
                         let (local_position, remote_position) = match local_side {
                             PlayerSide::Left => (state.left_position, state.right_position),
                             PlayerSide::Right => (state.right_position, state.left_position),
@@ -422,7 +492,12 @@ async fn main() {
                         // RTT Calculation is based off of this:
                         // https://www.scs.stanford.edu/08sp-cs144/notes/l6.pdf
                         // specifically slide 14
-                        if echo_client_time_ms > 0 {
+                        // Karn's algorithm, roughly: only sample when the echo is for a
+                        // new input packet. An unchanged echo (PlayerTurn, dropped inputs)
+                        // would measure time-since-last-input, not latency.
+                        // Karn's algorithim is explained here: https://www.cs.unc.edu/~jasleen/Courses/COMP631/papers/karn-algo.pdf
+                        if echo_client_time_ms > game_logic.last_sampled_echo_time_ms {
+                            game_logic.last_sampled_echo_time_ms = echo_client_time_ms;
                             let sample_rtt =
                                 (current_time_ms - echo_client_time_ms).max(0) as f32 / 1000.0;
                             game_logic.estimated_rtt = ((1. - RTT_EWMA_ALPHA)
@@ -434,16 +509,6 @@ async fn main() {
                                 + (RTT_EWMA_BETA * abs_error);
                         }
 
-                        // Interpolation delay ~= one-way latency + jitter buffer
-                        let target_render_delay_ticks =
-                            (((game_logic.estimated_rtt / 2.0) + game_logic.jitter_rtt)
-                                / game_time_step)
-                                .ceil() as InputSequence;
-                        game_logic.dynamic_render_delay_ticks = target_render_delay_ticks.clamp(
-                            DEFAULT_REMOTE_INTERPOLATION_DELAY_FRAMES,
-                            MAX_REMOTE_SNAPSHOTS.saturating_sub(1),
-                        );
-
                         game_logic.last_acknowledged_sequence = acknowledged_sequence;
 
                         prune_acknowledged_inputs(
@@ -451,17 +516,20 @@ async fn main() {
                             acknowledged_sequence,
                         );
 
+                        // update local position based on what the server sends up
+                        // server is the authority, we can't override it or else desyncs will happen.
                         game_logic
                             .game_logic
                             .update_position_with_vec(local_side, local_position);
 
+                        // however, we can use the inputs we stored to predict what the server SHOULD be.
                         for pending in game_logic.pending_inputs.iter() {
                             game_logic
                                 .game_logic
                                 .update_position_with_input(local_side, &pending.input);
                         }
                         // we want to give each remote snapshot a timestamp from the server itself
-                        game_logic.remote_snapshots.insert(tick, remote_position);
+                        game_logic.update_snapshot(acknowledged_sequence, state);
                     }
                 }
             }
@@ -513,20 +581,64 @@ async fn main() {
         while game_time_step_timer >= GAME_TIME_STEP {
             game_time_step_timer -= GAME_TIME_STEP;
             // make sure LobbyState is running, because building up inputs before network syncing is bad
-            if let Some(side) = ui_game_state.player_side
+            // TODO: for now we make all game logic only execute while we're inside a lobby
+            // ideally we would LIKE to be able to do game logic when we're not connected to a server
+            // for training mode or whatever.
+            // TODO: Figure out how a "training mode" would work
+            if let Some(side) = game_logic.player_side
                 && ui_game_state.lobby_state == LobbyState::Running
+                && let Some(state) = ui_game_state.current_game_state.as_ref()
+                && let stats = state.get_stats()
+                && stats.check_if_alive(side)
             {
+                let in_enemy_turn = matches!(state, BattleGameState::EnemyTurn { .. });
+                // Outside the enemy turn phase the server discards movement (see
+                // is_player_turn in step_player_inputs) and holds players at center,
+                // so send neutral input and skip local prediction. We still send a
+                // packet every tick: it refreshes the server's echoed timestamp,
+                // which is what keeps the RTT estimate fresh between enemy turn phases.
+                let input_to_send = if in_enemy_turn {
+                    input
+                } else {
+                    shared::game::MoveInputState::default()
+                };
+
                 let sequence = game_logic.current_input_sequence;
                 game_logic.current_input_sequence =
                     game_logic.current_input_sequence.wrapping_add(1);
 
-                game_logic
-                    .pending_inputs
-                    .push_back(PendingMoveInput { input, sequence });
+                game_logic.pending_inputs.push_back(PendingMoveInput {
+                    input: input_to_send,
+                    sequence,
+                });
 
-                game_logic
-                    .game_logic
-                    .update_position_with_input(side, &input);
+                // do all of the specific game logic during an enemies turn
+                if in_enemy_turn {
+                    game_logic
+                        .game_logic
+                        .update_position_with_input(side, &input_to_send);
+                    game_logic.ticks_elapsed_in_current_dodge_phase = game_logic
+                        .ticks_elapsed_in_current_dodge_phase
+                        .saturating_add(1);
+                    let scheduled_bullets =
+                        get_current_bullet_count(game_logic.ticks_elapsed_in_current_dodge_phase);
+                    while game_logic.amount_of_spawned_bullets < scheduled_bullets {
+                        let (position, velocity) = get_data_for_projectile_from_index(
+                            game_logic.amount_of_spawned_bullets,
+                        );
+                        game_logic.game_logic.spawn_projectile(position, velocity);
+                        game_logic.amount_of_spawned_bullets += 1;
+                    }
+
+                    game_logic.game_logic.step_physics();
+
+                    // Mirror the server's despawn-on-contact so predicted bullets
+                    // visually disappear when they hit someone; the damage itself is
+                    // server-authoritative and arrives through the battle stats.
+                    let _ = game_logic
+                        .game_logic
+                        .detect_projectile_hits(stats.left_health > 0, stats.right_health > 0);
+                }
                 // send all inputs that haven't been acknowledged yet
                 // (there is a max amount of inputs we can send before the message gets too big)
                 if let Some(rpc_sender) = unreliable_client_rpc_sender.as_ref() {
@@ -543,36 +655,19 @@ async fn main() {
                     });
                 }
             }
-            game_logic.game_logic.step_physics();
         }
 
         // Hash the simulation state before applying any render-time interpolation.
         // predicted state is just for rendering, it can't be real because the server has the real state.
-        predicted_state = game_logic.game_logic.get_state_to_send_to_client();
+        let mut predicted_state = game_logic.game_logic.get_state_to_send_to_client();
         let pre_predicted_state_hash = hash_move_state(&predicted_state);
         // actually do the prediction here, which will modify predicted state to fit the server
-        if let Some(side) = ui_game_state.player_side {
-            if let Some(interpolated_position) = interpolate_remote_position(
-                &mut game_logic.remote_snapshots,
-                game_logic.dynamic_render_delay_ticks,
-            ) {
-                match side {
-                    PlayerSide::Left => {
-                        predicted_state.right_position = interpolated_position;
-                    }
-                    PlayerSide::Right => {
-                        predicted_state.left_position = interpolated_position;
-                    }
-                }
-            }
-        }
+        game_logic.interpolate_remote_position(&mut predicted_state);
         let rendered_state_hash = hash_move_state(&predicted_state);
         let ms_per_tick = GAME_TIME_STEP.as_secs_f32() * 1000.0;
-        let dynamic_render_delay_ticks = game_logic.dynamic_render_delay_ticks;
-        let dynamic_render_delay_ms = dynamic_render_delay_ticks as f32 * ms_per_tick;
         let estimated_rtt_ms = game_logic.estimated_rtt * 1000.0;
         let jitter_rtt_ms = game_logic.jitter_rtt * 1000.0;
-        match ui_game_state.player_side {
+        match game_logic.player_side {
             Some(PlayerSide::Left) => {
                 local_player.set_position(predicted_state.left_position);
                 remote_player.set_position(predicted_state.right_position);
@@ -584,6 +679,20 @@ async fn main() {
             None => {
                 local_player.set_position(Vec2::ZERO);
                 remote_player.set_position(Vec2::ZERO);
+            }
+        }
+
+        // Predicted bullets: pool nodes take the simulated positions, the
+        // rest wait off-screen.
+        let projectile_positions = game_logic.game_logic.get_projectile_positions();
+        for (i, node) in projectile_nodes.iter_mut().enumerate() {
+            match projectile_positions.get(i) {
+                Some(position) => {
+                    node.set_position(*position);
+                }
+                None => {
+                    node.set_position(offscreen);
+                }
             }
         }
 
@@ -603,10 +712,6 @@ async fn main() {
                         rendered_state_hash
                     ));
                     ui.separator();
-                    ui.label(format!(
-                        "Dynamic render delay: {} ticks ({:.1} ms)",
-                        dynamic_render_delay_ticks, dynamic_render_delay_ms
-                    ));
                     ui.label(format!("RTT estimate: ({:.1} ms)", estimated_rtt_ms));
                     ui.label(format!("Ping estimate: ({:.1} ms)", estimated_rtt_ms / 2.));
                     ui.label(format!("RTT jitter estimate: ({:.1} ms)", jitter_rtt_ms));
@@ -651,45 +756,69 @@ async fn main() {
                         UiState::Connected => {
                             ui.label("Successfully connected and authenticated to the server!");
                         }
-                        UiState::LobbyWaiting => {}
+                        UiState::LobbyWaiting => {
+                            ui.label("Waiting for lobby to fill up...");
+                        }
                         UiState::LobbyRunning => {
                             let client_rpc_sender = reliable_client_rpc_sender
                                 .clone()
                                 .expect("should be setup by this point since the lobby is running");
                             if let Some(game_state) = &ui_game_state.current_game_state
-                                && let Some(side) = ui_game_state.player_side
+                                && let Some(side) = game_logic.player_side
                             {
-                                let round_start = matches!(game_state, RPSGameState::StartRound);
-                                let waiting_on_us =
-                                    if let RPSGameState::WaitingForLeftInput { .. } = game_state
-                                        && side == PlayerSide::Left
-                                    {
-                                        true
-                                    } else if let RPSGameState::WaitingForRightInput { .. } =
-                                        game_state
-                                        && side == PlayerSide::Right
-                                    {
-                                        true
-                                    } else {
-                                        false
-                                    };
-                                if round_start || waiting_on_us {
-                                    if ui.button("Rock").clicked() {
-                                        let _ = client_rpc_sender.unbounded_send(
-                                            ReliableRpcClientMessage::TurnInput(TurnInput::Rock),
-                                        );
+                                let stats = match game_state {
+                                    BattleGameState::PlayerTurn { stats, .. }
+                                    | BattleGameState::EnemyTurn { stats, .. }
+                                    | BattleGameState::Win { stats, .. } => stats,
+                                };
+                                draw_battle_stats(ui, stats, side);
+                                ui.separator();
+
+                                match game_state {
+                                    BattleGameState::PlayerTurn {
+                                        left_ready,
+                                        right_ready,
+                                        ..
+                                    } => {
+                                        let we_are_ready = match side {
+                                            PlayerSide::Left => *left_ready,
+                                            PlayerSide::Right => *right_ready,
+                                        };
+                                        if stats.health_for(side) == 0 {
+                                            ui.label(
+                                                "You are down... your partner fights alone.",
+                                            );
+                                        } else if we_are_ready {
+                                            ui.label("Waiting for your partner's choice...");
+                                        } else {
+                                            ui.label("Choose your action:");
+                                            if ui.button("Attack").clicked() {
+                                                let _ = client_rpc_sender.unbounded_send(
+                                                    ReliableRpcClientMessage::TurnAction(
+                                                        TurnAction::Attack,
+                                                    ),
+                                                );
+                                            }
+                                            if ui.button("Defend").clicked() {
+                                                let _ = client_rpc_sender.unbounded_send(
+                                                    ReliableRpcClientMessage::TurnAction(
+                                                        TurnAction::Defend,
+                                                    ),
+                                                );
+                                            }
+                                        }
                                     }
-                                    if ui.button("Paper").clicked() {
-                                        let _ = client_rpc_sender.unbounded_send(
-                                            ReliableRpcClientMessage::TurnInput(TurnInput::Paper),
-                                        );
+                                    BattleGameState::EnemyTurn {
+                                        ticks_remaining, ..
+                                    } => {
+                                        let seconds_remaining = *ticks_remaining as f32
+                                            * GAME_TIME_STEP.as_secs_f32();
+                                        ui.label(format!(
+                                            "DODGE! {seconds_remaining:.1}s remaining"
+                                        ));
                                     }
-                                    if ui.button("Scissors").clicked() {
-                                        let _ = client_rpc_sender.unbounded_send(
-                                            ReliableRpcClientMessage::TurnInput(
-                                                TurnInput::Scissors,
-                                            ),
-                                        );
+                                    BattleGameState::Win { winner, .. } => {
+                                        ui.label(win_message(winner));
                                     }
                                 }
                             }
@@ -698,6 +827,16 @@ async fn main() {
                             let client_rpc_sender = reliable_client_rpc_sender.clone().expect(
                                 "should be setup by this point since the lobby is finished",
                             );
+                            if let Some(BattleGameState::Win { winner, stats }) =
+                                &ui_game_state.current_game_state
+                            {
+                                ui.label(win_message(winner));
+                                if let Some(side) = game_logic.player_side {
+                                    draw_battle_stats(ui, stats, side);
+                                }
+                                ui.separator();
+                            }
+                            ui.label("Play again?");
                             if ui.button("Yes").clicked() {
                                 let _ = client_rpc_sender.unbounded_send(
                                     ReliableRpcClientMessage::ContinueRound(YesOrNo::Yes),

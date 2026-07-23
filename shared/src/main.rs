@@ -2,9 +2,9 @@ use shared::game::{GameLogic, MoveInputState, PLAYER_GAME_RECTANGLE, PlayerSide}
 
 fn main() {
     let mut logic = GameLogic::new();
-    let rect = logic.get_obstacle_rectangles()[0];
+    let (rect, rect_position) = logic.get_obstacle_rectangles_with_position()[0];
     println!("rect pixel: {:?}", rect);
-    println!("rect physics center: {:?}", rect.get_physics_position());
+    println!("rect physics center: {:?}", rect_position);
     println!(
         "rect physics half extents: {:?}",
         rect.get_half_extents_for_physics()

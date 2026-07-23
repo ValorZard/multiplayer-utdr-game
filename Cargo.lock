@@ -2625,9 +2625,9 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kiss3d"
-version = "0.45.0"
+version = "0.45.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8eac89d805ff9cdaa971936f75f8b5a538695887733cb92080817e5215bd7da"
+checksum = "9fc470707c8ad8c9283fd75c8e9b5057f1bcee6b24eb64ba239481ba37b39ef2"
 dependencies = [
  "bitflags 2.13.0",
  "bytemuck",

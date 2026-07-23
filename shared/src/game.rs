@@ -1,7 +1,81 @@
+use crate::rpc::{InputSequence, RemoteTimestamp};
 use rapier2d::control::KinematicCharacterController;
 use rapier2d::prelude::*;
 use rkyv::{Archive, Deserialize, Serialize};
+use std::collections::HashSet;
 use std::time::Duration;
+
+pub type Health = u32;
+
+pub const PLAYER_MAX_HEALTH: Health = 5;
+pub const ENEMY_MAX_HEALTH: Health = 10;
+pub const ATTACK_DAMAGE: Health = 1;
+/// How much incoming damage a Defend action absorbs during the following dodge phase.
+pub const DEFEND_BLOCK: Health = 1;
+pub const PROJECTILE_HIT_DAMAGE: Health = 1;
+
+/// deltarune runs on 30 TPS
+pub const GAME_TIME_STEP_MS: RemoteTimestamp = 33;
+// this is fine to cast as a u64, we know the time step isn't negative
+pub const GAME_TIME_STEP: Duration = Duration::from_millis(GAME_TIME_STEP_MS as u64);
+pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
+
+/// Length of the bullet-hell dodge segment, in milliseconds (gets converted to tick for use by client/server)
+pub const ENEMY_TURN_PHASE_LENGTH_MS: RemoteTimestamp = 10000;
+pub const ENEMY_TURN_PHASE_TICKS: InputSequence =
+    (ENEMY_TURN_PHASE_LENGTH_MS / GAME_TIME_STEP_MS) as InputSequence;
+/// Gap between bullets of a dodge pattern (we don't really use MS, that gets converted to ticks).
+/// Spawning is scheduled in simulation ticks so client and server spawn each bullet on the identical tick of the phase,
+/// keeping the physics deterministic with no shared unix clock.
+const PROJECTILE_SPAWN_INTERVAL_MS: RemoteTimestamp = 500;
+pub const PROJECTILE_SPAWN_INTERVAL_TICKS: InputSequence =
+    (PROJECTILE_SPAWN_INTERVAL_MS / GAME_TIME_STEP_MS) as InputSequence;
+pub const AMOUNT_OF_PROJECTILES_IN_ENEMY_TURN_PHASE: u32 =
+    ENEMY_TURN_PHASE_TICKS / PROJECTILE_SPAWN_INTERVAL_TICKS;
+/// How far into the dodge phase (in ticks) the first bullet spawns,
+/// so the reliable message announcing the phase reaches clients before any bullet
+/// exists anywhere.
+const PATTERN_START_LEAD_MS: RemoteTimestamp = 1000;
+pub const PATTERN_START_LEAD_TICKS: InputSequence =
+    (PATTERN_START_LEAD_MS / GAME_TIME_STEP_MS) as InputSequence;
+/// Projectile speed in game (pixel) space, i.e. pixels per second.
+pub const PROJECTILE_SPEED: f32 = 150.0;
+/// Projectiles render and collide as squares with this side length (px).
+pub const PROJECTILE_SIZE: f32 = 6.0;
+/// Where the enemy sits in game (pixel) space; projectiles spawn from here.
+pub const ENEMY_POSITION: Vec2 = Vec2::new(0.0, 70.0);
+/// Projectiles farther than this from the origin are despawned.
+pub const PROJECTILE_DESPAWN_RADIUS: f32 = 500.0;
+
+/// How many bullets of a pattern should exist `elapsed_ticks` into the dodge phase.
+/// Both client and server run this against the phase's tick counter,
+/// so they spawn each bullet on the identical simulation tick.
+pub fn get_current_bullet_count(elapsed_ticks: InputSequence) -> u32 {
+    if elapsed_ticks < PATTERN_START_LEAD_TICKS {
+        return 0;
+    }
+    ((elapsed_ticks - PATTERN_START_LEAD_TICKS) / PROJECTILE_SPAWN_INTERVAL_TICKS + 1)
+        .min(AMOUNT_OF_PROJECTILES_IN_ENEMY_TURN_PHASE)
+}
+
+/// Deterministic dodge pattern: shoot bullets at the trapped box,
+/// alternating left or right if the index is even or odd respectively,
+/// with the aim point eventually converging on
+/// the box center (the origin) over the course of the phase.
+pub fn get_data_for_projectile_from_index(index: u32) -> (Vec2, Vec2) {
+    // 0.0 for the first bullet of the phase, 1.0 for the last.
+    let progress = index.min(AMOUNT_OF_PROJECTILES_IN_ENEMY_TURN_PHASE) as f32
+        / AMOUNT_OF_PROJECTILES_IN_ENEMY_TURN_PHASE as f32;
+    let edge_x = if index % 2 == 0 {
+        -PLAYER_TRAPPED_BOX_WIDTH / 2.
+    } else {
+        PLAYER_TRAPPED_BOX_WIDTH / 2.
+    };
+    let target = Vec2::new(edge_x * (1. - progress), 0.);
+    let direction = (target - ENEMY_POSITION).normalize_or_zero();
+
+    (ENEMY_POSITION, direction * PROJECTILE_SPEED)
+}
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 #[rkyv(
@@ -11,10 +85,57 @@ use std::time::Duration;
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
-pub enum TurnInput {
-    Rock,
-    Paper,
-    Scissors,
+pub enum TurnAction {
+    Attack,
+    Defend,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub enum BattleWinner {
+    Players,
+    Enemy,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
+#[rkyv(
+    // This will generate a PartialEq impl between our unarchived
+    // and archived types
+    compare(PartialEq),
+    // Derives can be passed through to the generated type:
+    derive(Debug),
+)]
+pub struct BattleStats {
+    pub left_health: Health,
+    pub right_health: Health,
+    pub enemy_health: Health,
+}
+
+impl BattleStats {
+    pub fn new() -> Self {
+        Self {
+            left_health: PLAYER_MAX_HEALTH,
+            right_health: PLAYER_MAX_HEALTH,
+            enemy_health: ENEMY_MAX_HEALTH,
+        }
+    }
+
+    pub fn health_for(&self, side: PlayerSide) -> Health {
+        match side {
+            PlayerSide::Left => self.left_health,
+            PlayerSide::Right => self.right_health,
+        }
+    }
+
+    pub fn check_if_alive(&self, side: PlayerSide) -> bool {
+        self.health_for(side) > 0
+    }
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -25,34 +146,41 @@ pub enum TurnInput {
     // Derives can be passed through to the generated type:
     derive(Debug),
 )]
-pub enum RPSWinState {
-    Left,
-    Right,
-    Tie,
-}
-
-#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
-#[rkyv(
-    // This will generate a PartialEq impl between our unarchived
-    // and archived types
-    compare(PartialEq),
-    // Derives can be passed through to the generated type:
-    derive(Debug),
-)]
-pub enum RPSGameState {
-    // waiting on inputs from both players here
-    StartRound,
-    WaitingForLeftInput {
-        right_input: TurnInput,
+pub enum BattleGameState {
+    // Both players pick simultaneously; the flags only say who has locked in,
+    // never what they picked, so choices stay hidden until the turn resolves.
+    PlayerTurn {
+        left_ready: bool,
+        right_ready: bool,
+        stats: BattleStats,
     },
-    WaitingForRightInput {
-        left_input: TurnInput,
+    EnemyTurn {
+        // counts down from ENEMY_TURN_PHASE_TICKS
+        // clients figure out the bullet pattern's elapsed-tick clock from this shared tick reference
+        ticks_remaining: InputSequence,
+        stats: BattleStats,
     },
     Win {
-        state: RPSWinState,
-        left_input: TurnInput,
-        right_input: TurnInput,
+        winner: BattleWinner,
+        stats: BattleStats,
     },
+}
+
+impl BattleGameState {
+    pub fn get_stats(&self) -> &BattleStats {
+        match self {
+            BattleGameState::PlayerTurn {
+                left_ready,
+                right_ready,
+                stats,
+            } => stats,
+            BattleGameState::EnemyTurn {
+                ticks_remaining,
+                stats,
+            } => stats,
+            BattleGameState::Win { winner, stats } => stats,
+        }
+    }
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
@@ -122,10 +250,6 @@ impl MoveInputState {
         .normalize_or_zero()
     }
 }
-
-// deltarune runs on 30 TPS
-pub const GAME_TIME_STEP: Duration = Duration::from_millis(33);
-pub const GAME_TIME_DELTA: f32 = GAME_TIME_STEP.as_secs_f32();
 /// Player movement speed in game (pixel) space, i.e. pixels per second.
 pub const PLAYER_SPEED: f32 = 100.;
 #[derive(Debug, PartialEq)]
@@ -172,11 +296,12 @@ pub const INTERACTION_GROUP: Group = Group::GROUP_5;
 
 pub struct Obstacle {}
 
+/// ECS marker for enemy bullets during the dodge phase.
+pub struct Projectile {}
+
 // this is how the rectangle is displayed in the game world, not in physics coords
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct GameRectangle {
-    pub x: f32,
-    pub y: f32,
     pub width: f32,
     pub height: f32,
 }
@@ -186,8 +311,6 @@ impl From<Aabb> for GameRectangle {
         let min = convert_vec2_physics_to_pixel(aabb.mins);
         let max = convert_vec2_physics_to_pixel(aabb.maxs);
         GameRectangle {
-            x: min.x,
-            y: min.y,
             width: max.x - min.x,
             height: max.y - min.y,
         }
@@ -195,26 +318,8 @@ impl From<Aabb> for GameRectangle {
 }
 
 impl GameRectangle {
-    pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        GameRectangle {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    // both kiss3d and rapier put objects based on their position in the center of the object
-    // so there's no need to adjust for width or height
-    // see: https://docs.rs/kiss3d/latest/kiss3d/camera/enum.CoordinateSystem2d.html#variant.CenterUp
-    pub const fn get_physics_position(&self) -> Vec2 {
-        let center_x = self.x * PIXEL_TO_PHYSICS_SCALE;
-        let center_y = self.y * PIXEL_TO_PHYSICS_SCALE;
-        Vec2::new(center_x, center_y)
-    }
-
-    pub const fn get_pixel_position(&self) -> Vec2 {
-        Vec2::new(self.x, self.y)
+    pub const fn new(width: f32, height: f32) -> Self {
+        GameRectangle { width, height }
     }
 
     pub const fn get_half_extents_for_physics(&self) -> Vec2 {
@@ -235,14 +340,23 @@ pub struct GameLogic {
 pub const PHYSICS_TO_PIXEL_SCALE: f32 = 50.0; // 1 meter in physics engine equals 50 pixels
 pub const PIXEL_TO_PHYSICS_SCALE: f32 = 1.0 / PHYSICS_TO_PIXEL_SCALE;
 pub const PLAYER_PHYSICS_RADIUS: f32 = 1.0; // in physics scale
-pub const PLAYER_GAME_RECTANGLE: GameRectangle = GameRectangle::new(0., 0., 10., 10.);
+pub const PLAYER_GAME_RECTANGLE: GameRectangle = GameRectangle::new(10., 10.);
 pub const PLAYER_STARTING_POSITION: Vec2 = Vec2::new(0., 0.);
+pub const PLAYER_TRAPPED_BOX_WIDTH: f32 = 100.;
+pub const PLAYER_TRAPPED_BOX_HEIGHT: f32 = 50.;
+pub const PLAYER_TRAPPED_BOX_WALL_WIDTH: f32 = 10.;
 
+/// GameLogic should NEVER leak any physics space vectors outside of the physics world.
+/// As far as the rest of the codebase is concerned, it's ONLY worried about pixel (game) space.
 impl GameLogic {
     pub fn new() -> Self {
         // TODO: for now, we hardcode left and right side players and require there to be only one of each
         let mut world = hecs::World::new();
         let mut physics = PhysicsWorld::new();
+        // The physics default timestep is 1/60s but the game ticks at 30 TPS;
+        // velocity-driven bodies (projectiles) would move at half speed if the
+        // integration step didn't match the game tick.
+        physics.integration_parameters.dt = GAME_TIME_DELTA;
 
         // Distinct starting points on opposite sides, clear of the obstacle (spawned
         // below) and of each other, so neither player starts already overlapping it.
@@ -259,26 +373,43 @@ impl GameLogic {
             PLAYER_STARTING_POSITION,
         );
 
-        // spawn physics object for players to collide with
-        // create a rectangle in the game world
-        let rectangle = GameRectangle::new(40.0, 30.0, 20.0, 20.0);
-        // GameRectangle's x/y is its center (matching kiss3d's center-based
-        // set_position), so the physics collider sits at the same point.
-        let physics_position = rectangle.get_physics_position();
-        let rectangle_half_extents = rectangle.get_half_extents_for_physics();
-        let collider = ColliderBuilder::cuboid(rectangle_half_extents.x, rectangle_half_extents.y)
-            .collision_groups(InteractionGroups::new(
-                OBSTACLE_GROUP,
-                PLAYER_GROUP,
-                InteractionTestMode::And,
-            ))
-            .position(Pose2 {
-                rotation: Rot2::default(),
-                translation: physics_position,
-            })
-            .build();
-        let collider_handle = physics.colliders.insert(collider);
-        world.spawn((rectangle, Obstacle {}, collider_handle));
+        // spawn collision box for the players to be trapped in while bullets are shooting at them
+        // left wall
+        Self::spawn_obstacle(
+            &mut world,
+            &mut physics,
+            -PLAYER_TRAPPED_BOX_WIDTH / 2.,
+            0.,
+            PLAYER_TRAPPED_BOX_WALL_WIDTH,
+            PLAYER_TRAPPED_BOX_HEIGHT,
+        );
+        // right wall
+        Self::spawn_obstacle(
+            &mut world,
+            &mut physics,
+            PLAYER_TRAPPED_BOX_WIDTH / 2.,
+            0.,
+            PLAYER_TRAPPED_BOX_WALL_WIDTH,
+            PLAYER_TRAPPED_BOX_HEIGHT,
+        );
+        // top wall
+        Self::spawn_obstacle(
+            &mut world,
+            &mut physics,
+            0.,
+            PLAYER_TRAPPED_BOX_HEIGHT / 2.,
+            PLAYER_TRAPPED_BOX_WIDTH,
+            PLAYER_TRAPPED_BOX_WALL_WIDTH,
+        );
+        // bottom wall
+        Self::spawn_obstacle(
+            &mut world,
+            &mut physics,
+            0.,
+            -PLAYER_TRAPPED_BOX_HEIGHT / 2.,
+            PLAYER_TRAPPED_BOX_WIDTH,
+            PLAYER_TRAPPED_BOX_WALL_WIDTH,
+        );
 
         // The broad-phase spatial index used by scene queries (incl. the character
         // controller's move_shape) isn't populated until a step runs; without this,
@@ -294,6 +425,36 @@ impl GameLogic {
         }
     }
 
+    fn spawn_obstacle(
+        world: &mut hecs::World,
+        physics: &mut PhysicsWorld,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) {
+        // spawn physics object for players to collide with
+        // create a rectangle in the game world
+        let rectangle = GameRectangle::new(width, height);
+        // GameRectangle's x/y is its center (matching kiss3d's center-based
+        // set_position), so the physics collider sits at the same point.
+        let physics_position = Vec2::new(x, y) * PIXEL_TO_PHYSICS_SCALE;
+        let rectangle_half_extents = rectangle.get_half_extents_for_physics();
+        let collider = ColliderBuilder::cuboid(rectangle_half_extents.x, rectangle_half_extents.y)
+            .collision_groups(InteractionGroups::new(
+                OBSTACLE_GROUP,
+                PLAYER_GROUP,
+                InteractionTestMode::And,
+            ))
+            .position(Pose2 {
+                rotation: Rot2::default(),
+                translation: physics_position,
+            })
+            .build();
+        let collider_handle = physics.colliders.insert(collider);
+        world.spawn((rectangle, Obstacle {}, collider_handle));
+    }
+
     fn spawn_player(
         world: &mut hecs::World,
         physics: &mut PhysicsWorld,
@@ -305,8 +466,6 @@ impl GameLogic {
             .build();
 
         let mut player_rect = PLAYER_GAME_RECTANGLE.clone();
-        player_rect.x = spawn_position.x;
-        player_rect.y = spawn_position.y;
 
         let half_extents = player_rect.get_half_extents_for_physics();
 
@@ -329,12 +488,20 @@ impl GameLogic {
         world.spawn((side, body_handle, collider_handle, controller, player_rect))
     }
 
-    pub fn get_obstacle_rectangles(&mut self) -> Vec<GameRectangle> {
+    pub fn get_obstacle_rectangles_with_position(&mut self) -> Vec<(&GameRectangle, Vec2)> {
+        // The collider is the source of truth for where the wall sits, so read
+        // its position straight from the physics world (converted to pixel space)
+        // rather than duplicating it as a separate component.
+        let colliders = &self.physics.colliders;
         self.world
-            .query_mut::<(&GameRectangle, &Obstacle)>()
+            .query_mut::<(&GameRectangle, &ColliderHandle, &Obstacle)>()
             .into_iter()
-            .map(|(rectangle, _)| rectangle)
-            .copied()
+            .map(|(rectangle, collider_handle, _)| {
+                let position = convert_vec2_physics_to_pixel(
+                    colliders[*collider_handle].position().translation,
+                );
+                (rectangle, position)
+            })
             .collect()
     }
 
@@ -349,19 +516,6 @@ impl GameLogic {
         self.world
             .query_one_mut::<(&RigidBodyHandle, &KinematicCharacterController)>(entity)
             .expect("Player should exist here")
-    }
-
-    fn set_position_for_player_rect(&mut self, player_side: PlayerSide, new_position: Vec2) {
-        let entity = match player_side {
-            PlayerSide::Left => self.left_player,
-            PlayerSide::Right => self.right_player,
-        };
-        let rect = self
-            .world
-            .query_one_mut::<&mut GameRectangle>(entity)
-            .expect("Player should exist here");
-        rect.x = new_position.x;
-        rect.y = new_position.y;
     }
 
     pub fn setup_game(&mut self) {
@@ -386,18 +540,19 @@ impl GameLogic {
         let character_rotation = character_collider.position().rotation;
         let character_shape = character_collider.shared_shape().clone();
         let character_mass = character_body.mass();
-        // QueryFilter ignores each collider's own collision_groups unless told to check
-        // them; without this, the query treats every collider (e.g. the other player) as
-        // an obstacle, not just the ones this player's group is actually set to interact with.
+        // this is basically like physics masks in other game engines
+        // so who can collide with the character collider, and what the character collider can collide against
+        // (those may not be the same thing.)
         let character_groups = character_collider.collision_groups();
 
         // Reconciliation may apply multiple inputs before a physics step;
         // use the pending kinematic target so updates accumulate deterministically.
         let current_position = character_body.next_position().translation;
-        // PLAYER_SPEED is px/s; move_shape works in physics space, so convert.
+        // PLAYER_SPEED is px/s, we need to convert it to rapier's format
         let desired_movement =
             input.as_normalized_vec() * PLAYER_SPEED * PIXEL_TO_PHYSICS_SCALE * GAME_TIME_DELTA;
 
+        // check all collisions in the physics world against this character body
         let mut query_pipeline = self.physics.broad_phase.as_query_pipeline_mut(
             self.physics.narrow_phase.query_dispatcher(),
             &mut self.physics.bodies,
@@ -433,11 +588,7 @@ impl GameLogic {
         // Kinematic bodies don't move until you tell the physics step
         // where they're going next.
         self.physics.bodies[handle].set_next_kinematic_translation(new_pos);
-        let new_pixel_position = Vec2::new(
-            new_pos.x * PHYSICS_TO_PIXEL_SCALE,
-            new_pos.y * PHYSICS_TO_PIXEL_SCALE,
-        );
-        self.set_position_for_player_rect(player_side, new_pixel_position);
+        let new_pixel_position = convert_vec2_physics_to_pixel(new_pos);
         new_pixel_position
     }
 
@@ -451,26 +602,161 @@ impl GameLogic {
         let handle = handle.clone();
         let body = &mut self.physics.bodies[handle];
         body.set_next_kinematic_translation(convert_vec2_pixel_to_physics(new_position));
-        self.set_position_for_player_rect(player_side, new_position);
         new_position
     }
 
     /// Returns position in game (pixel) space, not physics space.
     pub fn get_position(&mut self, player_side: PlayerSide) -> Vec2 {
-        let entity = match player_side {
-            PlayerSide::Left => self.left_player,
-            PlayerSide::Right => self.right_player,
-        };
-        self.world
-            .query_one_mut::<&GameRectangle>(entity)
-            .expect("Player should exist here")
-            .get_pixel_position()
+        let (handle, _) = self.character_handle_for(player_side);
+        let handle = handle.clone();
+        let body = &mut self.physics.bodies[handle];
+        body.position().translation * PHYSICS_TO_PIXEL_SCALE
     }
 
     /// Advances the physics simulation. Call once per tick, after inputs
     /// have been applied via update_position_with_input/_vec.
     pub fn step_physics(&mut self) {
         self.physics.step();
+    }
+
+    /// Spawns an enemy bullet. Both position and velocity are in game (pixel)
+    /// space. The bullet is a velocity-driven kinematic body whose sensor
+    /// collider lives in HITBOX_GROUP, so it never physically pushes players
+    /// or obstacles; hits are picked up by detect_projectile_hits instead.
+    /// Because we are deterministically spawning bullets, we (for now) can't have bullets that follow players or whatever.
+    /// TODO: figure out if we can have bullets that respond to players
+    /// that might require figuring out a better way of doing client side prediction for a lot of bullets
+    pub fn spawn_projectile(&mut self, position: Vec2, velocity: Vec2) -> hecs::Entity {
+        let rigid_body = RigidBodyBuilder::kinematic_velocity_based()
+            .translation(convert_vec2_pixel_to_physics(position))
+            .linvel(convert_vec2_pixel_to_physics(velocity))
+            .build();
+        let half_extent = (PROJECTILE_SIZE * 0.5) * PIXEL_TO_PHYSICS_SCALE;
+        let collider = ColliderBuilder::cuboid(half_extent, half_extent)
+            .sensor(true)
+            .collision_groups(InteractionGroups::new(
+                HITBOX_GROUP,
+                PLAYER_GROUP,
+                InteractionTestMode::And,
+            ))
+            .build();
+        let (body_handle, collider_handle) = self.physics.insert(rigid_body, collider);
+        self.world
+            .spawn((Projectile {}, body_handle, collider_handle))
+    }
+
+    /// Positions of all live projectiles in game (pixel) space, for rendering.
+    pub fn get_projectile_positions(&mut self) -> Vec<Vec2> {
+        let bodies = &self.physics.bodies;
+        self.world
+            .query_mut::<&RigidBodyHandle>()
+            .with::<&Projectile>()
+            .into_iter()
+            .map(|handle| convert_vec2_physics_to_pixel(bodies[*handle].position().translation))
+            .collect()
+    }
+
+    pub fn clear_projectiles(&mut self) {
+        let entities: Vec<(hecs::Entity, RigidBodyHandle)> = self
+            .world
+            .query_mut::<(hecs::Entity, &RigidBodyHandle)>()
+            .with::<&Projectile>()
+            .into_iter()
+            .map(|(entity, handle)| (entity, *handle))
+            .collect();
+        // TODO: we have logic for deleting projectiles in two different places, maybe we should just have one?
+        for (entity, body_handle) in entities {
+            self.physics.remove_body(body_handle);
+            let _ = self.world.despawn(entity);
+        }
+    }
+
+    /// Finds projectiles overlapping each hittable player, despawns them
+    /// (plus any that flew out of the arena), and returns how many hit each
+    /// side. Call once per tick after step_physics. A projectile overlapping
+    /// both players only counts against the left one, since it despawns on
+    /// its first hit.
+    pub fn detect_projectile_hits(
+        &mut self,
+        left_hittable: bool,
+        right_hittable: bool,
+    ) -> (u32, u32) {
+        let mut left_hits_per_side = HashSet::<ColliderHandle>::new();
+        let mut right_hits_per_side = HashSet::<ColliderHandle>::new();
+        for (side, hits) in [
+            (PlayerSide::Left, &mut left_hits_per_side),
+            (PlayerSide::Right, &mut right_hits_per_side),
+        ] {
+            let hittable = match side {
+                PlayerSide::Left => left_hittable,
+                PlayerSide::Right => right_hittable,
+            };
+            if !hittable {
+                continue;
+            }
+            let entity = match side {
+                PlayerSide::Left => self.left_player,
+                PlayerSide::Right => self.right_player,
+            };
+            let collider_handle = *self
+                .world
+                .query_one_mut::<&ColliderHandle>(entity)
+                .expect("Player should exist here");
+            let player_collider = &self.physics.colliders[collider_handle];
+            let player_pose = *player_collider.position();
+            let player_shape = player_collider.shared_shape().clone();
+
+            // This query's groups pass the mutual And test only against
+            // projectile colliders (HITBOX memberships, PLAYER filter), so
+            // obstacles and the other player never show up here.
+            let query_pipeline = self.physics.broad_phase.as_query_pipeline(
+                self.physics.narrow_phase.query_dispatcher(),
+                &self.physics.bodies,
+                &self.physics.colliders,
+                QueryFilter::new().groups(InteractionGroups::new(
+                    PLAYER_GROUP,
+                    HITBOX_GROUP,
+                    InteractionTestMode::And,
+                )),
+            );
+            hits.extend(
+                query_pipeline
+                    .intersect_shape(player_pose, &*player_shape)
+                    .map(|(handle, _)| handle),
+            );
+        }
+
+        let despawn_distance = PROJECTILE_DESPAWN_RADIUS * PIXEL_TO_PHYSICS_SCALE;
+        let mut left_hits = 0;
+        let mut right_hits = 0;
+        let mut to_despawn: Vec<(hecs::Entity, RigidBodyHandle)> = Vec::new();
+        for (entity, body_handle, collider_handle) in self
+            .world
+            .query_mut::<(hecs::Entity, &RigidBodyHandle, &ColliderHandle)>()
+            .with::<&Projectile>()
+        {
+            if left_hits_per_side.contains(collider_handle) {
+                left_hits += 1;
+            } else if right_hits_per_side.contains(collider_handle) {
+                right_hits += 1;
+            } else if self.physics.bodies[*body_handle]
+                .position()
+                .translation
+                .length()
+                <= despawn_distance
+            {
+                continue;
+            }
+            to_despawn.push((entity, *body_handle));
+        }
+        // TODO: We might want to have a special function for deleting projectiles
+        // like if we want to have a special sound effect or something.
+        for (entity, body_handle) in to_despawn {
+            self.physics.remove_body(body_handle);
+            let _ = self.world.despawn(entity);
+        }
+
+        (left_hits, right_hits)
     }
 
     pub fn get_state_to_send_to_client(&mut self) -> MoveGameState {

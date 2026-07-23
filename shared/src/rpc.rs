@@ -1,4 +1,4 @@
-use crate::game::{MoveGameState, MoveInputState, PlayerSide, RPSGameState, TurnInput};
+use crate::game::{BattleGameState, MoveGameState, MoveInputState, PlayerSide, TurnAction};
 use rkyv::api::high::{HighSerializer, HighValidator};
 use rkyv::bytecheck::CheckBytes;
 use rkyv::util::AlignedVec;
@@ -30,7 +30,7 @@ pub enum YesOrNo {
 )]
 pub enum ReliableRpcClientMessage {
     Text(String),
-    TurnInput(TurnInput),
+    TurnAction(TurnAction),
     ContinueRound(YesOrNo),
     JoinServer,
 }
@@ -140,7 +140,7 @@ pub enum ConnectionInitMessage {
     derive(Debug),
 )]
 pub enum ReliableRpcServerMessage {
-    GameState(RPSGameState),
+    GameState(BattleGameState),
     // send oauth url for client to open up
     ConnectionAuthentication(RpcUrl),
     ConnectionInit(UserId, ConnectionInitMessage),
