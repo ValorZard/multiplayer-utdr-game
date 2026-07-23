@@ -1,23 +1,33 @@
-to run server
+# Online Multiplayer Undertale/Deltarune Fangame
+
+This game is intended to be run on both the browser with WebAssembly and natively using Rust.
+Currently not finished, but you can still play it by compiling and testing things out.
+I've decided to open source this game for now since it's a fangame anyways.
+
+If you don't want to compile from source, I have a nightly build of the game running over on the itch.io page:
+
+https://valorzard.itch.io/rps-test
+
+## to run server
 ```bash
 cd server
 mkcert example.com "*.example.com" example.test localhost 127.0.0.1 ::1   
 cargo run -- --tls-cert example.com+5.pem  --tls-key example.com+5-key.pem
 ```
 
-to run native client
+## to run native client
 ```bash
 cargo run -p client
 ```
 
-to run wasm client
+## to run wasm client
 ```bash
 cd .\client\ 
 trunk serve
 ```
 Note: we might have to turn off certain chrome flags to test on a local computer with WASM, see: https://moq.dev/blog/tls-and-quic/ 
 
-to build the server for linux:
+## to build the server for linux:
 - Run Docker
 - then do ``cross build -p server --target x86_64-unknown-linux-gnu --release``
 - kill previous running server ``ssh root@174.138.45.57 "pkill server"``
