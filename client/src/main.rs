@@ -275,6 +275,169 @@ fn win_message(winner: &BattleWinner) -> &'static str {
     }
 }
 
+/// A 2D camera that can be zoomed and panned.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct MyCamera2d {
+    at: Vec2,
+    /// Distance from the camera to the `at` focus point.
+    zoom: f32,
+
+    /// Increment of the zoom per unit scrolling. The default value is 40.0.
+    zoom_step: f32,
+    zoom_modifier: Option<Modifiers>,
+
+    view: Mat3,
+    proj: Mat3,
+    scaled_proj: Mat3,
+    inv_scaled_proj: Mat3,
+    last_cursor_pos: Vec2,
+}
+
+impl Default for MyCamera2d {
+    fn default() -> Self {
+        Self::new(Vec2::ZERO, 1.0)
+    }
+}
+
+impl MyCamera2d {
+    /// Create a new arc-ball camera.
+    pub fn new(eye: Vec2, zoom: f32) -> MyCamera2d {
+        let mut res = MyCamera2d {
+            at: eye,
+            zoom,
+            zoom_step: 0.9,
+            zoom_modifier: None,
+            view: Mat3::IDENTITY,
+            proj: Mat3::IDENTITY,
+            scaled_proj: Mat3::IDENTITY,
+            inv_scaled_proj: Mat3::IDENTITY,
+            last_cursor_pos: Vec2::ZERO,
+        };
+
+        res.update_projviews();
+
+        res
+    }
+
+    /// The point the arc-ball is looking at.
+    pub fn at(&self) -> Vec2 {
+        self.at
+    }
+
+    /// Get a mutable reference to the point the camera is looking at.
+    pub fn set_at(&mut self, at: Vec2) {
+        self.at = at;
+        self.update_projviews();
+    }
+
+    /// Gets the zoom of the camera.
+    pub fn zoom(&self) -> f32 {
+        self.zoom
+    }
+
+    /// Sets the zoom of the camera.
+    pub fn set_zoom(&mut self, zoom: f32) {
+        self.zoom = zoom;
+
+        self.update_restrictions();
+        self.update_projviews();
+    }
+
+    /// Gets the zoom step of the camera.
+    pub fn zoom_step(&self) -> f32 {
+        self.zoom_step
+    }
+
+    /// Sets the zoom step of the camera.
+    pub fn set_zoom_step(&mut self, new_zoom_step: f32) {
+        self.zoom_step = new_zoom_step;
+    }
+
+    /// Move the camera such that it is centered on a specific point.
+    pub fn look_at(&mut self, at: Vec2, zoom: f32) {
+        self.at = at;
+        self.zoom = zoom;
+        self.update_projviews();
+    }
+
+    /// Transformation applied by the camera without perspective.
+    fn update_restrictions(&mut self) {
+        if self.zoom < 0.00001 {
+            self.zoom = 0.00001
+        }
+    }
+
+    /// The modifier used to zoom the PanZoomCamera2d camera.
+    pub fn zoom_modifier(&self) -> Option<Modifiers> {
+        self.zoom_modifier
+    }
+
+    /// Set the modifier used to zoom the PanZoomCamera2d camera.
+    pub fn rebind_zoom_modifier(&mut self, new_modifier: Option<Modifiers>) {
+        self.zoom_modifier = new_modifier;
+    }
+
+    fn update_projviews(&mut self) {
+        // Create translation matrix: translate by -at
+        self.view = Mat3::from_cols(
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(-self.at.x, -self.at.y, 1.0),
+        );
+
+        self.scaled_proj = self.proj;
+        // Scale x and y components (first two diagonal elements)
+        self.scaled_proj.col_mut(0)[0] *= self.zoom;
+        self.scaled_proj.col_mut(1)[1] *= self.zoom;
+
+        self.inv_scaled_proj.col_mut(0)[0] = 1.0 / self.scaled_proj.col(0)[0];
+        self.inv_scaled_proj.col_mut(1)[1] = 1.0 / self.scaled_proj.col(1)[1];
+    }
+}
+
+impl Camera2d for MyCamera2d {
+    fn handle_event(&mut self, canvas: &Canvas, event: &WindowEvent) {
+        let scale = 1.0; // canvas.scale_factor();
+
+        match *event {
+            WindowEvent::FramebufferSize(w, h) => {
+                self.proj = Mat3::from_cols(
+                    Vec3::new(2.0 * (scale as f32) / (w as f32), 0.0, 0.0),
+                    Vec3::new(0.0, 2.0 * (scale as f32) / (h as f32), 0.0),
+                    Vec3::new(0.0, 0.0, 1.0),
+                );
+                self.update_projviews();
+            }
+            _ => {}
+        }
+    }
+
+    #[inline]
+    fn view_transform_pair(&self) -> (Mat3, Mat3) {
+        (self.view, self.scaled_proj)
+    }
+
+    fn update(&mut self, _: &Canvas) {}
+
+    /// Calculate the global position of the given window coordinate
+    fn unproject(&self, window_coord: Vec2, size: Vec2) -> Vec2 {
+        // Convert window coordinates (origin at top left) to normalized screen coordinates
+        // (origin at the center of the screen)
+        let normalized_coords = Vec2::new(
+            2.0 * window_coord.x / size.x - 1.0,
+            2.0 * -window_coord.y / size.y + 1.0,
+        );
+
+        // Project normalized screen coordinate to screen space
+        let normalized_homogeneous = Vec3::new(normalized_coords.x, normalized_coords.y, 1.0);
+        let unprojected_homogeneous = self.inv_scaled_proj * normalized_homogeneous;
+
+        // Convert from screen space to global space
+        let screen_pos = unprojected_homogeneous.xy() / unprojected_homogeneous.z;
+        screen_pos + self.at
+    }
+}
+
 #[kiss3d::main]
 async fn main() {
     #[cfg(target_arch = "wasm32")]
