@@ -46,6 +46,7 @@ use web_transport_quinn::generic::Session;
 
 const SERVER_HOSTING_PORT: u16 = 12345;
 
+mod actor;
 mod battle;
 mod lobby;
 mod lobby_db;

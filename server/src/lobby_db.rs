@@ -150,7 +150,7 @@ impl ServerStateInner {
             (player_side, lobby_id)
         } else {
             let lobby_id = Uuid::new_v4();
-            let lobby = LobbySessionHandle::new(
+            let lobby = LobbySessionHandle::spawn(
                 lobby_id,
                 (
                     addr,

@@ -1,60 +1,95 @@
+use crate::actor::define_actor;
 use crate::battle::{GameError, GameSession};
 use shared::game::{BattleGameState, MoveGameState, MoveInputState, PlayerSide, TurnAction};
 use shared::rpc::{
     InputSequence, LobbyId, LobbyState, ReliableRpcServerMessage, UnreliableRpcServerMessage,
     UserId,
 };
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::{mpsc, oneshot};
+use tokio::time::Duration;
 use tracing::warn;
 
 pub type UserReliableSender = UnboundedSender<ReliableRpcServerMessage>;
 pub type UserUnreliableSender = UnboundedSender<UnreliableRpcServerMessage>;
 
-pub enum LobbySessionMessage {
-    InsertPlayer(
-        PlayerDataTuple,
-        oneshot::Sender<Result<(PlayerSide, LobbyState), LobbyError>>,
-    ),
-    RemovePlayer(
-        UserId,
-        oneshot::Sender<Result<(PlayerSide, LobbyState), LobbyError>>,
-    ),
-    TurnAction(
-        UserId,
-        TurnAction,
-        oneshot::Sender<Result<BattleGameState, LobbyError>>,
-    ),
-    MoveInput(UserId, MoveInputState, InputSequence, i64),
-    #[allow(dead_code)]
-    SendReliableMessageToUser(
-        ReliableRpcServerMessage,
-        UserId,
-        oneshot::Sender<Result<(), LobbyError>>,
-    ),
-    #[allow(dead_code)]
-    SendUnreliableMessageToUser(
-        UnreliableRpcServerMessage,
-        UserId,
-        oneshot::Sender<Result<(), LobbyError>>,
-    ),
-    #[allow(dead_code)]
-    SendReliableMessageToLobby(
-        ReliableRpcServerMessage,
-        oneshot::Sender<Result<(), LobbyError>>,
-    ),
-    #[allow(dead_code)]
-    SendUnreliableMessageToLobby(
-        UnreliableRpcServerMessage,
-        oneshot::Sender<Result<(), LobbyError>>,
-    ),
-    LobbyState(oneshot::Sender<LobbyState>),
-    GetPlayerSide(UserId, oneshot::Sender<Result<PlayerSide, LobbyError>>),
-    GetUserId(PlayerSide, oneshot::Sender<Result<UserId, LobbyError>>),
-    ResetLobby,
-}
-
 type PlayerDataTuple = (UserId, UserReliableSender, UserUnreliableSender);
+
+/// How often the lobby pushes state to its players, ~1/30s.
+const TICK_PERIOD: Duration = Duration::from_millis(33);
+
+/// How many messages may queue up for a lobby before senders start waiting.
+const MESSAGE_CAPACITY: usize = 32;
+
+define_actor! {
+    actor LobbySession;
+
+    message LobbySessionMessage;
+
+    /// Cloneable handle to a running [`LobbySession`].
+    pub handle LobbySessionHandle;
+
+    /// Opens a lobby with `left_side` already seated in it.
+    spawn with MESSAGE_CAPACITY => fn new(id: LobbyId, left_side: PlayerDataTuple);
+
+    tick every TICK_PERIOD => fn tick();
+
+    ask {
+        InsertPlayer => fn insert_player(
+            new_player: PlayerDataTuple,
+        ) -> Result<(PlayerSide, LobbyState), LobbyError>;
+
+        RemovePlayer => fn remove_player(
+            leaving_player: UserId,
+        ) -> Result<(PlayerSide, LobbyState), LobbyError>;
+
+        GetPlayerSide => fn get_player_side(user_addr: UserId) -> Result<PlayerSide, LobbyError>;
+
+        GetLeft => fn get_left() -> Result<UserId, LobbyError>;
+
+        GetRight => fn get_right() -> Result<UserId, LobbyError>;
+
+        GetCurrentLobbyState => fn get_current_lobby_state() -> LobbyState;
+
+        SendTurnAction => fn send_turn_action(
+            user_addr: UserId,
+            action: TurnAction,
+        ) -> Result<BattleGameState, LobbyError>;
+
+        #[allow(dead_code)]
+        SendReliableMessageToUser => fn send_reliable_message_to_user(
+            message: ReliableRpcServerMessage,
+            user_addr: UserId,
+        ) -> Result<(), LobbyError>;
+
+        #[allow(dead_code)]
+        SendUnreliableMessageToUser => fn send_unreliable_message_to_user(
+            message: UnreliableRpcServerMessage,
+            user_addr: UserId,
+        ) -> Result<(), LobbyError>;
+
+        #[allow(dead_code)]
+        SendReliableMessageToLobby => fn send_reliable_message_to_lobby(
+            message: ReliableRpcServerMessage,
+        ) -> Result<(), LobbyError>;
+
+        #[allow(dead_code)]
+        SendUnreliableMessageToLobby => fn send_unreliable_message_to_lobby(
+            message: UnreliableRpcServerMessage,
+        ) -> Result<(), LobbyError>;
+    }
+
+    tell {
+        SendMoveInput => fn send_move_input(
+            user_addr: UserId,
+            input: MoveInputState,
+            sequence: InputSequence,
+            client_send_time_ms: i64,
+        );
+
+        ResetLobby => fn reset_lobby();
+    }
+}
 
 struct LobbySession {
     id: LobbyId,
@@ -232,44 +267,44 @@ impl LobbySession {
     fn send_reliable_message_to_user(
         &self,
         message: ReliableRpcServerMessage,
-        user_addr: &UserId,
+        user_addr: UserId,
     ) -> Result<(), LobbyError> {
         if let Some((user, sender, _)) = self.left_side.as_ref()
-            && *user == *user_addr
+            && *user == user_addr
         {
             sender
                 .send(message)
-                .map_err(|_e| LobbyError::MessageSendFailed(*user_addr))
+                .map_err(|_e| LobbyError::MessageSendFailed(user_addr))
         } else if let Some((user, sender, _)) = self.right_side.as_ref()
-            && *user == *user_addr
+            && *user == user_addr
         {
             sender
                 .send(message)
-                .map_err(|_e| LobbyError::MessageSendFailed(*user_addr))
+                .map_err(|_e| LobbyError::MessageSendFailed(user_addr))
         } else {
-            Err(LobbyError::NeverExisted(*user_addr))
+            Err(LobbyError::NeverExisted(user_addr))
         }
     }
 
     fn send_unreliable_message_to_user(
         &self,
         message: UnreliableRpcServerMessage,
-        user_addr: &UserId,
+        user_addr: UserId,
     ) -> Result<(), LobbyError> {
         if let Some((user, _, sender)) = self.left_side.as_ref()
-            && *user == *user_addr
+            && *user == user_addr
         {
             sender
                 .send(message)
-                .map_err(|_e| LobbyError::MessageSendFailed(*user_addr))
+                .map_err(|_e| LobbyError::MessageSendFailed(user_addr))
         } else if let Some((user, _, sender)) = self.right_side.as_ref()
-            && *user == *user_addr
+            && *user == user_addr
         {
             sender
                 .send(message)
-                .map_err(|_e| LobbyError::MessageSendFailed(*user_addr))
+                .map_err(|_e| LobbyError::MessageSendFailed(user_addr))
         } else {
-            Err(LobbyError::NeverExisted(*user_addr))
+            Err(LobbyError::NeverExisted(user_addr))
         }
     }
 
@@ -381,258 +416,85 @@ impl LobbySession {
         }
     }
 
-    fn handle_message(&mut self, message: LobbySessionMessage) -> Result<(), LobbyError> {
-        match message {
-            LobbySessionMessage::InsertPlayer(new_player, oneshot) => {
-                let result = self.insert_player(new_player);
-                let _ = oneshot.send(result);
-            }
-            LobbySessionMessage::RemovePlayer(addr, oneshot) => {
-                let result = self.remove_player(addr);
-                let _ = oneshot.send(result);
-            }
-            LobbySessionMessage::GetPlayerSide(addr, oneshot) => {
-                let result = self.get_player_side(addr);
-                let _ = oneshot.send(result);
-            }
-            LobbySessionMessage::GetUserId(side, oneshot) => match side {
-                PlayerSide::Left => {
-                    let _ = oneshot.send(self.get_left());
-                }
-                PlayerSide::Right => {
-                    let _ = oneshot.send(self.get_right());
-                }
-            },
-            LobbySessionMessage::TurnAction(player_addr, action, oneshot) => {
-                let player_side = self.get_player_side(player_addr)?;
-                // Rejections (dead player, wrong phase) go back to the caller
-                // instead of erroring here, so a stray message can't kill the
-                // whole lobby actor.
-                let result = self
-                    .current_round
-                    .set_turn_action(player_side, action)
-                    .map_err(LobbyError::GameError);
-                let _ = oneshot.send(result);
-            }
-            LobbySessionMessage::MoveInput(player_addr, input, sequence, client_send_time_ms) => {
-                let player_side = self.get_player_side(player_addr)?;
-                match player_side {
-                    PlayerSide::Left => {
-                        self.current_round
-                            .set_left_move_input(input, sequence, client_send_time_ms)
-                    }
-                    PlayerSide::Right => self.current_round.set_right_move_input(
-                        input,
-                        sequence,
-                        client_send_time_ms,
-                    ),
-                }
-            }
-            LobbySessionMessage::SendReliableMessageToUser(message, addr, oneshot) => {
-                let result = self.send_reliable_message_to_user(message, &addr);
-                let _ = oneshot.send(result);
-            }
-            LobbySessionMessage::SendUnreliableMessageToUser(message, addr, oneshot) => {
-                let result = self.send_unreliable_message_to_user(message, &addr);
-                let _ = oneshot.send(result);
-            }
-            LobbySessionMessage::SendReliableMessageToLobby(message, oneshot) => {
-                let result = self.send_reliable_message_to_lobby(message);
-                let _ = oneshot.send(result);
-            }
-            LobbySessionMessage::SendUnreliableMessageToLobby(message, oneshot) => {
-                let result = self.send_unreliable_message_to_lobby(message);
-                let _ = oneshot.send(result);
-            }
-            LobbySessionMessage::LobbyState(oneshot) => {
-                let _ = oneshot.send(self.get_current_lobby_state());
-            }
-            LobbySessionMessage::ResetLobby => {
-                self.reset_lobby();
-            }
-        }
-        Ok(())
-    }
-}
-
-async fn run_lobby_session(mut lobby: LobbySession) -> Result<(), LobbyError> {
-    // loop every 1/30 seconds or deal with incoming messages
-    let mut tick = tokio::time::interval(tokio::time::Duration::from_millis(33)); // ~1/30s
-
-    'actor_loop: loop {
-        tokio::select! {
-            msg = lobby.receiver.recv() => {
-                match msg {
-                    Some(msg) => {
-                        if let Err(e) = lobby.handle_message(msg) {
-                            warn!("error handling message: {e:?}");
-                            // TODO: For now we just break
-                            break 'actor_loop;
-                        }
-                    }
-                    None => break, // sender dropped, end the session
-                }
-            }
-            _ = tick.tick() => {
-                // send out gamestate updates
-                lobby.broadcast_lobby_state()?;
-                lobby.broadcast_game_state()?;
-                if let Ok(move_state) = lobby.step_game() {
-                    // broadcast state to both right and left (it's okay if these fail)
-                    let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::GameState {state:move_state.clone(), acknowledged_sequence: lobby.current_round.get_left_remote_clock_ack(), tick: lobby.current_round.get_tick(), echo_client_time_ms: lobby.current_round.get_left_last_client_time_ms()}, PlayerSide::Left);
-                    let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::GameState {state:move_state, acknowledged_sequence: lobby.current_round.get_right_remote_clock_ack(), tick: lobby.current_round.get_tick(), echo_client_time_ms: lobby.current_round.get_right_last_client_time_ms()}, PlayerSide::Right);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-#[derive(Clone, Debug)]
-pub struct LobbySessionHandle {
-    sender: mpsc::Sender<LobbySessionMessage>,
-}
-
-impl LobbySessionHandle {
-    pub fn new(id: LobbyId, left_side: PlayerDataTuple) -> Self {
-        let (sender, receiver) = mpsc::channel(32);
-        let actor = LobbySession::new(id, left_side, receiver);
-        tokio::spawn(async move {
-            if let Err(e) = run_lobby_session(actor).await {
-                warn!("error handling lobby session: {e:?}");
-            }
-        });
-
-        Self { sender }
-    }
-
-    pub async fn insert_player(
-        &self,
-        new_player: PlayerDataTuple,
-    ) -> Result<(PlayerSide, LobbyState), LobbyError> {
-        let (send, recv) = oneshot::channel();
-        let msg = LobbySessionMessage::InsertPlayer(new_player, send);
-
-        // Ignore send errors. If this send fails, so does the
-        // recv.await below. There's no reason to check for the
-        // same failure twice.
-        let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
-    }
-
-    pub async fn remove_player(
-        &self,
-        leaving_player: UserId,
-    ) -> Result<(PlayerSide, LobbyState), LobbyError> {
-        let (send, recv) = oneshot::channel();
-        let msg = LobbySessionMessage::RemovePlayer(leaving_player, send);
-
-        // Ignore send errors. If this send fails, so does the
-        // recv.await below. There's no reason to check for the
-        // same failure twice.
-        let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
-    }
-
-    pub async fn get_player_side(&self, user_id: UserId) -> Result<PlayerSide, LobbyError> {
-        let (send, recv) = oneshot::channel();
-        let msg = LobbySessionMessage::GetPlayerSide(user_id, send);
-        let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
-    }
-
-    #[allow(dead_code)]
-    pub async fn send_reliable_message_to_user(
-        &self,
-        message: ReliableRpcServerMessage,
-        user_addr: UserId,
-    ) -> Result<(), LobbyError> {
-        let (send, recv) = oneshot::channel();
-        let msg = LobbySessionMessage::SendReliableMessageToUser(message, user_addr, send);
-
-        // Ignore send errors. If this send fails, so does the
-        // recv.await below. There's no reason to check for the
-        // same failure twice.
-        let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
-    }
-
-    #[allow(dead_code)]
-    pub async fn send_reliable_message_to_lobby(
-        &self,
-        message: ReliableRpcServerMessage,
-    ) -> Result<(), LobbyError> {
-        let (send, recv) = oneshot::channel();
-        let msg = LobbySessionMessage::SendReliableMessageToLobby(message, send);
-
-        // Ignore send errors. If this send fails, so does the
-        // recv.await below. There's no reason to check for the
-        // same failure twice.
-        let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
-    }
-
-    #[allow(dead_code)]
-    pub async fn send_unreliable_message_to_user(
-        &self,
-        message: UnreliableRpcServerMessage,
-        user_addr: UserId,
-    ) -> Result<(), LobbyError> {
-        let (send, recv) = oneshot::channel();
-        let msg = LobbySessionMessage::SendUnreliableMessageToUser(message, user_addr, send);
-
-        // Ignore send errors. If this send fails, so does the
-        // recv.await below. There's no reason to check for the
-        // same failure twice.
-        let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
-    }
-
-    pub async fn send_turn_action(
-        &self,
-        user_addr: UserId,
+    fn send_turn_action(
+        &mut self,
+        player_addr: UserId,
         action: TurnAction,
     ) -> Result<BattleGameState, LobbyError> {
-        let (send, recv) = oneshot::channel();
-        let msg = LobbySessionMessage::TurnAction(user_addr, action, send);
-        let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
+        // Rejections (unknown player, dead player, wrong phase) go back to the
+        // caller instead of erroring here, so a stray message can't kill the
+        // whole lobby actor.
+        let player_side = self.get_player_side(player_addr)?;
+        self.current_round
+            .set_turn_action(player_side, action)
+            .map_err(LobbyError::GameError)
     }
 
-    pub async fn send_move_input(
-        &self,
-        user_addr: UserId,
+    fn send_move_input(
+        &mut self,
+        player_addr: UserId,
         input: MoveInputState,
         sequence: InputSequence,
         client_send_time_ms: i64,
     ) {
-        let msg = LobbySessionMessage::MoveInput(user_addr, input, sequence, client_send_time_ms);
-        let _ = self.sender.send(msg).await;
+        // Nobody is waiting on a reply here, so an input from someone who isn't
+        // in this lobby is dropped rather than taking the actor down with it.
+        let Ok(player_side) = self.get_player_side(player_addr) else {
+            warn!("dropping move input from player {player_addr:?} who isn't in this lobby");
+            return;
+        };
+
+        match player_side {
+            PlayerSide::Left => {
+                self.current_round
+                    .set_left_move_input(input, sequence, client_send_time_ms)
+            }
+            PlayerSide::Right => {
+                self.current_round
+                    .set_right_move_input(input, sequence, client_send_time_ms)
+            }
+        }
     }
 
-    pub async fn get_current_lobby_state(&self) -> LobbyState {
-        let (send, recv) = oneshot::channel();
-        let msg = LobbySessionMessage::LobbyState(send);
-        let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
-    }
+    /// Sends out gamestate updates and steps the simulation. Called by the run
+    /// loop every [`TICK_PERIOD`].
+    fn tick(&mut self) {
+        // A failed send means that player's connection is already gone. The
+        // disconnect path takes them out of the lobby, so drop the message
+        // rather than taking the whole session down over it.
+        let _ = self.broadcast_lobby_state();
+        let _ = self.broadcast_game_state();
 
-    pub async fn reset_lobby(&self) {
-        let msg = LobbySessionMessage::ResetLobby;
-        let _ = self.sender.send(msg).await;
-    }
+        let Ok(move_state) = self.step_game() else {
+            return;
+        };
 
-    pub async fn get_left(&self) -> Result<UserId, LobbyError> {
-        let (send, recv) = oneshot::channel();
-        let msg = LobbySessionMessage::GetUserId(PlayerSide::Left, send);
-        let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
-    }
+        // Each side gets its own acknowledgement bookkeeping back, so the two
+        // messages differ by more than just the recipient.
+        let current_tick = self.current_round.get_tick();
+        let left_ack = self.current_round.get_left_remote_clock_ack();
+        let left_client_time_ms = self.current_round.get_left_last_client_time_ms();
+        let right_ack = self.current_round.get_right_remote_clock_ack();
+        let right_client_time_ms = self.current_round.get_right_last_client_time_ms();
 
-    pub async fn get_right(&self) -> Result<UserId, LobbyError> {
-        let (send, recv) = oneshot::channel();
-        let msg = LobbySessionMessage::GetUserId(PlayerSide::Right, send);
-        let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
+        // broadcast state to both right and left (it's okay if these fail)
+        let _ = self.send_unreliable_message_to_side(
+            UnreliableRpcServerMessage::GameState {
+                state: move_state.clone(),
+                acknowledged_sequence: left_ack,
+                tick: current_tick,
+                echo_client_time_ms: left_client_time_ms,
+            },
+            PlayerSide::Left,
+        );
+        let _ = self.send_unreliable_message_to_side(
+            UnreliableRpcServerMessage::GameState {
+                state: move_state,
+                acknowledged_sequence: right_ack,
+                tick: current_tick,
+                echo_client_time_ms: right_client_time_ms,
+            },
+            PlayerSide::Right,
+        );
     }
 }
