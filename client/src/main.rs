@@ -761,7 +761,6 @@ async fn main() {
                 && ui_game_state.lobby_state == LobbyState::Running
                 && let Some(state) = ui_game_state.current_game_state.as_ref()
                 && let stats = state.get_stats()
-                && stats.check_if_alive(side)
             {
                 let in_enemy_turn = matches!(state, BattleGameState::EnemyTurn { .. });
                 // Outside the enemy turn phase the server discards movement (see
@@ -769,7 +768,7 @@ async fn main() {
                 // so send neutral input and skip local prediction. We still send a
                 // packet every tick: it refreshes the server's echoed timestamp,
                 // which is what keeps the RTT estimate fresh between enemy turn phases.
-                let input_to_send = if in_enemy_turn {
+                let input_to_send = if in_enemy_turn && stats.check_if_alive(side) {
                     input
                 } else {
                     shared::game::MoveInputState::default()
@@ -801,16 +800,14 @@ async fn main() {
                         game_logic.game_logic.spawn_projectile(position, velocity);
                         game_logic.amount_of_spawned_bullets += 1;
                     }
-
-                    game_logic.game_logic.step_physics();
-
-                    // Mirror the server's despawn-on-contact so predicted bullets
-                    // visually disappear when they hit someone; the damage itself is
-                    // server-authoritative and arrives through the battle stats.
-                    let _ = game_logic
-                        .game_logic
-                        .detect_projectile_hits(stats.left_health > 0, stats.right_health > 0);
                 }
+                game_logic.game_logic.step_physics();
+                // Mirror the server's despawn-on-contact so predicted bullets
+                // visually disappear when they hit someone; the damage itself is
+                // server-authoritative and arrives through the battle stats.
+                let _ = game_logic
+                    .game_logic
+                    .detect_projectile_hits(stats.left_health > 0, stats.right_health > 0);
                 // send all inputs that haven't been acknowledged yet
                 // (there is a max amount of inputs we can send before the message gets too big)
                 if let Some(rpc_sender) = unreliable_client_rpc_sender.as_ref() {

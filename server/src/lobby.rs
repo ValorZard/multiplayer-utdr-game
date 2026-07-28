@@ -1,5 +1,7 @@
 use crate::battle::{GameError, GameSession};
-use shared::game::{BattleGameState, MoveGameState, MoveInputState, PlayerSide, TurnAction};
+use shared::game::{
+    BattleGameState, GAME_TIME_STEP, MoveGameState, MoveInputState, PlayerSide, TurnAction,
+};
 use shared::rpc::{
     InputSequence, LobbyId, LobbyState, ReliableRpcServerMessage, UnreliableRpcServerMessage,
     UserId,
@@ -473,7 +475,7 @@ impl LobbySession {
 
 async fn run_lobby_session(mut lobby: LobbySession) {
     // loop every 1/30 seconds or deal with incoming messages
-    let mut tick = tokio::time::interval(tokio::time::Duration::from_millis(33)); // ~1/30s
+    let mut tick = tokio::time::interval(GAME_TIME_STEP); // ~1/30s
 
     loop {
         tokio::select! {
