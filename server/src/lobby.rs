@@ -73,6 +73,7 @@ pub enum LobbyError {
     GameError(GameError),
     SideNotFound(PlayerSide),
     NotRunning,
+    ActorStopped,
 }
 
 impl std::fmt::Display for LobbyError {
@@ -96,6 +97,9 @@ impl std::fmt::Display for LobbyError {
             }
             LobbyError::NotRunning => {
                 write!(f, "Error! This lobby is not running!")
+            }
+            LobbyError::ActorStopped => {
+                write!(f, "Error! This lobby's session task is no longer running!")
             }
         }
     }
@@ -381,7 +385,10 @@ impl LobbySession {
         }
     }
 
-    fn handle_message(&mut self, message: LobbySessionMessage) -> Result<(), LobbyError> {
+    // Never fails: a message this lobby can't make sense of is reported back to
+    // whoever sent it (or dropped, if there's nobody to answer), never surfaced
+    // as an error that would take the session down with it.
+    fn handle_message(&mut self, message: LobbySessionMessage) {
         match message {
             LobbySessionMessage::InsertPlayer(new_player, oneshot) => {
                 let result = self.insert_player(new_player);
@@ -404,18 +411,28 @@ impl LobbySession {
                 }
             },
             LobbySessionMessage::TurnAction(player_addr, action, oneshot) => {
-                let player_side = self.get_player_side(player_addr)?;
-                // Rejections (dead player, wrong phase) go back to the caller
-                // instead of erroring here, so a stray message can't kill the
-                // whole lobby actor.
-                let result = self
-                    .current_round
-                    .set_turn_action(player_side, action)
-                    .map_err(LobbyError::GameError);
+                // Rejections (unknown player, dead player, wrong phase) go back to
+                // the caller instead of erroring here, so a stray message can't
+                // kill the whole lobby actor.
+                let result = match self.get_player_side(player_addr) {
+                    Ok(player_side) => self
+                        .current_round
+                        .set_turn_action(player_side, action)
+                        .map_err(LobbyError::GameError),
+                    Err(e) => Err(e),
+                };
                 let _ = oneshot.send(result);
             }
             LobbySessionMessage::MoveInput(player_addr, input, sequence, client_send_time_ms) => {
-                let player_side = self.get_player_side(player_addr)?;
+                // Fire-and-forget, so there's no caller to reject this back to:
+                // input from someone who isn't playing here is simply dropped.
+                let Ok(player_side) = self.get_player_side(player_addr) else {
+                    warn!(
+                        "lobby {:?}: dropping move input from non-player {player_addr:?}",
+                        self.id
+                    );
+                    return;
+                };
                 match player_side {
                     PlayerSide::Left => {
                         self.current_round
@@ -451,32 +468,32 @@ impl LobbySession {
                 self.reset_lobby();
             }
         }
-        Ok(())
     }
 }
 
-async fn run_lobby_session(mut lobby: LobbySession) -> Result<(), LobbyError> {
+async fn run_lobby_session(mut lobby: LobbySession) {
     // loop every 1/30 seconds or deal with incoming messages
     let mut tick = tokio::time::interval(tokio::time::Duration::from_millis(33)); // ~1/30s
 
-    'actor_loop: loop {
+    loop {
         tokio::select! {
             msg = lobby.receiver.recv() => {
                 match msg {
-                    Some(msg) => {
-                        if let Err(e) = lobby.handle_message(msg) {
-                            warn!("error handling message: {e:?}");
-                            // TODO: For now we just break
-                            break 'actor_loop;
-                        }
-                    }
+                    Some(msg) => lobby.handle_message(msg),
                     None => break, // sender dropped, end the session
                 }
             }
             _ = tick.tick() => {
-                // send out gamestate updates
-                lobby.broadcast_lobby_state()?;
-                lobby.broadcast_game_state()?;
+                // send out gamestate updates.
+                // A failed send just means that player's connection is already gone
+                // and ServerState hasn't gotten around to removing them yet; that's
+                // no reason to drop the lobby out from under the player still here.
+                if let Err(e) = lobby.broadcast_lobby_state() {
+                    warn!("lobby {:?}: broadcasting lobby state failed: {e}", lobby.id);
+                }
+                if let Err(e) = lobby.broadcast_game_state() {
+                    warn!("lobby {:?}: broadcasting game state failed: {e}", lobby.id);
+                }
                 if let Ok(move_state) = lobby.step_game() {
                     // broadcast state to both right and left (it's okay if these fail)
                     let _ = lobby.send_unreliable_message_to_side(UnreliableRpcServerMessage::GameState {state:move_state.clone(), acknowledged_sequence: lobby.current_round.get_left_remote_clock_ack(), tick: lobby.current_round.get_tick(), echo_client_time_ms: lobby.current_round.get_left_last_client_time_ms()}, PlayerSide::Left);
@@ -485,7 +502,6 @@ async fn run_lobby_session(mut lobby: LobbySession) -> Result<(), LobbyError> {
             }
         }
     }
-    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -497,11 +513,7 @@ impl LobbySessionHandle {
     pub fn new(id: LobbyId, left_side: PlayerDataTuple) -> Self {
         let (sender, receiver) = mpsc::channel(32);
         let actor = LobbySession::new(id, left_side, receiver);
-        tokio::spawn(async move {
-            if let Err(e) = run_lobby_session(actor).await {
-                warn!("error handling lobby session: {e:?}");
-            }
-        });
+        tokio::spawn(run_lobby_session(actor));
 
         Self { sender }
     }
@@ -517,7 +529,9 @@ impl LobbySessionHandle {
         // recv.await below. There's no reason to check for the
         // same failure twice.
         let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
+        // The session task stops once every handle to it is dropped, so a closed
+        // channel is a normal shutdown race, not something to panic the caller over.
+        recv.await.unwrap_or(Err(LobbyError::ActorStopped))
     }
 
     pub async fn remove_player(
@@ -531,14 +545,18 @@ impl LobbySessionHandle {
         // recv.await below. There's no reason to check for the
         // same failure twice.
         let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
+        // The session task stops once every handle to it is dropped, so a closed
+        // channel is a normal shutdown race, not something to panic the caller over.
+        recv.await.unwrap_or(Err(LobbyError::ActorStopped))
     }
 
     pub async fn get_player_side(&self, user_id: UserId) -> Result<PlayerSide, LobbyError> {
         let (send, recv) = oneshot::channel();
         let msg = LobbySessionMessage::GetPlayerSide(user_id, send);
         let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
+        // The session task stops once every handle to it is dropped, so a closed
+        // channel is a normal shutdown race, not something to panic the caller over.
+        recv.await.unwrap_or(Err(LobbyError::ActorStopped))
     }
 
     #[allow(dead_code)]
@@ -554,7 +572,9 @@ impl LobbySessionHandle {
         // recv.await below. There's no reason to check for the
         // same failure twice.
         let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
+        // The session task stops once every handle to it is dropped, so a closed
+        // channel is a normal shutdown race, not something to panic the caller over.
+        recv.await.unwrap_or(Err(LobbyError::ActorStopped))
     }
 
     #[allow(dead_code)]
@@ -569,7 +589,9 @@ impl LobbySessionHandle {
         // recv.await below. There's no reason to check for the
         // same failure twice.
         let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
+        // The session task stops once every handle to it is dropped, so a closed
+        // channel is a normal shutdown race, not something to panic the caller over.
+        recv.await.unwrap_or(Err(LobbyError::ActorStopped))
     }
 
     #[allow(dead_code)]
@@ -585,7 +607,9 @@ impl LobbySessionHandle {
         // recv.await below. There's no reason to check for the
         // same failure twice.
         let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
+        // The session task stops once every handle to it is dropped, so a closed
+        // channel is a normal shutdown race, not something to panic the caller over.
+        recv.await.unwrap_or(Err(LobbyError::ActorStopped))
     }
 
     pub async fn send_turn_action(
@@ -596,7 +620,9 @@ impl LobbySessionHandle {
         let (send, recv) = oneshot::channel();
         let msg = LobbySessionMessage::TurnAction(user_addr, action, send);
         let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
+        // The session task stops once every handle to it is dropped, so a closed
+        // channel is a normal shutdown race, not something to panic the caller over.
+        recv.await.unwrap_or(Err(LobbyError::ActorStopped))
     }
 
     pub async fn send_move_input(
@@ -610,11 +636,11 @@ impl LobbySessionHandle {
         let _ = self.sender.send(msg).await;
     }
 
-    pub async fn get_current_lobby_state(&self) -> LobbyState {
+    pub async fn get_current_lobby_state(&self) -> Result<LobbyState, LobbyError> {
         let (send, recv) = oneshot::channel();
         let msg = LobbySessionMessage::LobbyState(send);
         let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
+        recv.await.map_err(|_| LobbyError::ActorStopped)
     }
 
     pub async fn reset_lobby(&self) {
@@ -626,13 +652,55 @@ impl LobbySessionHandle {
         let (send, recv) = oneshot::channel();
         let msg = LobbySessionMessage::GetUserId(PlayerSide::Left, send);
         let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
+        // The session task stops once every handle to it is dropped, so a closed
+        // channel is a normal shutdown race, not something to panic the caller over.
+        recv.await.unwrap_or(Err(LobbyError::ActorStopped))
     }
 
     pub async fn get_right(&self) -> Result<UserId, LobbyError> {
         let (send, recv) = oneshot::channel();
         let msg = LobbySessionMessage::GetUserId(PlayerSide::Right, send);
         let _ = self.sender.send(msg).await;
-        recv.await.expect("Actor task has been killed")
+        // The session task stops once every handle to it is dropped, so a closed
+        // channel is a normal shutdown race, not something to panic the caller over.
+        recv.await.unwrap_or(Err(LobbyError::ActorStopped))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn stray_messages_do_not_kill_the_session() {
+        let (reliable_sender, _reliable_receiver) = mpsc::unbounded_channel();
+        let (unreliable_sender, _unreliable_receiver) = mpsc::unbounded_channel();
+        let left_addr: UserId = 4001;
+        let stranger: UserId = 4002;
+
+        let lobby = LobbySessionHandle::new(
+            Uuid::new_v4(),
+            (left_addr, reliable_sender, unreliable_sender),
+        );
+
+        // A turn action from someone who isn't playing here is reported back...
+        assert_eq!(
+            lobby.send_turn_action(stranger, TurnAction::Attack).await,
+            Err(LobbyError::NeverExisted(stranger))
+        );
+        // ...and a fire-and-forget input, which has nobody to report back to, is
+        // dropped just as quietly.
+        lobby
+            .send_move_input(stranger, MoveInputState::default(), 1, 0)
+            .await;
+
+        // Neither took the session down, so the player who really is here is
+        // still being served.
+        assert_eq!(
+            lobby.get_current_lobby_state().await,
+            Ok(LobbyState::Waiting)
+        );
+        assert_eq!(lobby.get_left().await, Ok(left_addr));
     }
 }

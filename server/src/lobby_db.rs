@@ -176,84 +176,84 @@ impl ServerStateInner {
     }
 
     async fn disconnect_user(&mut self, addr: UserId) -> anyhow::Result<()> {
-        let Some(user_data) = self.connected_user_list.get_mut(&addr) else {
+        // Take the user out of the connected list up front. Every step below can
+        // fail, and a user left stranded in this map can never get back in:
+        // connect_user rejects duplicates, and UserId is their itch.io id, so the
+        // lockout would outlive the connection and last until a server restart.
+        let Some(user_data) = self.connected_user_list.remove(&addr) else {
             bail!("Cannot disconnect user {addr} from the server if it's not connected");
         };
 
-        if let Some(lobby_id) = user_data.lobby_id {
-            // removed player lobby is now empty
-            // this can fail if the player totally disconnected
-            let _ = user_data
-                .reliable_sender
-                .send(ReliableRpcServerMessage::LobbyState(LobbyState::Empty));
-            user_data.lobby_id = None;
-            user_data.player_side = None;
+        let Some(lobby_id) = user_data.lobby_id else {
+            return Ok(());
+        };
 
-            // Pop lobby entry off, we can add it back in later
-            let Some(lobby_entry) = self.lobby_list.remove(&lobby_id) else {
-                bail!("Lobby {lobby_id} is invalid.");
-            };
+        // removed player lobby is now empty
+        // this can fail if the player totally disconnected
+        let _ = user_data
+            .reliable_sender
+            .send(ReliableRpcServerMessage::LobbyState(LobbyState::Empty));
 
-            match lobby_entry {
-                LobbyEntry::Waiting(lobby) => {
-                    let (_, state) = lobby.remove_player(addr).await?;
+        // Pop lobby entry off, we can add it back in later
+        let Some(lobby_entry) = self.lobby_list.remove(&lobby_id) else {
+            bail!("Lobby {lobby_id} is invalid.");
+        };
 
-                    match state {
-                        LobbyState::Empty => {
-                            // delete lobby
-                            info!("Waiting Lobby {lobby_id} is now destroyed, lobby was empty");
-                        }
-                        _ => unreachable!(
-                            "Since we only have two players in lobby {lobby_id:?}, if we remove a player from a waiting lobby, its empty and can be deleted."
-                        ),
+        match lobby_entry {
+            LobbyEntry::Waiting(lobby) => {
+                let (_, state) = lobby.remove_player(addr).await?;
+
+                match state {
+                    LobbyState::Empty => {
+                        // delete lobby
+                        info!("Waiting Lobby {lobby_id} is now destroyed, lobby was empty");
                     }
+                    _ => unreachable!(
+                        "Since we only have two players in lobby {lobby_id:?}, if we remove a player from a waiting lobby, its empty and can be deleted."
+                    ),
                 }
+            }
 
-                LobbyEntry::Running(lobby) => {
-                    let (_, state) = lobby.remove_player(addr).await?;
+            LobbyEntry::Running(lobby) => {
+                let (_, state) = lobby.remove_player(addr).await?;
 
-                    match state {
-                        LobbyState::Waiting => {
-                            self.lobby_list.insert(lobby_id, LobbyEntry::Waiting(lobby));
-                        }
-                        LobbyState::Empty => {
-                            // delete lobby
-                            info!("Running Lobby {lobby_id} is now destroyed, lobby was empty");
-                        }
-                        _ => unreachable!(),
+                match state {
+                    LobbyState::Waiting => {
+                        self.lobby_list.insert(lobby_id, LobbyEntry::Waiting(lobby));
                     }
+                    LobbyState::Empty => {
+                        // delete lobby
+                        info!("Running Lobby {lobby_id} is now destroyed, lobby was empty");
+                    }
+                    _ => unreachable!(),
                 }
+            }
 
-                LobbyEntry::Finished(finished) => {
-                    let (_, state) = finished.lobby_session.remove_player(addr).await?;
+            LobbyEntry::Finished(finished) => {
+                let (_, state) = finished.lobby_session.remove_player(addr).await?;
 
-                    match state {
-                        LobbyState::Waiting => {
-                            self.lobby_list
-                                .insert(lobby_id, LobbyEntry::Waiting(finished.lobby_session));
-                        }
-                        LobbyState::Empty => {
-                            // delete lobby
-                            info!(
-                                "Lobby {lobby_id} is now destroyed, both players rejected continuing to play"
-                            );
-                        }
-                        LobbyState::Finished => {
-                            unreachable!(
-                                "If we remove a player, the lobby {lobby_id:?} can't be finished"
-                            );
-                        }
-                        LobbyState::Running => unreachable!(
-                            "If we remove a player, the lobby {lobby_id:?} can't be running"
-                        ),
+                match state {
+                    LobbyState::Waiting => {
+                        self.lobby_list
+                            .insert(lobby_id, LobbyEntry::Waiting(finished.lobby_session));
                     }
+                    LobbyState::Empty => {
+                        // delete lobby
+                        info!(
+                            "Lobby {lobby_id} is now destroyed, both players rejected continuing to play"
+                        );
+                    }
+                    LobbyState::Finished => {
+                        unreachable!(
+                            "If we remove a player, the lobby {lobby_id:?} can't be finished"
+                        );
+                    }
+                    LobbyState::Running => unreachable!(
+                        "If we remove a player, the lobby {lobby_id:?} can't be running"
+                    ),
                 }
             }
         }
-
-        let Some(_user_data) = self.connected_user_list.remove(&addr) else {
-            return Ok(());
-        };
 
         Ok(())
     }
@@ -311,7 +311,7 @@ impl ServerStateInner {
                     // enemy wins during the dodge phase), so trust the actor
                     // over our entry: if it already reports Finished, handle
                     // this message under finished-lobby rules instead.
-                    if lobby.get_current_lobby_state().await == LobbyState::Finished {
+                    if lobby.get_current_lobby_state().await == Ok(LobbyState::Finished) {
                         let finished = FinishedLobbySession {
                             lobby_session: lobby,
                             left_side_continue: None,

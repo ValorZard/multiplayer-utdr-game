@@ -97,6 +97,7 @@ enum UiState {
     LobbyWaiting,
     LobbyRunning,
     LobbyFinished,
+    LobbyVoted,
 }
 
 #[derive(Debug)]
@@ -610,7 +611,15 @@ async fn main() {
                                 // Ensure move prediction starts from a clean baseline when a round begins.
                                 game_logic.reset();
                             }
-                            LobbyState::Empty => {}
+                            LobbyState::Empty => {
+                                // We're out of the lobby but still connected and
+                                // authenticated, so drop back to the "find a game"
+                                // screen rather than tearing down the session.
+                                ui_game_state.ui_state = UiState::Connected;
+                                ui_game_state.lobby_id = None;
+                                ui_game_state.current_game_state = None;
+                                game_logic.reset();
+                            }
                             LobbyState::Waiting => {
                                 ui_game_state.ui_state = UiState::LobbyWaiting;
                             }
@@ -918,6 +927,14 @@ async fn main() {
                         }
                         UiState::Connected => {
                             ui.label("Successfully connected and authenticated to the server!");
+                            // Joining reuses the session we already authenticated,
+                            // so leaving a lobby never costs another OAuth round trip.
+                            if let Some(client_rpc_sender) = reliable_client_rpc_sender.as_ref()
+                                && ui.button("Find a game").clicked()
+                            {
+                                let _ = client_rpc_sender
+                                    .unbounded_send(ReliableRpcClientMessage::JoinServer);
+                            }
                         }
                         UiState::LobbyWaiting => {
                             ui.label("Waiting for lobby to fill up...");
@@ -1004,15 +1021,17 @@ async fn main() {
                                 let _ = client_rpc_sender.unbounded_send(
                                     ReliableRpcClientMessage::ContinueRound(YesOrNo::Yes),
                                 );
-                                // TODO: make it so that if you disconnect from the lobby you don't disconnect from the server
-                                ui_game_state.ui_state = UiState::NotConnected;
+                                ui_game_state.ui_state = UiState::LobbyVoted;
                             }
                             if ui.button("No").clicked() {
                                 let _ = client_rpc_sender.unbounded_send(
                                     ReliableRpcClientMessage::ContinueRound(YesOrNo::No),
                                 );
-                                ui_game_state.ui_state = UiState::NotConnected;
+                                ui_game_state.ui_state = UiState::LobbyVoted;
                             }
+                        }
+                        UiState::LobbyVoted => {
+                            ui.label("Waiting for your partner to decide...");
                         }
                     }
                 });
