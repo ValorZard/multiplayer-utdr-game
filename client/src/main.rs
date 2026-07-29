@@ -446,9 +446,6 @@ async fn main() {
         console_error_panic_hook::set_once();
     }
     let mut window = Window::new("Kiss3d: rectangle").await;
-    let _camera = PanZoomCamera2d::new(Vec2::ZERO, 2.0);
-    let _scene = SceneNode2d::empty();
-
     let image_buffer = ASSET_DIR
         .get_file("background_concept_2.png")
         .expect("File should be here");
@@ -462,12 +459,22 @@ async fn main() {
     let mut unreliable_server_rpc_receiver: Option<UnreliableServerRpcReceiver> = None;
     let mut connection_finished_receiver: Option<ConnectionFinishedReceiver> = None;
 
-    let mut camera = PanZoomCamera2d::new(Vec2::ZERO, 5.0);
+    let mut camera = MyCamera2d::new(Vec2::ZERO, 5.0);
     let mut scene = SceneNode2d::empty();
     let mut local_player = scene.add_rectangle(10.0, 10.0).set_color(RED);
     let mut remote_player = scene.add_rectangle(10.0, 10.0).set_color(BLUE);
-    let mut enemy_node = scene.add_rectangle(30.0, 30.0).set_color(GREEN);
+
+    let sheet = SpriteSheet::new(9, 3);
+    let characters_texture = texture_manager
+        .add_image_from_memory_pixelated(include_bytes!("../assets/characters.png"), "characters");
+
+    let frames_of_box_guy: [u32; 2] = [11, 12];
+    let mut current_frame_index: usize = 0;
+    let enemy_animation_length = 12;
+    let mut enemy_node = scene.add_sprite(30., 30.);
     enemy_node.set_position(ENEMY_POSITION);
+    enemy_node.set_texture(characters_texture);
+    enemy_node.set_sprite_frame(&sheet, frames_of_box_guy[current_frame_index]);
 
     // Fixed pool of nodes for predicted bullets; unused ones are parked far
     // off-screen since kiss3d nodes are cheapest to keep alive and move.
@@ -518,6 +525,7 @@ async fn main() {
     let client_config: ClientConfig =
         toml::from_str(client_config).expect("Should be able to convert");
     let mut direct_connect_addr = String::new();
+    let mut frame = 0u32;
     while window.render_2d(&mut scene, &mut camera).await {
         let current_time = OffsetDateTime::now_utc();
         // current time in milliseconds
@@ -864,6 +872,16 @@ async fn main() {
                 }
             }
         }
+
+        // render sprites
+        // A few times per second, flip every character between its two frames.
+
+        if frame.is_multiple_of(enemy_animation_length) {
+            current_frame_index =
+                ((frame / enemy_animation_length) % frames_of_box_guy.len() as u32) as usize;
+            enemy_node.set_sprite_frame(&sheet, frames_of_box_guy[current_frame_index]);
+        }
+        frame = frame.wrapping_add(1);
 
         // Draw UI
         window.draw_ui(|ctx| {
