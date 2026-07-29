@@ -446,12 +446,7 @@ async fn main() {
         console_error_panic_hook::set_once();
     }
     let mut window = Window::new("Kiss3d: rectangle").await;
-    let image_buffer = ASSET_DIR
-        .get_file("background_concept_2.png")
-        .expect("File should be here");
     let mut texture_manager = TextureManager::new();
-    let _image_texture =
-        texture_manager.add_image_from_memory(image_buffer.contents(), "background_concept_2.png");
 
     let mut reliable_client_rpc_sender: Option<ReliableClientRpcSender> = None;
     let mut unreliable_client_rpc_sender: Option<UnreliableClientRpcSender> = None;
