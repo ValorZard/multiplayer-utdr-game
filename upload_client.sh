@@ -16,15 +16,17 @@ staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
 mkdir "$staging/windows" "$staging/linux"
 
-# Native Windows build. Assets and config are compiled into the exe
-# (include_dir/include_str), so the binary is all we need to ship.
+# Native Windows build. Assets are fetched at runtime next to the exe
+# (see client/src/assets.rs), so ship the assets/ folder alongside the binary.
 cargo build -p client --release
 cp target/release/client.exe "$staging/windows/rps-test.exe"
+cp -r client/assets "$staging/windows/assets"
 butler push "$staging/windows" "$ITCH_PROJECT:windows" --userversion "$VERSION"
 
 # Native Linux build, cross-compiled in Docker the same way as upload_server.sh.
 cross build -p client --target x86_64-unknown-linux-gnu --release
 cp target/x86_64-unknown-linux-gnu/release/client "$staging/linux/rps-test"
+cp -r client/assets "$staging/linux/assets"
 butler push "$staging/linux" "$ITCH_PROJECT:linux" --userversion "$VERSION"
 
 butler status "$ITCH_PROJECT"

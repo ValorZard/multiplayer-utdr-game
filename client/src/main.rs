@@ -4,7 +4,6 @@ use crate::connection::{
 };
 use futures_channel::oneshot;
 use futures_util::{FutureExt, StreamExt};
-use include_dir::{Dir, include_dir};
 #[cfg(target_arch = "wasm32")]
 use kiss3d::wasm_bindgen_futures::spawn_local;
 use kiss3d::{egui, prelude::*};
@@ -24,9 +23,8 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::thread;
 use time::{Duration, OffsetDateTime};
 
+mod assets;
 mod connection;
-
-static ASSET_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets");
 
 fn reset_connection_and_join_lobby(
     server_address: String,
@@ -460,8 +458,11 @@ async fn main() {
     let mut remote_player = scene.add_rectangle(10.0, 10.0).set_color(BLUE);
 
     let sheet = SpriteSheet::new(9, 3);
-    let characters_texture = texture_manager
-        .add_image_from_memory_pixelated(include_bytes!("../assets/characters.png"), "characters");
+    let characters_bytes = assets::fetch_asset_bytes("characters.png")
+        .await
+        .expect("should be able to fetch characters.png");
+    let characters_texture =
+        texture_manager.add_image_from_memory_pixelated(&characters_bytes, "characters");
 
     let frames_of_box_guy: [u32; 2] = [11, 12];
     let mut current_frame_index: usize = 0;
